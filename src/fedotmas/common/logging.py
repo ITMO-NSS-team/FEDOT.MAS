@@ -16,7 +16,7 @@ def setup_logging(level: str | None = None) -> None:
 
     Reads ``FEDOTMAS_LOG_LEVEL`` from the environment if *level* is not given.
     """
-    resolved = level or os.getenv("FEDOTMAS_LOG_LEVEL", "INFO")
+    resolved = level or os.getenv("FEDOTMAS_LOG_LEVEL", "DEBUG")
     logger.remove()
     logger.add(sys.stderr, format=_FORMAT, level=resolved.upper())
 
