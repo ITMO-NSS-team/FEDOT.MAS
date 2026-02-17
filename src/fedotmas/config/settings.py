@@ -14,7 +14,7 @@ _DEFAULT_CONFIG_NAME = "config.toml"
 
 @dataclass(frozen=True)
 class ModelSettings:
-    default: str = "openrouter/openai/gpt-oss-120b"
+    default: str = "openai/gpt-oss-120b"
 
 
 @dataclass(frozen=True)

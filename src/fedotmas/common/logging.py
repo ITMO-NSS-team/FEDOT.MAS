@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import TYPE_CHECKING
 
-from loguru import Logger, logger
+from loguru import logger
+
+if TYPE_CHECKING:
+    from loguru import Logger
 
 _FORMAT = (
-    "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | "
-    "{extra[name]}:{function}:{line} | {message}"
+    "<fg 216,222,233>{time:YYYY-MM-DD HH:mm:ss.SSS}</fg 216,222,233> | "
+    "{level:<8} | "
+    "<fg 136,192,208>{extra[name]}</fg 136,192,208>:"
+    "<fg 129,161,193>{function}</fg 129,161,193>:"
+    "<fg 235,203,139>{line}</fg 235,203,139> | "
+    "{message}"
 )
 
 
@@ -26,5 +34,4 @@ def get_logger(name: str) -> Logger:
     return logger.bind(name=name)
 
 
-# Auto-setup on import so every ``get_logger`` call works immediately.
 setup_logging()
