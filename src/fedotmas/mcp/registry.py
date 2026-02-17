@@ -1,5 +1,3 @@
-"""MCP server registry — maps server names to McpToolset factories."""
-
 from __future__ import annotations
 
 import sys
@@ -23,9 +21,7 @@ class MCPServerConfig:
     description: str = ""
 
 
-# ---------------------------------------------------------------------------
-# Helper constructors
-# ---------------------------------------------------------------------------
+# Helpers
 
 
 def python_server(

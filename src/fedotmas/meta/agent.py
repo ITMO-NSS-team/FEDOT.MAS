@@ -1,5 +1,3 @@
-"""Meta-agent: an LlmAgent that generates PipelineConfig."""
-
 from __future__ import annotations
 
 import uuid

@@ -5,14 +5,12 @@ from fedotmas import AgentConfig, MASOrchestrator, PipelineConfig, PipelineNodeC
 
 
 async def full_auto():
-    """One-shot: describe the task → get the result."""
     mas = MASOrchestrator()
     state = await mas.run("Explain the difference between TCP and UDP in 3 sentences")
     print(json.dumps(state, indent=2, default=str))
 
 
 async def two_step():
-    """Generate config, inspect it, then execute."""
     mas = MASOrchestrator()
 
     # meta-agent generates the pipeline config.
@@ -25,7 +23,6 @@ async def two_step():
 
 
 async def handcrafted():
-    """Build a pipeline config manually and execute it."""
     config = PipelineConfig(
         agents=[
             AgentConfig(
@@ -56,7 +53,6 @@ async def handcrafted():
 
 
 async def parallel_analysis():
-    """Fan-out → parallel agents → fan-in synthesis."""
     config = PipelineConfig(
         agents=[
             AgentConfig(
@@ -100,7 +96,6 @@ async def parallel_analysis():
 
 
 async def loop_with_critic():
-    """Writer + critic loop — critic calls exit_loop when satisfied."""
     config = PipelineConfig(
         agents=[
             AgentConfig(

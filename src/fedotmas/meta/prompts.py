@@ -1,5 +1,3 @@
-"""System prompts for the meta-agent that generates pipeline configurations."""
-
 from __future__ import annotations
 
 from string import Template

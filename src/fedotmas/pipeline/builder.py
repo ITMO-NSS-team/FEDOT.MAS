@@ -14,10 +14,7 @@ def build(
     *,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
 ) -> BaseAgent:
-    """Convert a ``PipelineConfig`` into an executable ADK agent tree.
-
-    Returns the root ``BaseAgent`` ready for ``Runner.run_async``.
-    """
+    """Convert a ``PipelineConfig`` into an executable ADK agent tree."""
     agents_by_name: dict[str, AgentConfig] = {a.name: a for a in config.agents}
     return _build_node(config.pipeline, agents_by_name, mcp_registry)
 
@@ -75,7 +72,7 @@ def _inject_exit_loop(children: list[BaseAgent]) -> None:
             if agent.tools is None:
                 agent.tools = [exit_loop]
             elif exit_loop not in agent.tools:
-                agent.tools.append(exit_loop)
+                agent.tools.append(exit_loop)  # type: ignore[arg-type]
             break
 
 

@@ -36,10 +36,6 @@ class PipelineConfig(BaseModel):
     agents: list[AgentConfig]
     pipeline: PipelineNodeConfig
 
-    # ------------------------------------------------------------------
-    # Validation
-    # ------------------------------------------------------------------
-
     @model_validator(mode="after")
     def _validate_config(self) -> PipelineConfig:
         agent_names = {a.name for a in self.agents}

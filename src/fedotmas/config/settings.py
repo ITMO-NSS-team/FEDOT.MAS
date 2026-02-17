@@ -1,5 +1,3 @@
-"""Framework settings loaded from ``fedotmas.toml`` with env-var overrides."""
-
 from __future__ import annotations
 
 import os
@@ -16,7 +14,7 @@ _DEFAULT_CONFIG_NAME = "config.toml"
 
 @dataclass(frozen=True)
 class ModelSettings:
-    default: str = "gemini-2.5-flash"
+    default: str = "openrouter/openai/gpt-oss-120b"
 
 
 @dataclass(frozen=True)

@@ -1,5 +1,3 @@
-"""Thin wrapper around ADK Runner that manages session lifecycle."""
-
 from __future__ import annotations
 
 import uuid
@@ -24,7 +22,7 @@ async def run_pipeline(
 
     Args:
         agent: Root agent (output of ``builder.build``).
-        user_query: The user's task / question.
+        user_query: The user's task.
         app_name: Application name for the ADK runner.
         user_id: User identifier for the session.
         session_id: Optional session id (auto-generated if omitted).
