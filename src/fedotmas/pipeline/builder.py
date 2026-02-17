@@ -4,9 +4,12 @@ from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgen
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.tools.exit_loop_tool import exit_loop
 
+from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import settings
 from fedotmas.mcp.registry import MCPServerConfig, create_toolset
 from fedotmas.pipeline.models import AgentConfig, PipelineConfig, PipelineNodeConfig
+
+_log = get_logger("fedotmas.pipeline.builder")
 
 
 def build(
@@ -30,15 +33,20 @@ def _build_node(
     children = [_build_node(c, agents, mcp_registry) for c in node.children]
 
     if node.type == "sequential":
-        return SequentialAgent(name=_seq_name(children), sub_agents=children)
+        name = _seq_name(children)
+        _log.debug("Built sequential node | name={}", name)
+        return SequentialAgent(name=name, sub_agents=children)
 
     if node.type == "parallel":
-        return ParallelAgent(name=_par_name(children), sub_agents=children)
+        name = _par_name(children)
+        _log.debug("Built parallel node | name={}", name)
+        return ParallelAgent(name=name, sub_agents=children)
 
     if node.type == "loop":
         # Inject exit_loop tool into the last sub-agent if it's an LlmAgent.
         _inject_exit_loop(children)
         max_iter = node.max_iterations or settings.max_loop_iterations
+        _log.debug("Built loop node | max_iterations={}", max_iter)
         return LoopAgent(
             name=_loop_name(children),
             sub_agents=children,
@@ -56,6 +64,9 @@ def _build_llm_agent(
     for tool_name in cfg.tools:
         tools.append(create_toolset(tool_name, registry=mcp_registry))
 
+    _log.debug(
+        "Built agent | name={} model={}", cfg.name, cfg.model or settings.default_model
+    )
     return LlmAgent(
         name=cfg.name,
         model=cfg.model or settings.default_model,
@@ -73,6 +84,7 @@ def _inject_exit_loop(children: list[BaseAgent]) -> None:
                 agent.tools = [exit_loop]
             elif exit_loop not in agent.tools:
                 agent.tools.append(exit_loop)  # type: ignore[arg-type]
+            _log.debug("Injected exit_loop into agent={}", agent.name)
             break
 
 

@@ -7,6 +7,10 @@ from pathlib import Path
 from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
 from mcp import StdioServerParameters
 
+from fedotmas.common.logging import get_logger
+
+_log = get_logger("fedotmas.mcp.registry")
+
 _SERVERS_DIR = Path(__file__).resolve().parent / "servers"
 
 
@@ -89,9 +93,7 @@ MCP_SERVERS: dict[str, MCPServerConfig] = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Public API
-# ---------------------------------------------------------------------------
 
 
 def create_toolset(
@@ -100,9 +102,11 @@ def create_toolset(
     """Create an ADK ``McpToolset`` for the named server."""
     reg = registry or MCP_SERVERS
     if name not in reg:
+        _log.error("Unknown MCP server: '{}' | available={}", name, sorted(reg))
         raise ValueError(f"Unknown MCP server: '{name}'. Available: {sorted(reg)}")
 
     cfg = reg[name]
+    _log.debug("Creating MCP toolset | server={}", name)
     return McpToolset(
         connection_params=StdioConnectionParams(
             server_params=StdioServerParameters(

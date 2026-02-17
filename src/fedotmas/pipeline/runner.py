@@ -8,6 +8,10 @@ from google.adk.agents.base_agent import BaseAgent
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+from fedotmas.common.logging import get_logger
+
+_log = get_logger("fedotmas.pipeline.runner")
+
 
 async def run_pipeline(
     agent: BaseAgent,
@@ -32,6 +36,7 @@ async def run_pipeline(
     Returns:
         The full ``session.state`` dict after pipeline execution.
     """
+    _log.info("Creating session | app={} user={}", app_name, user_id)
     session_service = InMemorySessionService()
     session_id = session_id or uuid.uuid4().hex
 
@@ -58,6 +63,7 @@ async def run_pipeline(
         parts=[types.Part.from_text(text=user_query)],
     )
 
+    _log.info("Pipeline run started | agent={}", agent.name)
     # Consume every event; we only care about the final state.
     async for _event in runner.run_async(
         user_id=user_id,
@@ -72,4 +78,6 @@ async def run_pipeline(
         user_id=user_id,
         session_id=session.id,
     )
-    return dict(final_session.state) if final_session else state
+    result = dict(final_session.state) if final_session else state
+    _log.info("Pipeline run complete | state_keys={}", len(result))
+    return result

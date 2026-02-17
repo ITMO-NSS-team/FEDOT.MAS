@@ -7,10 +7,13 @@ from google.adk.agents import LlmAgent
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import settings
 from fedotmas.mcp.registry import MCPServerConfig, get_server_descriptions
 from fedotmas.meta.prompts import META_AGENT_SYSTEM_PROMPT
 from fedotmas.pipeline.models import PipelineConfig
+
+_log = get_logger("fedotmas.meta.agent")
 
 
 async def generate_pipeline_config(
@@ -34,14 +37,18 @@ async def generate_pipeline_config(
 
     instruction = META_AGENT_SYSTEM_PROMPT.substitute(mcp_servers_desc=desc_text)
 
+    resolved_model = model or settings.meta_agent_model
+    resolved_temp = settings.meta_agent_temperature
+    _log.info("Meta-agent | model={} temperature={}", resolved_model, resolved_temp)
+
     agent = LlmAgent(
         name="meta_agent",
-        model=model or settings.meta_agent_model,
+        model=resolved_model,
         instruction=instruction,
         output_schema=PipelineConfig,
         output_key="pipeline_config",
         generate_content_config=types.GenerateContentConfig(
-            temperature=settings.meta_agent_temperature,
+            temperature=resolved_temp,
         ),
     )
 
@@ -87,9 +94,14 @@ async def generate_pipeline_config(
 
     # ADK stores the output_schema result as a dict (model_dump); validate it.
     if isinstance(raw_config, dict):
-        return PipelineConfig.model_validate(raw_config)
+        config = PipelineConfig.model_validate(raw_config)
+        _log.info("Config extracted | agents={}", len(config.agents))
+        return config
     if isinstance(raw_config, str):
-        return PipelineConfig.model_validate_json(raw_config)
+        config = PipelineConfig.model_validate_json(raw_config)
+        _log.info("Config extracted (from JSON) | agents={}", len(config.agents))
+        return config
+    _log.error("Unexpected pipeline_config type: {}", type(raw_config))
     raise TypeError(f"Unexpected pipeline_config type: {type(raw_config)}")
 
 

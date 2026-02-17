@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from fedotmas.common.logging import get_logger
 from fedotmas.mcp.registry import MCP_SERVERS, MCPServerConfig
 from fedotmas.meta.agent import generate_pipeline_config
 from fedotmas.pipeline.builder import build
 from fedotmas.pipeline.models import PipelineConfig
 from fedotmas.pipeline.runner import run_pipeline
+
+_log = get_logger("fedotmas.main")
 
 
 class MASOrchestrator:
@@ -40,11 +43,18 @@ class MASOrchestrator:
         Returns a ``PipelineConfig`` that can be inspected, serialised to
         JSON for human review, and optionally edited before execution.
         """
-        return await generate_pipeline_config(
+        _log.info("Generating pipeline config for task: {}", task)
+        config = await generate_pipeline_config(
             task,
             model=self._model,
             mcp_registry=self._mcp_registry,
         )
+        _log.info(
+            "Config generated | agents={} pipeline_type={}",
+            len(config.agents),
+            config.pipeline.type,
+        )
+        return config
 
     async def build_and_run(
         self,
@@ -57,12 +67,16 @@ class MASOrchestrator:
 
         Returns the final ``session.state`` dict.
         """
+        _log.info("Building agent tree")
         agent = build(config, mcp_registry=self._mcp_registry)
-        return await run_pipeline(
+        _log.info("Running pipeline")
+        result = await run_pipeline(
             agent,
             user_query,
             initial_state=initial_state,
         )
+        _log.info("Pipeline complete | state_keys={}", len(result))
+        return result
 
     async def run(
         self,
@@ -74,5 +88,6 @@ class MASOrchestrator:
 
         Equivalent to ``generate_config`` followed by ``build_and_run``.
         """
+        _log.info("Full-auto run for task: {}", task)
         config = await self.generate_config(task)
         return await self.build_and_run(config, task, initial_state=initial_state)
