@@ -1,12 +1,10 @@
-"""Build an ADK agent tree from a PipelineConfig."""
-
 from __future__ import annotations
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.tools.exit_loop_tool import exit_loop
 
-from fedotmas.config.settings import DEFAULT_MAX_LOOP_ITERATIONS, DEFAULT_MODEL
+from fedotmas.config.settings import settings
 from fedotmas.mcp.registry import MCPServerConfig, create_toolset
 from fedotmas.pipeline.models import AgentConfig, PipelineConfig, PipelineNodeConfig
 
@@ -43,7 +41,7 @@ def _build_node(
     if node.type == "loop":
         # Inject exit_loop tool into the last sub-agent if it's an LlmAgent.
         _inject_exit_loop(children)
-        max_iter = node.max_iterations or DEFAULT_MAX_LOOP_ITERATIONS
+        max_iter = node.max_iterations or settings.max_loop_iterations
         return LoopAgent(
             name=_loop_name(children),
             sub_agents=children,
@@ -51,11 +49,6 @@ def _build_node(
         )
 
     raise ValueError(f"Unknown node type: {node.type}")
-
-
-# ------------------------------------------------------------------
-# LlmAgent construction
-# ------------------------------------------------------------------
 
 
 def _build_llm_agent(
@@ -68,16 +61,11 @@ def _build_llm_agent(
 
     return LlmAgent(
         name=cfg.name,
-        model=cfg.model or DEFAULT_MODEL,
+        model=cfg.model or settings.default_model,
         instruction=cfg.instruction,
         output_key=cfg.output_key,
         tools=tools,
     )
-
-
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
 
 
 def _inject_exit_loop(children: list[BaseAgent]) -> None:

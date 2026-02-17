@@ -1,8 +1,8 @@
-from fedotmas.main import FedotMAS
+from fedotmas.main import MASOrchestrator
 from fedotmas.pipeline.models import AgentConfig, PipelineConfig, PipelineNodeConfig
 
 __all__ = [
-    "FedotMAS",
+    "MASOrchestrator",
     "AgentConfig",
     "PipelineConfig",
     "PipelineNodeConfig",

@@ -24,3 +24,6 @@ dev = [
     "ruff>=0.15.1",
     "ty>=0.0.17",
 ]
+
+[tool.ty.rules]
+unresolved-import = "ignore"

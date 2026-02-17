@@ -1,0 +1,17 @@
+# Env vars override these values (prefixed with FEDOTMAS_).
+
+[model]
+# Default LLM for all pipeline agents.
+# Formats:
+#   "gemini-2.5-flash"                         Gemini (native, no extra deps)
+#   "claude-sonnet-4-20250514"                  Claude (needs anthropic pkg)
+#   "openrouter/openai/gpt-oss-120b"      via LiteLLM
+default = "openrouter/openai/gpt-oss-120b"
+
+[meta_agent]
+# Model for the pipeline-generator agent. Empty string = use model.default.
+model = ""
+temperature = 0.3
+
+[pipeline]
+max_loop_iterations = 3

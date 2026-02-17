@@ -1,22 +1,20 @@
-"""FedotMAS — orchestrator that ties meta-agent, builder, and runner together."""
-
 from __future__ import annotations
 
 from typing import Any
 
-from fedotmas.mcp.registry import MCPServerConfig, MCP_SERVERS
+from fedotmas.mcp.registry import MCP_SERVERS, MCPServerConfig
 from fedotmas.meta.agent import generate_pipeline_config
 from fedotmas.pipeline.builder import build
 from fedotmas.pipeline.models import PipelineConfig
 from fedotmas.pipeline.runner import run_pipeline
 
 
-class FedotMAS:
+class MASOrchestrator:
     """High-level API for automatic multi-agent pipeline generation and execution.
 
     Usage::
 
-        mas = FedotMAS()
+        mas = MASOrchestrator()
 
         # Full auto: generate + run
         result = await mas.run("Research quantum computing trends")
@@ -36,10 +34,6 @@ class FedotMAS:
         self._model = model
         self._mcp_registry = mcp_registry or MCP_SERVERS
 
-    # ------------------------------------------------------------------
-    # Step 1: Generate pipeline config via meta-agent
-    # ------------------------------------------------------------------
-
     async def generate_config(self, task: str) -> PipelineConfig:
         """Ask the meta-agent to design a pipeline for *task*.
 
@@ -51,10 +45,6 @@ class FedotMAS:
             model=self._model,
             mcp_registry=self._mcp_registry,
         )
-
-    # ------------------------------------------------------------------
-    # Step 2: Build ADK tree and execute
-    # ------------------------------------------------------------------
 
     async def build_and_run(
         self,
@@ -73,10 +63,6 @@ class FedotMAS:
             user_query,
             initial_state=initial_state,
         )
-
-    # ------------------------------------------------------------------
-    # Convenience: generate + run in one shot
-    # ------------------------------------------------------------------
 
     async def run(
         self,

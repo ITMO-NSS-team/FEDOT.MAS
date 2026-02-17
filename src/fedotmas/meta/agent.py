@@ -9,7 +9,7 @@ from google.adk.agents import LlmAgent
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from fedotmas.config.settings import META_AGENT_MODEL, META_AGENT_TEMPERATURE
+from fedotmas.config.settings import settings
 from fedotmas.mcp.registry import MCPServerConfig, get_server_descriptions
 from fedotmas.meta.prompts import META_AGENT_SYSTEM_PROMPT
 from fedotmas.pipeline.models import PipelineConfig
@@ -38,12 +38,12 @@ async def generate_pipeline_config(
 
     agent = LlmAgent(
         name="meta_agent",
-        model=model or META_AGENT_MODEL,
+        model=model or settings.meta_agent_model,
         instruction=instruction,
         output_schema=PipelineConfig,
         output_key="pipeline_config",
         generate_content_config=types.GenerateContentConfig(
-            temperature=META_AGENT_TEMPERATURE,
+            temperature=settings.meta_agent_temperature,
         ),
     )
 

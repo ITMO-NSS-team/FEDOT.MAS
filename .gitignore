@@ -195,3 +195,5 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# ADK meta
+.adk/
