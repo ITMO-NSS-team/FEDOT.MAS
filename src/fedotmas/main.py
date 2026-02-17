@@ -12,12 +12,12 @@ from fedotmas.pipeline.runner import run_pipeline
 _log = get_logger("fedotmas.main")
 
 
-class MASOrchestrator:
+class MASBuilder:
     """High-level API for automatic multi-agent pipeline generation and execution.
 
     Usage::
 
-        mas = MASOrchestrator()
+        mas = MASBuilder()
 
         # Full auto: generate + run
         result = await mas.run("Research quantum computing trends")

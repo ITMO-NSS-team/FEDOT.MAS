@@ -1,17 +1,17 @@
 import asyncio
 import json
 
-from fedotmas import AgentConfig, MASOrchestrator, PipelineConfig, PipelineNodeConfig
+from fedotmas import AgentConfig, MASBuilder, PipelineConfig, PipelineNodeConfig
 
 
 async def full_auto():
-    mas = MASOrchestrator()
+    mas = MASBuilder()
     state = await mas.run("Explain the difference between TCP and UDP in 3 sentences")
     print(json.dumps(state, indent=2, default=str))
 
 
 async def two_step():
-    mas = MASOrchestrator()
+    mas = MASBuilder()
 
     # meta-agent generates the pipeline config.
     config = await mas.generate_config("Compare Python and Rust for CLI tools")
@@ -47,7 +47,7 @@ async def handcrafted():
         ),
     )
 
-    mas = MASOrchestrator()
+    mas = MASBuilder()
     state = await mas.build_and_run(config, "What is WebAssembly?")
     print(state.get("summary", "(no summary produced)"))
 
@@ -90,7 +90,7 @@ async def parallel_analysis():
         ),
     )
 
-    mas = MASOrchestrator()
+    mas = MASBuilder()
     state = await mas.build_and_run(config, "Microservices architecture")
     print(state.get("verdict", "(no verdict produced)"))
 
@@ -126,7 +126,7 @@ async def loop_with_critic():
         ),
     )
 
-    mas = MASOrchestrator()
+    mas = MASBuilder()
     state = await mas.build_and_run(config, "the ocean at sunset")
     print(state.get("draft", "(no draft produced)"))
 
