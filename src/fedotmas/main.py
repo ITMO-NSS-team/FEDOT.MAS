@@ -8,6 +8,7 @@ from fedotmas.meta.agent import generate_pipeline_config
 from fedotmas.pipeline.builder import build
 from fedotmas.pipeline.models import PipelineConfig
 from fedotmas.pipeline.runner import run_pipeline
+from fedotmas.pipeline.visualizer import PipelineVisualizer
 
 _log = get_logger("fedotmas.main")
 
@@ -67,14 +68,16 @@ class MAS:
 
         Returns the final ``session.state`` dict.
         """
+        visualizer = PipelineVisualizer(config)
         _log.info("Building agent tree")
-        agent = build(config, mcp_registry=self._mcp_registry)
+        agent = build(config, mcp_registry=self._mcp_registry, visualizer=visualizer)
         _log.info("Running pipeline")
-        result = await run_pipeline(
-            agent,
-            user_query,
-            initial_state=initial_state,
-        )
+        with visualizer.live():
+            result = await run_pipeline(
+                agent,
+                user_query,
+                initial_state=initial_state,
+            )
         _log.info("Pipeline complete | state_keys={}", len(result))
         return result
 

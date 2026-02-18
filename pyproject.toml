@@ -16,6 +16,7 @@ dependencies = [
     "loguru>=0.7.3",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.1",
+    "rich>=14.3.2",
 ]
 
 [tool.uv.workspace]
@@ -30,3 +31,4 @@ dev = [
 
 [tool.ty.rules]
 unresolved-import = "ignore"
+possibly-missing-import = "ignore"

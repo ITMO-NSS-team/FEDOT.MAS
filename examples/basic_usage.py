@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from fedotmas import AgentConfig, MAS, PipelineConfig, PipelineNodeConfig
+from fedotmas import AgentConfig, MAS, PipelineConfig, StepConfig
 
 
 async def full_auto():
@@ -38,11 +38,11 @@ async def handcrafted():
                 output_key="summary",
             ),
         ],
-        pipeline=PipelineNodeConfig(
+        pipeline=StepConfig(
             type="sequential",
             children=[
-                PipelineNodeConfig(type="agent", agent_name="researcher"),
-                PipelineNodeConfig(type="agent", agent_name="writer"),
+                StepConfig(type="agent", agent_name="researcher"),
+                StepConfig(type="agent", agent_name="writer"),
             ],
         ),
     )
@@ -75,17 +75,17 @@ async def parallel_analysis():
                 output_key="verdict",
             ),
         ],
-        pipeline=PipelineNodeConfig(
+        pipeline=StepConfig(
             type="sequential",
             children=[
-                PipelineNodeConfig(
+                StepConfig(
                     type="parallel",
                     children=[
-                        PipelineNodeConfig(type="agent", agent_name="pros_analyst"),
-                        PipelineNodeConfig(type="agent", agent_name="cons_analyst"),
+                        StepConfig(type="agent", agent_name="pros_analyst"),
+                        StepConfig(type="agent", agent_name="cons_analyst"),
                     ],
                 ),
-                PipelineNodeConfig(type="agent", agent_name="synthesizer"),
+                StepConfig(type="agent", agent_name="synthesizer"),
             ],
         ),
     )
@@ -116,12 +116,12 @@ async def loop_with_critic():
                 output_key="feedback",
             ),
         ],
-        pipeline=PipelineNodeConfig(
+        pipeline=StepConfig(
             type="loop",
             max_iterations=3,
             children=[
-                PipelineNodeConfig(type="agent", agent_name="writer"),
-                PipelineNodeConfig(type="agent", agent_name="critic"),
+                StepConfig(type="agent", agent_name="writer"),
+                StepConfig(type="agent", agent_name="critic"),
             ],
         ),
     )
