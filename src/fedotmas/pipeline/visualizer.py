@@ -120,10 +120,16 @@ class PipelineVisualizer:
 
     @contextmanager
     def live(self) -> Generator[Self]:
-        with Live(self._tree, refresh_per_second=4) as lv:
-            self._live = lv
-            yield self
-            self._live = None
+        import loguru
+
+        loguru.logger.disable("fedotmas")
+        try:
+            with Live(self._tree, refresh_per_second=4) as lv:
+                self._live = lv
+                yield self
+                self._live = None
+        finally:
+            loguru.logger.enable("fedotmas")
 
 
 def make_callbacks(
