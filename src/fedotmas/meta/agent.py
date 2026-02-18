@@ -7,13 +7,34 @@ from google.adk.agents import LlmAgent
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+from pydantic import BaseModel
+
 from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import settings
 from fedotmas.mcp.registry import MCPServerConfig, get_server_descriptions
 from fedotmas.meta.prompts import META_AGENT_SYSTEM_PROMPT
+from fedotmas.meta.schema_utils import needs_strict_schema, patch_schema_openai_strict
 from fedotmas.pipeline.models import PipelineConfig
 
 _log = get_logger("fedotmas.meta.agent")
+
+
+def _fix_schema_callback(_callback_context, llm_request):
+    """Patch response_schema for OpenAI-compatible models (strict mode)."""
+    model = llm_request.model or ""
+    schema = llm_request.config and llm_request.config.response_schema
+    if not schema or not needs_strict_schema(model):
+        return None
+
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        schema = schema.model_json_schema()
+    elif isinstance(schema, BaseModel):
+        schema = schema.__class__.model_json_schema()
+    elif not isinstance(schema, dict):
+        return None
+
+    llm_request.config.response_schema = patch_schema_openai_strict(schema)
+    return None
 
 
 async def generate_pipeline_config(
@@ -50,6 +71,7 @@ async def generate_pipeline_config(
         generate_content_config=types.GenerateContentConfig(
             temperature=resolved_temp,
         ),
+        before_model_callback=_fix_schema_callback,
     )
 
     session_service = InMemorySessionService()

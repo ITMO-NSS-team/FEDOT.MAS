@@ -4,6 +4,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, model_validator
 
+from fedotmas.common.logging import get_logger
+
+_log = get_logger("fedotmas.pipeline.models")
+
 
 class AgentConfig(BaseModel):
     """Configuration for a single LLM agent."""
@@ -78,6 +82,13 @@ class PipelineConfig(BaseModel):
         # Every agent_name referenced in the tree must exist
         self._validate_node_refs(self.pipeline, agent_names)
 
+        # Warn about agents defined but never referenced
+        referenced: set[str] = set()
+        self._collect_agent_refs(self.pipeline, referenced)
+        unused = agent_names - referenced
+        if unused:
+            _log.warning("Unused agents: {}", sorted(unused))
+
         return self
 
     def _auto_fill_agent_name(self, node: PipelineNodeConfig, name: str) -> None:
@@ -86,6 +97,14 @@ class PipelineConfig(BaseModel):
             node.agent_name = name
         for child in node.children:
             self._auto_fill_agent_name(child, name)
+
+    def _collect_agent_refs(
+        self, node: PipelineNodeConfig, refs: set[str]
+    ) -> None:
+        if node.type == "agent" and node.agent_name:
+            refs.add(node.agent_name)
+        for child in node.children:
+            self._collect_agent_refs(child, refs)
 
     def _validate_node_refs(
         self, node: PipelineNodeConfig, agent_names: set[str]
