@@ -6,7 +6,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Self
 
+from rich.console import Console, ConsoleOptions, RenderResult
 from rich.live import Live
+from rich.text import Text
 from rich.tree import Tree
 
 from fedotmas.pipeline.models import PipelineConfig, StepConfig
@@ -34,12 +36,23 @@ class _NodeState:
     tree_node: Tree = field(default_factory=lambda: Tree(""))
 
 
-def _format_label(state: _NodeState) -> str:
-    icon, style = _STATUS_STYLE[state.status]
-    elapsed = ""
-    if state.status == "done" and state.start_time:
-        elapsed = f"  {time.monotonic() - state.start_time:.1f}s"
-    return f"[{style}]{icon} {state.label}{elapsed}[/{style}]"
+class _DynamicLabel:
+    """Renderable that recomputes elapsed time on every Live refresh."""
+
+    __slots__ = ("_state",)
+
+    def __init__(self, state: _NodeState) -> None:
+        self._state = state
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions
+    ) -> RenderResult:
+        s = self._state
+        icon, style = _STATUS_STYLE[s.status]
+        elapsed = ""
+        if s.start_time:
+            elapsed = f"  {time.monotonic() - s.start_time:.1f}s"
+        yield Text.from_markup(f"[{style}]{icon} {s.label}{elapsed}[/{style}]")
 
 
 def _node_label(node: StepConfig, agents_by_name: dict[str, str]) -> str:
@@ -56,7 +69,6 @@ def _node_id(node: StepConfig) -> str:
     """Stable identifier matching the agent name builder.py will assign."""
     if node.type == "agent":
         return node.agent_name or "?"
-    # Workflow nodes: reconstruct the name builder.py generates
     child_names = [_node_id(c) for c in node.children]
     prefix = {"sequential": "seq", "parallel": "par", "loop": "loop"}
     return f"{prefix.get(node.type, node.type)}_{'_'.join(child_names)}"
@@ -81,20 +93,13 @@ class PipelineVisualizer:
         nid = _node_id(node)
         label = _node_label(node, agents_by_name)
         state = _NodeState(label=label)
-        branch = parent.add(_format_label(state))
+        dynamic = _DynamicLabel(state)
+        branch = parent.add(dynamic)
         state.tree_node = branch
         self._nodes[nid] = state
 
         for child in node.children:
             self._build_tree(child, branch, agents_by_name)
-
-    def _refresh(self, name: str) -> None:
-        state = self._nodes.get(name)
-        if not state:
-            return
-        state.tree_node.label = _format_label(state)
-        if self._live:
-            self._live.refresh()
 
     def mark_running(self, name: str) -> None:
         state = self._nodes.get(name)
@@ -102,21 +107,24 @@ class PipelineVisualizer:
             return
         state.status = "running"
         state.start_time = time.monotonic()
-        self._refresh(name)
+        if self._live:
+            self._live.refresh()
 
     def mark_done(self, name: str) -> None:
         state = self._nodes.get(name)
         if not state:
             return
         state.status = "done"
-        self._refresh(name)
+        if self._live:
+            self._live.refresh()
 
     def mark_error(self, name: str) -> None:
         state = self._nodes.get(name)
         if not state:
             return
         state.status = "error"
-        self._refresh(name)
+        if self._live:
+            self._live.refresh()
 
     @contextmanager
     def live(self) -> Generator[Self]:
