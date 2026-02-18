@@ -19,7 +19,7 @@ from fedotmas.pipeline.models import PipelineConfig
 _log = get_logger("fedotmas.meta.agent")
 
 
-def _fix_schema_callback(_callback_context, llm_request):
+def _fix_schema_callback(*, callback_context, llm_request, **_kw):
     """Patch response_schema for OpenAI-compatible models (strict mode)."""
     model = llm_request.model or ""
     schema = llm_request.config and llm_request.config.response_schema
