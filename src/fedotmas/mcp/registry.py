@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import sys
+import shutil
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
 from mcp import StdioServerParameters
@@ -11,7 +10,7 @@ from fedotmas.common.logging import get_logger
 
 _log = get_logger("fedotmas.mcp.registry")
 
-_SERVERS_DIR = Path(__file__).resolve().parent / "servers"
+_UV_BIN = shutil.which("uv") or "uv"
 
 
 @dataclass(frozen=True)
@@ -28,16 +27,17 @@ class MCPServerConfig:
 # Helpers
 
 
-def python_server(
-    relative_path: str,
+def workspace_server(
+    package: str,
+    entry_point: str,
     *,
     timeout: int = 10,
     description: str = "",
 ) -> MCPServerConfig:
-    """Config for a local Python MCP server under ``mcp/servers/``."""
+    """Config for a workspace-local MCP server package launched via ``uv run``."""
     return MCPServerConfig(
-        command=sys.executable,
-        args=(str(_SERVERS_DIR / relative_path),),
+        command=_UV_BIN,
+        args=("run", "--package", package, entry_point),
         timeout=timeout,
         description=description,
     )
@@ -82,8 +82,9 @@ def uvx_server(
 # ---------------------------------------------------------------------------
 
 MCP_SERVERS: dict[str, MCPServerConfig] = {
-    "download-url-content": python_server(
-        "download/server.py",
+    "download-url-content": workspace_server(
+        "fedotmas-mcp-download",
+        "fedotmas-mcp-download",
         timeout=30,
         description=(
             "Download files from URLs to the local filesystem. "

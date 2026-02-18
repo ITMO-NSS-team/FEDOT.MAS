@@ -1,0 +1,21 @@
+[build-system]
+requires = ["uv_build>=0.10.3,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "fedotmas_mcp_download"
+
+[project]
+name = "fedotmas-mcp-download"
+version = "0.1.0"
+description = "MCP server for downloading files from URLs"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=2.14.5",
+    "httpx>=0.27.0",
+    "pydantic>=2.12.5",
+    "python-dotenv>=1.2.1",
+]
+
+[project.scripts]
+fedotmas-mcp-download = "fedotmas_mcp_download.server:main"
