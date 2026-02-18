@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.tools.exit_loop_tool import exit_loop
@@ -56,6 +58,14 @@ def _build_node(
     raise ValueError(f"Unknown node type: {node.type}")
 
 
+_STATE_VAR_RE = re.compile(r"\{(\w+)\}")
+
+
+def _make_vars_optional(instruction: str) -> str:
+    """Convert ``{var}`` → ``{var?}`` so ADK treats missing state as empty string."""
+    return _STATE_VAR_RE.sub(r"{\1?}", instruction)
+
+
 def _build_llm_agent(
     cfg: AgentConfig,
     mcp_registry: dict[str, MCPServerConfig] | None,
@@ -70,7 +80,7 @@ def _build_llm_agent(
     return LlmAgent(
         name=cfg.name,
         model=cfg.model or settings.default_model,
-        instruction=cfg.instruction,
+        instruction=_make_vars_optional(cfg.instruction),
         output_key=cfg.output_key,
         tools=tools,
     )

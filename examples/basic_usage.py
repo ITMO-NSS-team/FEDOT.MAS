@@ -134,7 +134,7 @@ async def loop_with_critic():
 if __name__ == "__main__":
     # Pick one:
     # asyncio.run(handcrafted())  # yes
-    # asyncio.run(full_auto())  # no
-    # asyncio.run(two_step())  # no
+    # asyncio.run(full_auto())  # yes
+    # asyncio.run(two_step())  # yes
     # asyncio.run(parallel_analysis())  # yes
-    asyncio.run(loop_with_critic())  # no
+    asyncio.run(loop_with_critic())  # yes

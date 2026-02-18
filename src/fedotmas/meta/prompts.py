@@ -43,9 +43,9 @@ ${mcp_servers_desc}
 
 ## DATA FLOW
 
-- The user's original query is always available as `{user_query}` in any agent instruction.
+- The user's original query is always available as `{{user_query}}` in any agent instruction.
 - Each agent writes its result to `session.state[output_key]`.
-- Downstream agents reference upstream results via `{output_key}` placeholders in their instruction.
+- Downstream agents reference upstream results via `{{output_key}}` placeholders in their instruction.
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
 
 ---
@@ -58,7 +58,7 @@ ${mcp_servers_desc}
 4. **Every agent** must have a unique `name` and a unique `output_key`.
 5. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above.
 6. **Instructions must be specific and actionable** — tell the agent exactly what to do.
-7. **Include state references** in instructions: e.g., "Based on the research: {research_result}".
+7. **Include state references** in instructions: e.g., "Based on the research: {{research_result}}".
 
 ---
 
@@ -70,7 +70,7 @@ ${mcp_servers_desc}
   "agents": [
     {
       "name": "solver",
-      "instruction": "Answer the user's question: {user_query}. Provide a clear, well-reasoned response.",
+      "instruction": "Answer the user's question: {{user_query}}. Provide a clear, well-reasoned response.",
       "output_key": "answer"
     }
   ],
@@ -84,13 +84,13 @@ ${mcp_servers_desc}
   "agents": [
     {
       "name": "researcher",
-      "instruction": "Research the topic: {user_query}. Gather key facts and findings.",
+      "instruction": "Research the topic: {{user_query}}. Gather key facts and findings.",
       "output_key": "research_result",
       "tools": ["download-url-content"]
     },
     {
       "name": "writer",
-      "instruction": "Write a comprehensive report based on the research: {research_result}",
+      "instruction": "Write a comprehensive report based on the research: {{research_result}}",
       "output_key": "report"
     }
   ],
@@ -110,22 +110,22 @@ ${mcp_servers_desc}
   "agents": [
     {
       "name": "researcher",
-      "instruction": "Research: {user_query}",
+      "instruction": "Research: {{user_query}}",
       "output_key": "research_data"
     },
     {
       "name": "technical_analyst",
-      "instruction": "Analyze the technical aspects of: {research_data}",
+      "instruction": "Analyze the technical aspects of: {{research_data}}",
       "output_key": "technical_analysis"
     },
     {
       "name": "business_analyst",
-      "instruction": "Analyze the business implications of: {research_data}",
+      "instruction": "Analyze the business implications of: {{research_data}}",
       "output_key": "business_analysis"
     },
     {
       "name": "synthesizer",
-      "instruction": "Combine the technical analysis: {technical_analysis} and business analysis: {business_analysis} into a final report.",
+      "instruction": "Combine the technical analysis: {{technical_analysis}} and business analysis: {{business_analysis}} into a final report.",
       "output_key": "final_report"
     }
   ],
@@ -152,12 +152,12 @@ ${mcp_servers_desc}
   "agents": [
     {
       "name": "writer",
-      "instruction": "Write a draft on: {user_query}. If feedback exists, improve based on: {feedback}",
+      "instruction": "Write a draft on: {{user_query}}. If feedback exists, improve based on: {{feedback}}",
       "output_key": "draft"
     },
     {
       "name": "critic",
-      "instruction": "Review the draft: {draft}. If the quality is satisfactory, call exit_loop. Otherwise, provide specific feedback for improvement.",
+      "instruction": "Review the draft: {{draft}}. If the quality is satisfactory, call exit_loop. Otherwise, provide specific feedback for improvement.",
       "output_key": "feedback"
     }
   ],
