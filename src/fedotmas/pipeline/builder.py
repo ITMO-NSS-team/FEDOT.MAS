@@ -77,6 +77,15 @@ def _make_vars_optional(instruction: str) -> str:
     return _STATE_VAR_RE.sub(r"{\1?}", instruction)
 
 
+def _resolve_model(model: str | None) -> str:
+    """Resolve model name, adding LiteLLM provider prefix if missing."""
+    resolved = model or settings.default_model
+    if "/" not in resolved:
+        resolved = f"openai/{resolved}"
+        _log.debug("Added provider prefix | model={}", resolved)
+    return resolved
+
+
 def _build_llm_agent(
     cfg: AgentConfig,
     mcp_registry: dict[str, MCPServerConfig] | None,
@@ -85,12 +94,11 @@ def _build_llm_agent(
     for tool_name in cfg.tools:
         tools.append(create_toolset(tool_name, registry=mcp_registry))
 
-    _log.debug(
-        "Built agent | name={} model={}", cfg.name, cfg.model or settings.default_model
-    )
+    model = _resolve_model(cfg.model)
+    _log.debug("Built agent | name={} model={}", cfg.name, model)
     return LlmAgent(
         name=cfg.name,
-        model=cfg.model or settings.default_model,
+        model=model,
         instruction=_make_vars_optional(cfg.instruction),
         output_key=cfg.output_key,
         tools=tools,
