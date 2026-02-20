@@ -8,7 +8,7 @@ from fedotmas.meta.agent import generate_pipeline_config
 from fedotmas.pipeline._ppline_utils import print_tree
 from fedotmas.pipeline.builder import build
 from fedotmas.pipeline.models import PipelineConfig
-from fedotmas.pipeline.runner import run_pipeline
+from fedotmas.pipeline.runner import PipelineResult, run_pipeline
 
 _log = get_logger("fedotmas.main")
 
@@ -37,6 +37,27 @@ class MAS:
     ) -> None:
         self._model = model
         self._mcp_registry = mcp_registry or MCP_SERVERS
+        self._last_result: PipelineResult | None = None
+
+    @property
+    def last_result(self) -> PipelineResult | None:
+        """The result of the most recent pipeline execution, or ``None``."""
+        return self._last_result
+
+    @property
+    def total_prompt_tokens(self) -> int:
+        """Total prompt tokens from the last run."""
+        return self._last_result.total_prompt_tokens if self._last_result else 0
+
+    @property
+    def total_completion_tokens(self) -> int:
+        """Total completion tokens from the last run."""
+        return self._last_result.total_completion_tokens if self._last_result else 0
+
+    @property
+    def elapsed(self) -> float:
+        """Elapsed seconds for the last run."""
+        return self._last_result.elapsed if self._last_result else 0.0
 
     async def generate_config(self, task: str) -> PipelineConfig:
         """Ask the meta-agent to design a pipeline for *task*.
@@ -72,12 +93,12 @@ class MAS:
         agent = build(config, mcp_registry=self._mcp_registry)
         print_tree(config)
         _log.info("Running pipeline")
-        result = await run_pipeline(
+        self._last_result = await run_pipeline(
             agent,
             user_query,
             initial_state=initial_state,
         )
-        return result
+        return self._last_result.state
 
     async def run(
         self,

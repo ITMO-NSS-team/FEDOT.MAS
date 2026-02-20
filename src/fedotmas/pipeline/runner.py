@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 from google.adk import Runner
@@ -14,6 +15,16 @@ from fedotmas.common.logging import get_logger
 _log = get_logger("fedotmas.pipeline.runner")
 
 
+@dataclass
+class PipelineResult:
+    """Result of a pipeline execution."""
+
+    state: dict[str, Any] = field(default_factory=dict)
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    elapsed: float = 0.0
+
+
 async def run_pipeline(
     agent: BaseAgent,
     user_query: str,
@@ -22,7 +33,7 @@ async def run_pipeline(
     user_id: str = "user",
     session_id: str | None = None,
     initial_state: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> PipelineResult:
     """Execute an ADK agent tree and return the final session state.
 
     Args:
@@ -140,4 +151,9 @@ async def run_pipeline(
         user_id=user_id,
         session_id=session.id,
     )
-    return dict(final_session.state) if final_session else state
+    return PipelineResult(
+        state=dict(final_session.state) if final_session else state,
+        total_prompt_tokens=total_prompt,
+        total_completion_tokens=total_completion,
+        elapsed=total_elapsed,
+    )
