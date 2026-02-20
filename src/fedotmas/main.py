@@ -78,7 +78,6 @@ class MAS:
             user_query,
             initial_state=initial_state,
         )
-        _log.info("Pipeline complete | state_keys={}", len(result))
         return result
 
     async def run(

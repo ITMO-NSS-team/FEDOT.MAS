@@ -36,6 +36,10 @@ def _node_id(node: StepConfig) -> str:
     return f"{prefix.get(node.type, node.type)}_{'_'.join(child_names)}"
 
 
+def _is_workflow_node(name: str) -> bool:
+    return name.startswith(("seq_", "par_", "loop_"))
+
+
 class PipelineVisualizer:
     """Pipeline tree visualizer: prints static tree and logs agent lifecycle."""
 
@@ -62,15 +66,18 @@ class PipelineVisualizer:
 
     def mark_running(self, name: str) -> None:
         self._start_times[name] = time.monotonic()
-        _log.info("Agent started | name={}", name)
+        if not _is_workflow_node(name):
+            _log.info("Agent started | name={}", name)
 
     def mark_done(self, name: str) -> None:
         elapsed = time.monotonic() - self._start_times.get(name, time.monotonic())
-        _log.info("Agent done | name={} elapsed={:.1f}s", name, elapsed)
+        if not _is_workflow_node(name):
+            _log.info("Agent done | name={} elapsed={:.1f}s", name, elapsed)
 
     def mark_error(self, name: str) -> None:
         elapsed = time.monotonic() - self._start_times.get(name, time.monotonic())
-        _log.error("Agent error | name={} elapsed={:.1f}s", name, elapsed)
+        if not _is_workflow_node(name):
+            _log.error("Agent error | name={} elapsed={:.1f}s", name, elapsed)
 
 
 def make_callbacks(viz: PipelineVisualizer, name: str) -> tuple[..., ...]:

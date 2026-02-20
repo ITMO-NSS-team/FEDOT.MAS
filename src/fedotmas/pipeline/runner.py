@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
@@ -36,7 +37,7 @@ async def run_pipeline(
     Returns:
         The full ``session.state`` dict after pipeline execution.
     """
-    _log.info("Creating session | app={} user={}", app_name, user_id)
+    _log.debug("Creating session | app={} user={}", app_name, user_id)
     session_service = InMemorySessionService()
     session_id = session_id or uuid.uuid4().hex
 
@@ -64,6 +65,10 @@ async def run_pipeline(
     )
 
     _log.info("Pipeline run started | agent={}", agent.name)
+    total_prompt = 0
+    total_completion = 0
+    pipeline_start = time.monotonic()
+
     async for event in runner.run_async(
         user_id=user_id,
         session_id=session.id,
@@ -87,6 +92,8 @@ async def run_pipeline(
             um = event.usage_metadata
             prompt = um.prompt_token_count or 0
             completion = um.candidates_token_count or 0
+            total_prompt += prompt
+            total_completion += completion
             if prompt or completion:
                 _log.info(
                     "Tokens | agent={} prompt={} completion={}",
@@ -100,9 +107,7 @@ async def run_pipeline(
             texts = [p.text for p in event.content.parts if p.text]
             if texts:
                 preview = texts[0][:200]
-                _log.debug(
-                    "Response | agent={} text={}...[cuted]", event.author, preview
-                )
+                _log.trace("Response | agent={} text={}", event.author, preview)
 
         # State changes
         if event.actions.state_delta:
@@ -121,12 +126,18 @@ async def run_pipeline(
                 event.error_message,
             )
 
+    total_elapsed = time.monotonic() - pipeline_start
+    _log.info(
+        "Pipeline complete | total_elapsed={:.1f}s total_prompt={} total_completion={}",
+        total_elapsed,
+        total_prompt,
+        total_completion,
+    )
+
     # Re-fetch the session to get the fully-updated state.
     final_session = await session_service.get_session(
         app_name=app_name,
         user_id=user_id,
         session_id=session.id,
     )
-    result = dict(final_session.state) if final_session else state
-    _log.info("Pipeline run complete | state_keys={}", len(result))
-    return result
+    return dict(final_session.state) if final_session else state
