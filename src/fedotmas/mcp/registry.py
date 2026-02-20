@@ -170,6 +170,7 @@ def create_toolset(
                     args=list(cfg.args),
                     env=cfg.env or None,
                 ),
+                timeout=cfg.timeout,
             )
         case HttpMCPServer():
             params = SseConnectionParams(
