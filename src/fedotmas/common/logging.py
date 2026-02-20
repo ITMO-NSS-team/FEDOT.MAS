@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+import platformdirs
 from loguru import logger
 
 if TYPE_CHECKING:
@@ -18,6 +20,21 @@ _FORMAT = (
     "{message}"
 )
 
+_FILE_FORMAT = (
+    "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
+    "{level:<8} | "
+    "{extra[name]}:{function}:{line} | "
+    "{message}"
+)
+
+
+def _log_dir() -> Path:
+    """Platform-aware log directory, overridable via ``FEDOTMAS_LOG_DIR``."""
+    env = os.getenv("FEDOTMAS_LOG_DIR")
+    if env:
+        return Path(env)
+    return Path(platformdirs.user_log_dir("fedotmas"))
+
 
 def setup_logging(level: str | None = None) -> None:
     """Configure loguru with pipe-delimited format.
@@ -27,6 +44,17 @@ def setup_logging(level: str | None = None) -> None:
     resolved = level or os.getenv("FEDOTMAS_LOG_LEVEL", "DEBUG")
     logger.remove()
     logger.add(sys.stderr, format=_FORMAT, level=resolved.upper())
+
+    log_dir = _log_dir()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logger.add(
+        log_dir / "{time:YYYY-MM-DD_HH-mm-ss}.log",
+        format=_FILE_FORMAT,
+        level="DEBUG",
+        rotation="10 MB",
+        retention="7 days",
+        encoding="utf-8",
+    )
 
 
 def get_logger(name: str) -> Logger:

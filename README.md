@@ -1,6 +1,6 @@
 <div align="center">
 
-# `fedot-mas`
+# `FEDOT.MAS`
 
 </div>
 
