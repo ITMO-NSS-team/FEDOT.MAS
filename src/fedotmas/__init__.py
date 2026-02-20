@@ -13,6 +13,21 @@ warnings.filterwarnings(
     module=r"pydantic\.main",
 )
 
+# ADK marks MCP tools as experimental; the warning is cosmetic.
+warnings.filterwarnings(
+    "ignore",
+    message=r".*EXPERIMENTAL.*BASE_AUTHENTICATED_TOOL.*",
+    category=UserWarning,
+)
+
+# LiteLLM fires an async callback outside a running event loop;
+# the unawaited coroutine warning is harmless.
+warnings.filterwarnings(
+    "ignore",
+    message=r".*async_success_handler.*never awaited",
+    category=RuntimeWarning,
+)
+
 __all__ = [
     "MAS",
     "AgentConfig",
