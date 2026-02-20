@@ -64,13 +64,62 @@ async def run_pipeline(
     )
 
     _log.info("Pipeline run started | agent={}", agent.name)
-    # Consume every event; we only care about the final state.
-    async for _event in runner.run_async(
+    async for event in runner.run_async(
         user_id=user_id,
         session_id=session.id,
         new_message=message,
     ):
-        pass
+        if event.partial:
+            continue
+
+        # Tool calls
+        for fc in event.get_function_calls():
+            _log.info(
+                "Tool call | agent={} tool={} args={}", event.author, fc.name, fc.args
+            )
+
+        # Tool responses
+        for fr in event.get_function_responses():
+            _log.info("Tool result | agent={} tool={}", event.author, fr.name)
+
+        # Token usage
+        if event.usage_metadata:
+            um = event.usage_metadata
+            prompt = um.prompt_token_count or 0
+            completion = um.candidates_token_count or 0
+            if prompt or completion:
+                _log.info(
+                    "Tokens | agent={} prompt={} completion={}",
+                    event.author,
+                    prompt,
+                    completion,
+                )
+
+        # Text response (final, no function calls)
+        if event.content and event.content.parts and not event.get_function_calls():
+            texts = [p.text for p in event.content.parts if p.text]
+            if texts:
+                preview = texts[0][:200]
+                _log.debug(
+                    "Response | agent={} text={}...[cuted]", event.author, preview
+                )
+
+        # State changes
+        if event.actions.state_delta:
+            _log.info(
+                "State update | agent={} keys={}",
+                event.author,
+                list(event.actions.state_delta.keys()),
+            )
+
+        # Errors
+        if event.error_code:
+            _log.error(
+                "LLM error | agent={} code={} msg={}",
+                event.author,
+                event.error_code,
+                event.error_message,
+            )
 
     # Re-fetch the session to get the fully-updated state.
     final_session = await session_service.get_session(

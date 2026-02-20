@@ -71,13 +71,13 @@ class MAS:
         visualizer = PipelineVisualizer(config)
         _log.info("Building agent tree")
         agent = build(config, mcp_registry=self._mcp_registry, visualizer=visualizer)
+        visualizer.print_tree()
         _log.info("Running pipeline")
-        with visualizer.live():
-            result = await run_pipeline(
-                agent,
-                user_query,
-                initial_state=initial_state,
-            )
+        result = await run_pipeline(
+            agent,
+            user_query,
+            initial_state=initial_state,
+        )
         _log.info("Pipeline complete | state_keys={}", len(result))
         return result
 
