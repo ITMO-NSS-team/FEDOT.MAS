@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -27,12 +28,33 @@ _STATUS_STYLE: dict[str, tuple[str, str]] = {
     "error": ("✗", "red"),
 }
 
+# -- Spinner frames per node type ------------------------------------------
+_SPINNER_AGENT: tuple[str, ...] = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+_SPINNER_SEQ: tuple[str, ...] = ("→", "↗", "↑", "↖", "←", "↙", "↓", "↘")
+_SPINNER_PAR: tuple[str, ...] = ("◰", "◳", "◲", "◱")
+_SPINNER_LOOP: tuple[str, ...] = ("◜", "◠", "◝", "◞", "◡", "◟")
+
+_SPINNERS: dict[str, tuple[str, ...]] = {
+    "agent": _SPINNER_AGENT,
+    "seq": _SPINNER_SEQ,
+    "par": _SPINNER_PAR,
+    "loop": _SPINNER_LOOP,
+}
+
+# -- Animation timing ------------------------------------------------------
+_SPINNER_FPS = 8.0
+_PULSE_PERIOD = 2.0
+_DONE_FLASH_DURATION = 0.6
+_ERROR_FLASH_DURATION = 0.8
+
 
 @dataclass
 class _NodeState:
     label: str
+    node_type: str = "agent"
     status: str = "pending"
     start_time: float = 0.0
+    done_time: float = 0.0
     tree_node: Tree = field(default_factory=lambda: Tree(""))
 
 
@@ -48,11 +70,44 @@ class _DynamicLabel:
         self, console: Console, options: ConsoleOptions
     ) -> RenderResult:
         s = self._state
-        icon, style = _STATUS_STYLE[s.status]
-        elapsed = ""
-        if s.start_time:
-            elapsed = f"  {time.monotonic() - s.start_time:.1f}s"
-        yield Text.from_markup(f"[{style}]{icon} {s.label}{elapsed}[/{style}]")
+        now = time.monotonic()
+
+        if s.status == "running":
+            frames = _SPINNERS.get(s.node_type, _SPINNER_AGENT)
+            icon = frames[int(now * _SPINNER_FPS) % len(frames)]
+            phase = math.cos(2.0 * math.pi * now / _PULSE_PERIOD)
+            style = "bold yellow" if phase > 0.0 else "yellow"
+            elapsed = f"  {now - s.start_time:.1f}s" if s.start_time else ""
+            yield Text.from_markup(f"[{style}]{icon} {s.label}{elapsed}[/{style}]")
+
+        elif s.status == "done":
+            flash_age = now - s.done_time if s.done_time else _DONE_FLASH_DURATION + 1
+            style = (
+                "bold green reverse" if flash_age < _DONE_FLASH_DURATION else "green"
+            )
+            elapsed = ""
+            if s.start_time and s.done_time:
+                elapsed = f"  {s.done_time - s.start_time:.1f}s"
+            yield Text.from_markup(f"[{style}]✓ {s.label}{elapsed}[/{style}]")
+
+        elif s.status == "error":
+            flash_age = now - s.done_time if s.done_time else _ERROR_FLASH_DURATION + 1
+            if flash_age < _ERROR_FLASH_DURATION:
+                style = (
+                    "bold red reverse"
+                    if flash_age < _ERROR_FLASH_DURATION / 2
+                    else "bold red"
+                )
+            else:
+                style = "red"
+            elapsed = ""
+            if s.start_time and s.done_time:
+                elapsed = f"  {s.done_time - s.start_time:.1f}s"
+            yield Text.from_markup(f"[{style}]✗ {s.label}{elapsed}[/{style}]")
+
+        else:  # pending
+            icon, style = _STATUS_STYLE["pending"]
+            yield Text.from_markup(f"[{style}]{icon} {s.label}[/{style}]")
 
 
 def _node_label(node: StepConfig, agents_by_name: dict[str, str]) -> str:
@@ -92,7 +147,10 @@ class PipelineVisualizer:
     ) -> None:
         nid = _node_id(node)
         label = _node_label(node, agents_by_name)
-        state = _NodeState(label=label)
+        type_key = {"sequential": "seq", "parallel": "par", "loop": "loop"}.get(
+            node.type, "agent"
+        )
+        state = _NodeState(label=label, node_type=type_key)
         dynamic = _DynamicLabel(state)
         branch = parent.add(dynamic)
         state.tree_node = branch
@@ -107,24 +165,20 @@ class PipelineVisualizer:
             return
         state.status = "running"
         state.start_time = time.monotonic()
-        if self._live:
-            self._live.refresh()
 
     def mark_done(self, name: str) -> None:
         state = self._nodes.get(name)
         if not state:
             return
         state.status = "done"
-        if self._live:
-            self._live.refresh()
+        state.done_time = time.monotonic()
 
     def mark_error(self, name: str) -> None:
         state = self._nodes.get(name)
         if not state:
             return
         state.status = "error"
-        if self._live:
-            self._live.refresh()
+        state.done_time = time.monotonic()
 
     @contextmanager
     def live(self) -> Generator[Self]:
@@ -132,7 +186,7 @@ class PipelineVisualizer:
 
         loguru.logger.disable("fedotmas")
         try:
-            with Live(self._tree, refresh_per_second=4) as lv:
+            with Live(self._tree, refresh_per_second=8) as lv:
                 self._live = lv
                 yield self
                 self._live = None
@@ -140,9 +194,7 @@ class PipelineVisualizer:
             loguru.logger.enable("fedotmas")
 
 
-def make_callbacks(
-    viz: PipelineVisualizer, name: str
-) -> tuple[..., ...]:
+def make_callbacks(viz: PipelineVisualizer, name: str) -> tuple[..., ...]:
     """Create before/after agent callbacks bound to *name*."""
 
     def before(*, callback_context, **_kw):  # noqa: ARG001
