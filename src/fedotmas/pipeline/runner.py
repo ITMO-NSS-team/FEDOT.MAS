@@ -64,7 +64,7 @@ async def run_pipeline(
         parts=[types.Part.from_text(text=user_query)],
     )
 
-    _log.info("Pipeline run started | agent={}", agent.name)
+    _log.info("Pipeline run started | pipeline={}", agent.name)
     total_prompt = 0
     total_completion = 0
     pipeline_start = time.monotonic()
