@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from fedotmas import AgentConfig, MAS, PipelineConfig, StepConfig
+from fedotmas import MAS, AgentConfig, PipelineConfig, StepConfig
 
 
 async def full_auto():

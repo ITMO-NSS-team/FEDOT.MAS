@@ -27,18 +27,8 @@ _STATUS_STYLE: dict[str, tuple[str, str]] = {
     "error": ("✗", "red"),
 }
 
-# -- Spinner frames per node type ------------------------------------------
-_SPINNER_AGENT: tuple[str, ...] = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
-_SPINNER_SEQ: tuple[str, ...] = ("→", "↗", "↑", "↖", "←", "↙", "↓", "↘")
-_SPINNER_PAR: tuple[str, ...] = ("◰", "◳", "◲", "◱")
-_SPINNER_LOOP: tuple[str, ...] = ("◜", "◠", "◝", "◞", "◡", "◟")
-
-_SPINNERS: dict[str, tuple[str, ...]] = {
-    "agent": _SPINNER_AGENT,
-    "seq": _SPINNER_SEQ,
-    "par": _SPINNER_PAR,
-    "loop": _SPINNER_LOOP,
-}
+# -- Spinner frames --------------------------------------------------------
+_SPINNER_FRAMES: tuple[str, ...] = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 # -- Animation timing ------------------------------------------------------
 _SPINNER_FPS = 8.0
@@ -71,8 +61,10 @@ class _DynamicLabel:
         now = time.monotonic()
 
         if s.status == "running":
-            frames = _SPINNERS.get(s.node_type, _SPINNER_AGENT)
-            icon = frames[int(now * _SPINNER_FPS) % len(frames)]
+            if s.node_type == "agent":
+                icon = _SPINNER_FRAMES[int(now * _SPINNER_FPS) % len(_SPINNER_FRAMES)]
+            else:
+                icon = "◌"
             style = "yellow"
             elapsed = f"  {now - s.start_time:.1f}s" if s.start_time else ""
             yield Text.from_markup(f"[{style}]{icon} {s.label}{elapsed}[/{style}]")
