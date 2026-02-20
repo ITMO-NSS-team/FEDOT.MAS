@@ -1,4 +1,8 @@
-# fedot-mas
+<div align="center">
+
+# `fedot-mas`
+
+</div>
 
 ## Setup
 
