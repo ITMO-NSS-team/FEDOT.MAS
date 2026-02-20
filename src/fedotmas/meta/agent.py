@@ -18,9 +18,8 @@ from fedotmas.pipeline.models import PipelineConfig
 _log = get_logger("fedotmas.meta.agent")
 
 
-def _fix_schema_callback(callback_context, llm_request, /):
+def _fix_schema_callback(*, callback_context, llm_request, **_kw):
     """Patch response_schema for OpenAI-compatible models (strict mode)."""
-    del callback_context  # unused
     model = llm_request.model or ""
     schema = llm_request.config and llm_request.config.response_schema
     if not schema or not needs_strict_schema(model):
@@ -71,7 +70,7 @@ async def generate_pipeline_config(
         generate_content_config=types.GenerateContentConfig(
             temperature=resolved_temp,
         ),
-        before_model_callback=_fix_schema_callback,
+        before_model_callback=_fix_schema_callback,  # ty: ignore[invalid-argument-type]
     )
 
     session_service = InMemorySessionService()
