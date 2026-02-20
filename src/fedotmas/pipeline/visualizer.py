@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -43,7 +42,6 @@ _SPINNERS: dict[str, tuple[str, ...]] = {
 
 # -- Animation timing ------------------------------------------------------
 _SPINNER_FPS = 8.0
-_PULSE_PERIOD = 2.0
 _DONE_FLASH_DURATION = 0.6
 _ERROR_FLASH_DURATION = 0.8
 
@@ -75,16 +73,13 @@ class _DynamicLabel:
         if s.status == "running":
             frames = _SPINNERS.get(s.node_type, _SPINNER_AGENT)
             icon = frames[int(now * _SPINNER_FPS) % len(frames)]
-            phase = math.cos(2.0 * math.pi * now / _PULSE_PERIOD)
-            style = "bold yellow" if phase > 0.0 else "yellow"
+            style = "yellow"
             elapsed = f"  {now - s.start_time:.1f}s" if s.start_time else ""
             yield Text.from_markup(f"[{style}]{icon} {s.label}{elapsed}[/{style}]")
 
         elif s.status == "done":
             flash_age = now - s.done_time if s.done_time else _DONE_FLASH_DURATION + 1
-            style = (
-                "bold green reverse" if flash_age < _DONE_FLASH_DURATION else "green"
-            )
+            style = "bold green" if flash_age < _DONE_FLASH_DURATION else "green"
             elapsed = ""
             if s.start_time and s.done_time:
                 elapsed = f"  {s.done_time - s.start_time:.1f}s"
@@ -93,11 +88,7 @@ class _DynamicLabel:
         elif s.status == "error":
             flash_age = now - s.done_time if s.done_time else _ERROR_FLASH_DURATION + 1
             if flash_age < _ERROR_FLASH_DURATION:
-                style = (
-                    "bold red reverse"
-                    if flash_age < _ERROR_FLASH_DURATION / 2
-                    else "bold red"
-                )
+                style = "bold red"
             else:
                 style = "red"
             elapsed = ""

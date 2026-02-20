@@ -6,7 +6,6 @@ from google.adk import Runner
 from google.adk.agents import LlmAgent
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
-
 from pydantic import BaseModel
 
 from fedotmas.common.logging import get_logger
@@ -19,8 +18,9 @@ from fedotmas.pipeline.models import PipelineConfig
 _log = get_logger("fedotmas.meta.agent")
 
 
-def _fix_schema_callback(*, callback_context, llm_request, **_kw):
+def _fix_schema_callback(callback_context, llm_request, /):
     """Patch response_schema for OpenAI-compatible models (strict mode)."""
+    del callback_context  # unused
     model = llm_request.model or ""
     schema = llm_request.config and llm_request.config.response_schema
     if not schema or not needs_strict_schema(model):
