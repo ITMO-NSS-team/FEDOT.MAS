@@ -9,8 +9,8 @@ from google.adk.tools.exit_loop_tool import exit_loop
 from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import settings
 from fedotmas.mcp.registry import MCPServerConfig, create_toolset
+from fedotmas.pipeline._ppline_utils import make_callbacks
 from fedotmas.pipeline.models import AgentConfig, PipelineConfig, StepConfig
-from fedotmas.pipeline.visualizer import PipelineVisualizer, make_callbacks
 
 _log = get_logger("fedotmas.pipeline.builder")
 
@@ -19,38 +19,36 @@ def build(
     config: PipelineConfig,
     *,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
-    visualizer: PipelineVisualizer | None = None,
 ) -> BaseAgent:
     """Convert a ``PipelineConfig`` into an executable ADK agent tree."""
     agents_by_name: dict[str, AgentConfig] = {a.name: a for a in config.agents}
-    return _build_node(config.pipeline, agents_by_name, mcp_registry, visualizer)
+    return _build_node(config.pipeline, agents_by_name, mcp_registry)
 
 
 def _build_node(
     node: StepConfig,
     agents: dict[str, AgentConfig],
     mcp_registry: dict[str, MCPServerConfig] | None,
-    visualizer: PipelineVisualizer | None = None,
 ) -> BaseAgent:
     if node.type == "agent":
         agent = _build_llm_agent(agents[node.agent_name], mcp_registry)  # type: ignore[arg-type]
-        _attach_callbacks(agent, visualizer)
+        _attach_callbacks(agent)
         return agent
 
-    children = [_build_node(c, agents, mcp_registry, visualizer) for c in node.children]
+    children = [_build_node(c, agents, mcp_registry) for c in node.children]
 
     if node.type == "sequential":
         name = _seq_name(children)
         _log.debug("Built sequential node | name={}", name)
         agent = SequentialAgent(name=name, sub_agents=children)
-        _attach_callbacks(agent, visualizer)
+        _attach_callbacks(agent)
         return agent
 
     if node.type == "parallel":
         name = _par_name(children)
         _log.debug("Built parallel node | name={}", name)
         agent = ParallelAgent(name=name, sub_agents=children)
-        _attach_callbacks(agent, visualizer)
+        _attach_callbacks(agent)
         return agent
 
     if node.type == "loop":
@@ -63,7 +61,7 @@ def _build_node(
             sub_agents=children,
             max_iterations=max_iter,
         )
-        _attach_callbacks(agent, visualizer)
+        _attach_callbacks(agent)
         return agent
 
     raise ValueError(f"Unknown node type: {node.type}")
@@ -105,10 +103,8 @@ def _build_llm_agent(
     )
 
 
-def _attach_callbacks(agent: BaseAgent, viz: PipelineVisualizer | None) -> None:
-    if viz is None:
-        return
-    before_cb, after_cb = make_callbacks(viz, agent.name)
+def _attach_callbacks(agent: BaseAgent) -> None:
+    before_cb, after_cb = make_callbacks(agent.name)
     agent.before_agent_callback = before_cb
     agent.after_agent_callback = after_cb
 

@@ -5,10 +5,10 @@ from typing import Any
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp.registry import MCP_SERVERS, MCPServerConfig
 from fedotmas.meta.agent import generate_pipeline_config
+from fedotmas.pipeline._ppline_utils import print_tree
 from fedotmas.pipeline.builder import build
 from fedotmas.pipeline.models import PipelineConfig
 from fedotmas.pipeline.runner import run_pipeline
-from fedotmas.pipeline.visualizer import PipelineVisualizer
 
 _log = get_logger("fedotmas.main")
 
@@ -68,10 +68,9 @@ class MAS:
 
         Returns the final ``session.state`` dict.
         """
-        visualizer = PipelineVisualizer(config)
         _log.info("Building agent tree")
-        agent = build(config, mcp_registry=self._mcp_registry, visualizer=visualizer)
-        visualizer.print_tree()
+        agent = build(config, mcp_registry=self._mcp_registry)
+        print_tree(config)
         _log.info("Running pipeline")
         result = await run_pipeline(
             agent,
