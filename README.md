@@ -15,8 +15,6 @@ FEDOT.MAS automatically generates and executes multi-agent pipelines from a plai
 | **fedot-mas** | [`packages/fedotmas`](packages/fedotmas) | Core library: meta-agent, pipeline builder & runner |
 | **fedotmas-synapse** | [`packages/fedotmas-synapse`](packages/fedotmas-synapse) | Synapse Platform integration plugin |
 
-MCP servers live in `mcp-servers/` as independent packages (not part of the uv workspace).
-
 ## MCP servers
 
 FEDOT.MAS uses [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) to give agents access to external tools: file downloads, web scraping, code execution, etc.
