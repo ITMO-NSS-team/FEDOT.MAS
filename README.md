@@ -2,16 +2,29 @@
 
 # `FEDOT.MAS`
 
+**Multi-Agent Systems Generation**
+
 </div>
 
-## Setup
+FEDOT.MAS automatically generates and executes multi-agent pipelines from a plain-text task description. A meta-agent analyses the task, designs a pipeline config (sequential, parallel, or loop), and builds an ADK agent tree that runs the plan.
+
+## Monorepo structure
+
+| Package | Path | Description |
+|---------|------|-------------|
+| **fedot-mas** | [`packages/fedotmas`](packages/fedotmas) | Core library: meta-agent, pipeline builder & runner |
+| **fedotmas-synapse** | [`packages/fedotmas-synapse`](packages/fedotmas-synapse) | CodeSynapse integration plugin |
+
+Additional workspace members live in `mcp-servers/`.
+
+## Quick start
 
 **Prerequisites**: Python 3.12+, [uv](https://docs.astral.sh/uv/)
 
 1. Clone and install
 
 ```
-uv sync
+uv sync --all-packages
 source .venv/bin/activate
 ```
 
@@ -44,7 +57,7 @@ uv sync --group dev
 The project uses [pre-commit](https://pre-commit.com/) hooks that run on every commit:
 
 - **ruff** linting with auto-fix + formatting
-- **ty** type checking (`ty check src/`)
+- **ty** type checking
 
 Install the hooks into your local repo:
 
@@ -57,7 +70,7 @@ After that, `ruff` and `ty` will run automatically before each commit.
 ### Running checks manually
 
 ```
-uv run ruff check src/ --fix   # lint + auto-fix
-uv run ruff format src/        # format
-uv run ty check src/            # type check
+uv run ruff check . --fix
+uv run ruff format .
+uv run ty check packages/fedotmas/src/
 ```

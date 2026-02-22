@@ -1,27 +1,15 @@
-[build-system]
-requires = ["uv_build>=0.10.3,<0.11.0"]
-build-backend = "uv_build"
-
-[tool.uv.build-backend]
-module-name = "fedotmas"
-
 [project]
-name = "fedot-mas"
-version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+name = "fedotmas-workspace"
+version = "0.0.0"
+description = "FEDOT.MAS workspace"
 requires-python = ">=3.12"
-dependencies = [
-    "google-adk[extensions]>=1.25.0",
-    "loguru>=0.7.3",
-    "platformdirs>=4.9.2",
-    "pydantic>=2.12.5",
-    "python-dotenv>=1.2.1",
-    "rich>=14.3.2",
-]
+dependencies = []
 
 [tool.uv.workspace]
-members = ["mcp-servers/*"]
+members = ["packages/*", "mcp-servers/*"]
+
+[tool.uv.sources]
+fedot-mas = { workspace = true }
 
 [dependency-groups]
 dev = [
