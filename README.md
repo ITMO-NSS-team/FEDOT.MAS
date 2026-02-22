@@ -25,7 +25,7 @@ When a user describes a task, the **meta-agent** sees the list of all registered
 
 ### Auto-discovery
 
-MCP servers are discovered automatically at import time. The registry scans `mcp-servers/*/pyproject.toml` for a `[tool.fedotmas.mcp]` section and registers every server it finds — no manual registration needed.
+MCP servers are discovered automatically at import time. The registry scans `mcp-servers/*/pyproject.toml` for a `[tool.fedotmas.mcp]` section and registers every server it finds.
 
 ### Adding a new MCP server
 
