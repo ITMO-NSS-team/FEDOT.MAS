@@ -6,16 +6,16 @@
 
 </div>
 
-FEDOT.MAS automatically generates and executes multi-agent pipelines from a plain-text task description. A meta-agent analyses the task, designs a pipeline config (sequential, parallel, or loop), and builds an ADK agent tree that runs the plan.
+FEDOT.MAS automatically generates and executes multi-agent pipelines from a plain-text task description.
 
 ## Monorepo structure
 
 | Package | Path | Description |
 |---------|------|-------------|
 | **fedot-mas** | [`packages/fedotmas`](packages/fedotmas) | Core library: meta-agent, pipeline builder & runner |
-| **fedotmas-synapse** | [`packages/fedotmas-synapse`](packages/fedotmas-synapse) | CodeSynapse integration plugin |
+| **fedotmas-synapse** | [`packages/fedotmas-synapse`](packages/fedotmas-synapse) | Synapse Platform integration plugin |
 
-Additional workspace members live in `mcp-servers/`.
+MCP-repository live in `mcp-servers/` as independent packages.
 
 ## Quick start
 
