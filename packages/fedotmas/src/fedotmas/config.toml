@@ -1,0 +1,12 @@
+# Env vars override these values (prefixed with FEDOTMAS_).
+
+[model]
+default = "openai/gpt-oss-120b"
+
+[meta_agent]
+# Model for the pipeline-generator agent. Empty string = use model.default.
+model = ""
+temperature = 0.3
+
+[pipeline]
+max_loop_iterations = 3
