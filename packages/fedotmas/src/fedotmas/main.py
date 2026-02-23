@@ -19,9 +19,38 @@ _log = get_logger("fedotmas.main")
 class MAS:
     """High-level API for automatic multi-agent pipeline generation and execution.
 
+    Args:
+        meta_model: LLM for the meta-agent that designs the pipeline.
+            A model name string (e.g. ``"openai/gpt-4o"``) or a
+            ``ModelConfig`` with custom endpoint/key. Defaults to the
+            built-in model pool. Examples::
+
+                meta_model="openai/gpt-4o"
+                meta_model=ModelConfig(model="openai/gpt-4o", api_base="https://my-proxy.example.com/v1")
+
+        worker_models: Pool of LLMs for worker agents. Each element is
+            a model name string or ``ModelConfig``. When ``None``, the
+            meta-agent picks from the built-in pool. Examples::
+
+                worker_models=["openai/gpt-4o-mini", "google/gemini-2.0-flash"]
+                worker_models=[ModelConfig(model="openai/gpt-4o", api_key="sk-...")]
+        temperature: Sampling temperature for LLM calls. ``None`` keeps
+            the provider default.
+        mcp_servers: MCP servers to use. Defaults to ``[]`` (no MCP tools).
+            - ``["server1", "server2"]`` - filter: use only these registered servers.
+            - ``{name: MCPServerConfig, ...}`` - explicit server configurations.
+            - ``"all"`` - enable every registered server.
+        session_service: ADK ``BaseSessionService`` for session persistence.
+            Defaults to an in-memory service.
+        event_callback: Async or sync callable invoked on every ``Event``
+            emitted during pipeline execution.
+        before_agent_callbacks: Callbacks invoked before each agent step.
+        after_agent_callbacks: Callbacks invoked after each agent step.
+
     Usage::
 
-        mas = MAS(mcp_servers=[])
+        mas = MAS()
+        mas_with_mcp = MAS(mcp_servers=["browser", "filesystem"])
 
         # Full auto: generate + run
         result = await mas.run("Research quantum computing trends")
@@ -38,7 +67,7 @@ class MAS:
         meta_model: str | ModelConfig | None = None,
         worker_models: list[str | ModelConfig] | None = None,
         temperature: float | None = None,
-        mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"],
+        mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"] = [],
         session_service: BaseSessionService | None = None,
         event_callback: EventCallback | None = None,
         before_agent_callbacks: list[AgentCallback] | None = None,
@@ -63,11 +92,17 @@ class MAS:
 
     @property
     def meta_prompt_tokens(self) -> int:
-        return self._last_meta_result.total_prompt_tokens if self._last_meta_result else 0
+        return (
+            self._last_meta_result.total_prompt_tokens if self._last_meta_result else 0
+        )
 
     @property
     def meta_completion_tokens(self) -> int:
-        return self._last_meta_result.total_completion_tokens if self._last_meta_result else 0
+        return (
+            self._last_meta_result.total_completion_tokens
+            if self._last_meta_result
+            else 0
+        )
 
     @property
     def meta_elapsed(self) -> float:
@@ -77,14 +112,20 @@ class MAS:
     def total_prompt_tokens(self) -> int:
         """Total prompt tokens from the last run (meta-agent + pipeline)."""
         pipeline = self._last_result.total_prompt_tokens if self._last_result else 0
-        meta = self._last_meta_result.total_prompt_tokens if self._last_meta_result else 0
+        meta = (
+            self._last_meta_result.total_prompt_tokens if self._last_meta_result else 0
+        )
         return pipeline + meta
 
     @property
     def total_completion_tokens(self) -> int:
         """Total completion tokens from the last run (meta-agent + pipeline)."""
         pipeline = self._last_result.total_completion_tokens if self._last_result else 0
-        meta = self._last_meta_result.total_completion_tokens if self._last_meta_result else 0
+        meta = (
+            self._last_meta_result.total_completion_tokens
+            if self._last_meta_result
+            else 0
+        )
         return pipeline + meta
 
     @property

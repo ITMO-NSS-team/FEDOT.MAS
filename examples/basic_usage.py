@@ -5,13 +5,13 @@ from fedotmas import MAS, AgentConfig, PipelineConfig, StepConfig
 
 
 async def full_auto():
-    mas = MAS(mcp_servers=[])
+    mas = MAS()
     state = await mas.run("Explain the difference between TCP and UDP in 3 sentences")
     print(json.dumps(state, indent=2, default=str))
 
 
 async def two_step():
-    mas = MAS(mcp_servers=[])
+    mas = MAS()
 
     # meta-agent generates the pipeline config.
     config = await mas.generate_config("Compare Python and Rust for CLI tools")
@@ -47,7 +47,7 @@ async def handcrafted():
         ),
     )
 
-    mas = MAS(mcp_servers=[])
+    mas = MAS()
     state = await mas.build_and_run(config, "What is WebAssembly?")
     print(state.get("summary", "(no summary produced)"))
 
@@ -90,7 +90,7 @@ async def parallel_analysis():
         ),
     )
 
-    mas = MAS(mcp_servers=[])
+    mas = MAS()
     state = await mas.build_and_run(config, "Microservices architecture")
     print(state.get("verdict", "(no verdict produced)"))
 
@@ -126,7 +126,7 @@ async def loop_with_critic():
         ),
     )
 
-    mas = MAS(mcp_servers=[])
+    mas = MAS()
     state = await mas.build_and_run(config, "the ocean at sunset")
     print(state.get("draft", "(no draft produced)"))
 
