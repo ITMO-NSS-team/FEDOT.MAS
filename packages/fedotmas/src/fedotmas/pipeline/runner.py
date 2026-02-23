@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from google.adk import Runner
 from google.adk.agents.base_agent import BaseAgent
-from google.adk.sessions import InMemorySessionService
+from google.adk.events import Event
+from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
 from fedotmas.common.logging import get_logger
 
 _log = get_logger("fedotmas.pipeline.runner")
+
+EventCallback = Callable[[Event], Awaitable[None] | None]
 
 
 @dataclass
@@ -29,6 +33,8 @@ async def run_pipeline(
     agent: BaseAgent,
     user_query: str,
     *,
+    session_service: BaseSessionService | None = None,
+    event_callback: EventCallback | None = None,
     app_name: str = "fedotmas",
     user_id: str = "user",
     session_id: str | None = None,
@@ -49,7 +55,7 @@ async def run_pipeline(
         The full ``session.state`` dict after pipeline execution.
     """
     _log.debug("Creating session | app={} user={}", app_name, user_id)
-    session_service = InMemorySessionService()
+    session_service = session_service or InMemorySessionService()
     session_id = session_id or uuid.uuid4().hex
 
     # Pre-populate state with user_query + any caller-supplied keys.
@@ -87,6 +93,11 @@ async def run_pipeline(
     ):
         if event.partial:
             continue
+
+        if event_callback:
+            result = event_callback(event)
+            if result is not None:
+                await result
 
         # Tool calls
         for fc in event.get_function_calls():
