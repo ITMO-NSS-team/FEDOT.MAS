@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from google.adk import Runner
 from google.adk.agents import LlmAgent
+from google.adk.models.lite_llm import LiteLlm
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from pydantic import BaseModel
 
 from fedotmas.common.logging import get_logger
-from fedotmas.config.settings import settings
+from fedotmas.config.settings import (
+    ModelConfig,
+    get_meta_model,
+    get_meta_temperature,
+    get_worker_models,
+    resolve_model_config,
+)
 from fedotmas.mcp import MCPServerConfig, get_server_descriptions
 from fedotmas.meta.prompts import META_AGENT_SYSTEM_PROMPT
 from fedotmas.meta.schema_utils import needs_strict_schema, patch_schema_openai_strict
@@ -23,6 +31,7 @@ _log = get_logger("fedotmas.meta.agent")
 @dataclass
 class MetaAgentResult:
     config: PipelineConfig
+    worker_models: list[ModelConfig] = field(default_factory=list)
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
     elapsed: float = 0.0
@@ -49,31 +58,51 @@ def _fix_schema_callback(*, callback_context, llm_request, **_kw):
 async def generate_pipeline_config(
     task: str,
     *,
-    model: str | None = None,
+    meta_model: str | ModelConfig | None = None,
+    worker_models: list[str | ModelConfig] | None = None,
+    temperature: float | None = None,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
 ) -> MetaAgentResult:
-    """Run the meta-agent and return a validated ``MetaAgentResult``.
+    """Run the meta-agent and return a validated ``MetaAgentResult``."""
+    # Resolve parameters with env fallback
+    resolved_meta = (
+        resolve_model_config(meta_model)
+        if meta_model
+        else resolve_model_config(get_meta_model())
+    )
+    resolved_workers = (
+        [resolve_model_config(m) for m in worker_models]
+        if worker_models
+        else [resolve_model_config(m) for m in get_worker_models()]
+    )
+    resolved_temp = temperature if temperature is not None else get_meta_temperature()
 
-    Args:
-        task: The user's task description.
-        model: Override for the meta-agent model.
-        mcp_registry: MCP server registry (defaults to the built-in one).
-
-    Returns:
-        A ``MetaAgentResult`` containing the config and token usage.
-    """
+    # Build prompt
     descriptions = get_server_descriptions(mcp_registry)
     desc_text = _format_descriptions(descriptions)
+    models_text = "\n".join(f"- `{m.model}`" for m in resolved_workers)
 
-    instruction = META_AGENT_SYSTEM_PROMPT.substitute(mcp_servers_desc=desc_text)
+    instruction = META_AGENT_SYSTEM_PROMPT.substitute(
+        mcp_servers_desc=desc_text,
+        available_models=models_text,
+    )
 
-    resolved_model = model or settings.meta_agent_model
-    resolved_temp = settings.meta_agent_temperature
-    _log.info("Meta-agent | model={} temperature={}", resolved_model, resolved_temp)
+    _log.info(
+        "Meta-agent | model={} temperature={}",
+        resolved_meta.model,
+        resolved_temp,
+    )
+
+    # Build LiteLlm for meta-agent
+    llm_kwargs: dict[str, Any] = {}
+    if resolved_meta.api_base:
+        llm_kwargs["api_base"] = resolved_meta.api_base
+    if resolved_meta.api_key:
+        llm_kwargs["api_key"] = resolved_meta.api_key
 
     agent = LlmAgent(
         name="meta_agent",
-        model=resolved_model,
+        model=LiteLlm(model=resolved_meta.model, **llm_kwargs),
         instruction=instruction,
         output_schema=PipelineConfig,
         output_key="pipeline_config",
@@ -130,12 +159,16 @@ async def generate_pipeline_config(
                 _log.trace("Response preview | text={}", texts[0][:200])
 
         if event.error_code:
-            _log.error("LLM error | code={} msg={}", event.error_code, event.error_message)
+            _log.error(
+                "LLM error | code={} msg={}", event.error_code, event.error_message
+            )
 
     elapsed = time.monotonic() - meta_start
     _log.info(
         "Meta-agent complete | elapsed={:.1f}s total_prompt={} total_completion={}",
-        elapsed, total_prompt, total_completion,
+        elapsed,
+        total_prompt,
+        total_completion,
     )
 
     # Retrieve the structured output from session state.
@@ -155,11 +188,23 @@ async def generate_pipeline_config(
     if isinstance(raw_config, dict):
         config = PipelineConfig.model_validate(raw_config)
         _log.info("Config extracted | agents={}", len(config.agents))
-        return MetaAgentResult(config=config, total_prompt_tokens=total_prompt, total_completion_tokens=total_completion, elapsed=elapsed)
+        return MetaAgentResult(
+            config=config,
+            worker_models=resolved_workers,
+            total_prompt_tokens=total_prompt,
+            total_completion_tokens=total_completion,
+            elapsed=elapsed,
+        )
     if isinstance(raw_config, str):
         config = PipelineConfig.model_validate_json(raw_config)
         _log.info("Config extracted (from JSON) | agents={}", len(config.agents))
-        return MetaAgentResult(config=config, total_prompt_tokens=total_prompt, total_completion_tokens=total_completion, elapsed=elapsed)
+        return MetaAgentResult(
+            config=config,
+            worker_models=resolved_workers,
+            total_prompt_tokens=total_prompt,
+            total_completion_tokens=total_completion,
+            elapsed=elapsed,
+        )
     _log.error("Unexpected pipeline_config type: {}", type(raw_config))
     raise TypeError(f"Unexpected pipeline_config type: {type(raw_config)}")
 

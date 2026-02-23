@@ -5,6 +5,7 @@ from typing import Any, Literal
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
+from fedotmas.config.settings import ModelConfig
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
 from fedotmas.meta.agent import MetaAgentResult, generate_pipeline_config
 from fedotmas.pipeline._ppline_utils import print_tree
@@ -34,14 +35,18 @@ class MAS:
     def __init__(
         self,
         *,
+        meta_model: str | ModelConfig | None = None,
+        worker_models: list[str | ModelConfig] | None = None,
+        temperature: float | None = None,
         mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"],
-        model: str | None = None,
         session_service: BaseSessionService | None = None,
         event_callback: EventCallback | None = None,
         before_agent_callbacks: list[AgentCallback] | None = None,
         after_agent_callbacks: list[AgentCallback] | None = None,
     ) -> None:
-        self._model = model
+        self._meta_model = meta_model
+        self._worker_models = worker_models
+        self._temperature = temperature
         self._mcp_registry = resolve_mcp_registry(mcp_servers)
         self._session_service = session_service
         self._event_callback = event_callback
@@ -49,6 +54,7 @@ class MAS:
         self._after_agent_callbacks = after_agent_callbacks
         self._last_result: PipelineResult | None = None
         self._last_meta_result: MetaAgentResult | None = None
+        self._resolved_workers: list[ModelConfig] | None = None
 
     @property
     def last_result(self) -> PipelineResult | None:
@@ -97,10 +103,13 @@ class MAS:
         _log.info("Generating pipeline config for task: {}", task)
         meta_result = await generate_pipeline_config(
             task,
-            model=self._model,
+            meta_model=self._meta_model,
+            worker_models=self._worker_models,
+            temperature=self._temperature,
             mcp_registry=self._mcp_registry,
         )
         self._last_meta_result = meta_result
+        self._resolved_workers = meta_result.worker_models
         config = meta_result.config
         _log.info(
             "Config generated | agents={} pipeline_type={}",
@@ -121,9 +130,15 @@ class MAS:
         Returns the final ``session.state`` dict.
         """
         _log.info("Building agent tree")
+        worker_map = (
+            {m.model: m for m in self._resolved_workers}
+            if self._resolved_workers
+            else None
+        )
         agent = build(
             config,
             mcp_registry=self._mcp_registry,
+            worker_models=worker_map,
             before_agent_callbacks=self._before_agent_callbacks,
             after_agent_callbacks=self._after_agent_callbacks,
         )

@@ -1,5 +1,6 @@
 import warnings
 
+from fedotmas.config.settings import ModelConfig
 from fedotmas.main import MAS
 from fedotmas.pipeline.models import AgentConfig, PipelineConfig, StepConfig
 from fedotmas.pipeline.runner import PipelineResult
@@ -31,6 +32,7 @@ warnings.filterwarnings(
 
 __all__ = [
     "MAS",
+    "ModelConfig",
     "AgentConfig",
     "PipelineConfig",
     "PipelineResult",

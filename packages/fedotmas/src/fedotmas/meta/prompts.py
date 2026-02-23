@@ -16,6 +16,16 @@ ${mcp_servers_desc}
 
 ---
 
+## AVAILABLE WORKER MODELS
+
+${available_models}
+
+You MUST assign a model from this list to each agent via the "model" field.
+If only one model is available, assign it to every agent.
+Choose models based on task complexity: use stronger models for critical/complex agents, lighter models for simpler subtasks.
+
+---
+
 ## PIPELINE NODE TYPES
 
 - **agent**: A leaf node referencing one of the agents by name.
@@ -71,7 +81,8 @@ ${mcp_servers_desc}
     {
       "name": "solver",
       "instruction": "Answer the user's question: {{user_query}}. Provide a clear, well-reasoned response.",
-      "output_key": "answer"
+      "output_key": "answer",
+      "model": "openai/gpt-4o"
     }
   ],
   "pipeline": {"type": "agent", "agent_name": "solver"}
@@ -86,12 +97,14 @@ ${mcp_servers_desc}
       "name": "researcher",
       "instruction": "Research the topic: {{user_query}}. Gather key facts and findings.",
       "output_key": "research_result",
+      "model": "openai/gpt-4o",
       "tools": ["download-url-content"]
     },
     {
       "name": "writer",
       "instruction": "Write a comprehensive report based on the research: {{research_result}}",
-      "output_key": "report"
+      "output_key": "report",
+      "model": "openai/gpt-4o"
     }
   ],
   "pipeline": {
@@ -111,22 +124,26 @@ ${mcp_servers_desc}
     {
       "name": "researcher",
       "instruction": "Research: {{user_query}}",
-      "output_key": "research_data"
+      "output_key": "research_data",
+      "model": "openai/gpt-4o"
     },
     {
       "name": "technical_analyst",
       "instruction": "Analyze the technical aspects of: {{research_data}}",
-      "output_key": "technical_analysis"
+      "output_key": "technical_analysis",
+      "model": "openai/gpt-4o"
     },
     {
       "name": "business_analyst",
       "instruction": "Analyze the business implications of: {{research_data}}",
-      "output_key": "business_analysis"
+      "output_key": "business_analysis",
+      "model": "openai/gpt-4o-mini"
     },
     {
       "name": "synthesizer",
       "instruction": "Combine the technical analysis: {{technical_analysis}} and business analysis: {{business_analysis}} into a final report.",
-      "output_key": "final_report"
+      "output_key": "final_report",
+      "model": "openai/gpt-4o"
     }
   ],
   "pipeline": {
@@ -153,12 +170,14 @@ ${mcp_servers_desc}
     {
       "name": "writer",
       "instruction": "Write a draft on: {{user_query}}. If feedback exists, improve based on: {{feedback}}",
-      "output_key": "draft"
+      "output_key": "draft",
+      "model": "openai/gpt-4o"
     },
     {
       "name": "critic",
       "instruction": "Review the draft: {{draft}}. If the quality is satisfactory, call exit_loop. Otherwise, provide specific feedback for improvement.",
-      "output_key": "feedback"
+      "output_key": "feedback",
+      "model": "openai/gpt-4o-mini"
     }
   ],
   "pipeline": {
