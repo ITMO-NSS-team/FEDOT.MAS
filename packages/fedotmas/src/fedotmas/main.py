@@ -6,7 +6,7 @@ from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
-from fedotmas.meta.agent import generate_pipeline_config
+from fedotmas.meta.agent import MetaAgentResult, generate_pipeline_config
 from fedotmas.pipeline._ppline_utils import print_tree
 from fedotmas.pipeline.builder import AgentCallback, build
 from fedotmas.pipeline.models import PipelineConfig
@@ -48,6 +48,7 @@ class MAS:
         self._before_agent_callbacks = before_agent_callbacks
         self._after_agent_callbacks = after_agent_callbacks
         self._last_result: PipelineResult | None = None
+        self._last_meta_result: MetaAgentResult | None = None
 
     @property
     def last_result(self) -> PipelineResult | None:
@@ -55,19 +56,37 @@ class MAS:
         return self._last_result
 
     @property
+    def meta_prompt_tokens(self) -> int:
+        return self._last_meta_result.total_prompt_tokens if self._last_meta_result else 0
+
+    @property
+    def meta_completion_tokens(self) -> int:
+        return self._last_meta_result.total_completion_tokens if self._last_meta_result else 0
+
+    @property
+    def meta_elapsed(self) -> float:
+        return self._last_meta_result.elapsed if self._last_meta_result else 0.0
+
+    @property
     def total_prompt_tokens(self) -> int:
-        """Total prompt tokens from the last run."""
-        return self._last_result.total_prompt_tokens if self._last_result else 0
+        """Total prompt tokens from the last run (meta-agent + pipeline)."""
+        pipeline = self._last_result.total_prompt_tokens if self._last_result else 0
+        meta = self._last_meta_result.total_prompt_tokens if self._last_meta_result else 0
+        return pipeline + meta
 
     @property
     def total_completion_tokens(self) -> int:
-        """Total completion tokens from the last run."""
-        return self._last_result.total_completion_tokens if self._last_result else 0
+        """Total completion tokens from the last run (meta-agent + pipeline)."""
+        pipeline = self._last_result.total_completion_tokens if self._last_result else 0
+        meta = self._last_meta_result.total_completion_tokens if self._last_meta_result else 0
+        return pipeline + meta
 
     @property
     def elapsed(self) -> float:
-        """Elapsed seconds for the last run."""
-        return self._last_result.elapsed if self._last_result else 0.0
+        """Elapsed seconds for the last run (meta-agent + pipeline)."""
+        pipeline = self._last_result.elapsed if self._last_result else 0.0
+        meta = self._last_meta_result.elapsed if self._last_meta_result else 0.0
+        return pipeline + meta
 
     async def generate_config(self, task: str) -> PipelineConfig:
         """Ask the meta-agent to design a pipeline for *task*.
@@ -76,11 +95,13 @@ class MAS:
         JSON for human review, and optionally edited before execution.
         """
         _log.info("Generating pipeline config for task: {}", task)
-        config = await generate_pipeline_config(
+        meta_result = await generate_pipeline_config(
             task,
             model=self._model,
             mcp_registry=self._mcp_registry,
         )
+        self._last_meta_result = meta_result
+        config = meta_result.config
         _log.info(
             "Config generated | agents={} pipeline_type={}",
             len(config.agents),

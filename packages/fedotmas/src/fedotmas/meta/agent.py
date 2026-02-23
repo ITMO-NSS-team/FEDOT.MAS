@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import time
 import uuid
+from dataclasses import dataclass
 
 from google.adk import Runner
 from google.adk.agents import LlmAgent
@@ -16,6 +18,14 @@ from fedotmas.meta.schema_utils import needs_strict_schema, patch_schema_openai_
 from fedotmas.pipeline.models import PipelineConfig
 
 _log = get_logger("fedotmas.meta.agent")
+
+
+@dataclass
+class MetaAgentResult:
+    config: PipelineConfig
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    elapsed: float = 0.0
 
 
 def _fix_schema_callback(*, callback_context, llm_request, **_kw):
@@ -41,8 +51,8 @@ async def generate_pipeline_config(
     *,
     model: str | None = None,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
-) -> PipelineConfig:
-    """Run the meta-agent and return a validated ``PipelineConfig``.
+) -> MetaAgentResult:
+    """Run the meta-agent and return a validated ``MetaAgentResult``.
 
     Args:
         task: The user's task description.
@@ -50,7 +60,7 @@ async def generate_pipeline_config(
         mcp_registry: MCP server registry (defaults to the built-in one).
 
     Returns:
-        A validated ``PipelineConfig`` ready for the builder.
+        A ``MetaAgentResult`` containing the config and token usage.
     """
     descriptions = get_server_descriptions(mcp_registry)
     desc_text = _format_descriptions(descriptions)
@@ -93,12 +103,40 @@ async def generate_pipeline_config(
         parts=[types.Part.from_text(text=f"TASK: {task}")],
     )
 
-    async for _event in runner.run_async(
+    total_prompt = 0
+    total_completion = 0
+    meta_start = time.monotonic()
+
+    async for event in runner.run_async(
         user_id="system",
         session_id=session.id,
         new_message=message,
     ):
-        pass
+        if event.partial:
+            continue
+
+        if event.usage_metadata:
+            um = event.usage_metadata
+            prompt = um.prompt_token_count or 0
+            completion = um.candidates_token_count or 0
+            total_prompt += prompt
+            total_completion += completion
+            if prompt or completion:
+                _log.info("Tokens | prompt={} completion={}", prompt, completion)
+
+        if event.content and event.content.parts:
+            texts = [p.text for p in event.content.parts if p.text]
+            if texts:
+                _log.trace("Response preview | text={}", texts[0][:200])
+
+        if event.error_code:
+            _log.error("LLM error | code={} msg={}", event.error_code, event.error_message)
+
+    elapsed = time.monotonic() - meta_start
+    _log.info(
+        "Meta-agent complete | elapsed={:.1f}s total_prompt={} total_completion={}",
+        elapsed, total_prompt, total_completion,
+    )
 
     # Retrieve the structured output from session state.
     final_session = await session_service.get_session(
@@ -117,11 +155,11 @@ async def generate_pipeline_config(
     if isinstance(raw_config, dict):
         config = PipelineConfig.model_validate(raw_config)
         _log.info("Config extracted | agents={}", len(config.agents))
-        return config
+        return MetaAgentResult(config=config, total_prompt_tokens=total_prompt, total_completion_tokens=total_completion, elapsed=elapsed)
     if isinstance(raw_config, str):
         config = PipelineConfig.model_validate_json(raw_config)
         _log.info("Config extracted (from JSON) | agents={}", len(config.agents))
-        return config
+        return MetaAgentResult(config=config, total_prompt_tokens=total_prompt, total_completion_tokens=total_completion, elapsed=elapsed)
     _log.error("Unexpected pipeline_config type: {}", type(raw_config))
     raise TypeError(f"Unexpected pipeline_config type: {type(raw_config)}")
 
