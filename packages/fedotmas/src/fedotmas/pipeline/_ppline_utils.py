@@ -5,6 +5,9 @@ import time
 from rich.console import Console
 from rich.tree import Tree
 
+from google.adk.agents.base_agent import _SingleAgentCallback
+from google.adk.agents.callback_context import CallbackContext
+
 from fedotmas.common.logging import get_logger
 from fedotmas.pipeline.models import PipelineConfig, StepConfig
 
@@ -64,15 +67,13 @@ def _mark_done(name: str) -> None:
         _log.info("Agent done | name={} elapsed={:.1f}s", name, elapsed)
 
 
-def make_callbacks(name: str) -> tuple[..., ...]:
+def make_callbacks(name: str) -> tuple[_SingleAgentCallback, _SingleAgentCallback]:
     """Create before/after agent callbacks that log agent lifecycle."""
 
-    def before(*, callback_context, **_kw):  # noqa: ARG001
+    def before(callback_context: CallbackContext) -> None:  # noqa: ARG001
         _mark_running(name)
-        return None
 
-    def after(*, callback_context, **_kw):  # noqa: ARG001
+    def after(callback_context: CallbackContext) -> None:  # noqa: ARG001
         _mark_done(name)
-        return None
 
     return before, after

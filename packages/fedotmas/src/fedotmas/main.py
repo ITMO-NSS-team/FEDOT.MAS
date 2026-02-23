@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
-from fedotmas.mcp import MCP_SERVERS, MCPServerConfig
+from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
 from fedotmas.meta.agent import generate_pipeline_config
 from fedotmas.pipeline._ppline_utils import print_tree
 from fedotmas.pipeline.builder import AgentCallback, build
@@ -20,7 +20,7 @@ class MAS:
 
     Usage::
 
-        mas = MAS()
+        mas = MAS(mcp_servers=[])
 
         # Full auto: generate + run
         result = await mas.run("Research quantum computing trends")
@@ -34,15 +34,15 @@ class MAS:
     def __init__(
         self,
         *,
+        mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"],
         model: str | None = None,
-        mcp_registry: dict[str, MCPServerConfig] | None = None,
         session_service: BaseSessionService | None = None,
         event_callback: EventCallback | None = None,
         before_agent_callbacks: list[AgentCallback] | None = None,
         after_agent_callbacks: list[AgentCallback] | None = None,
     ) -> None:
         self._model = model
-        self._mcp_registry = mcp_registry or MCP_SERVERS
+        self._mcp_registry = resolve_mcp_registry(mcp_servers)
         self._session_service = session_service
         self._event_callback = event_callback
         self._before_agent_callbacks = before_agent_callbacks

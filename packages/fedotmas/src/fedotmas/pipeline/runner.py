@@ -70,12 +70,6 @@ async def run_pipeline(
         state=state,
     )
 
-    runner = Runner(
-        app_name=app_name,
-        agent=agent,
-        session_service=session_service,
-    )
-
     message = types.Content(
         role="user",
         parts=[types.Part.from_text(text=user_query)],
@@ -86,67 +80,72 @@ async def run_pipeline(
     total_completion = 0
     pipeline_start = time.monotonic()
 
-    async for event in runner.run_async(
-        user_id=user_id,
-        session_id=session.id,
-        new_message=message,
-    ):
-        if event.partial:
-            continue
+    async with Runner(
+        app_name=app_name,
+        agent=agent,
+        session_service=session_service,
+    ) as runner:
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session.id,
+            new_message=message,
+        ):
+            if event.partial:
+                continue
 
-        if event_callback:
-            result = event_callback(event)
-            if result is not None:
-                await result
+            if event_callback:
+                result = event_callback(event)
+                if result is not None:
+                    await result
 
-        # Tool calls
-        for fc in event.get_function_calls():
-            _log.info(
-                "Tool call | agent={} tool={} args={}", event.author, fc.name, fc.args
-            )
-
-        # Tool responses
-        for fr in event.get_function_responses():
-            _log.info("Tool result | agent={} tool={}", event.author, fr.name)
-
-        # Token usage
-        if event.usage_metadata:
-            um = event.usage_metadata
-            prompt = um.prompt_token_count or 0
-            completion = um.candidates_token_count or 0
-            total_prompt += prompt
-            total_completion += completion
-            if prompt or completion:
+            # Tool calls
+            for fc in event.get_function_calls():
                 _log.info(
-                    "Tokens | agent={} prompt={} completion={}",
-                    event.author,
-                    prompt,
-                    completion,
+                    "Tool call | agent={} tool={} args={}", event.author, fc.name, fc.args
                 )
 
-        # Text response (final, no function calls)
-        if event.content and event.content.parts and not event.get_function_calls():
-            texts = [p.text for p in event.content.parts if p.text]
-            if texts:
-                preview = texts[0][:200]
-                _log.trace("Response | agent={} text={}", event.author, preview)
+            # Tool responses
+            for fr in event.get_function_responses():
+                _log.info("Tool result | agent={} tool={}", event.author, fr.name)
 
-        # State changes
-        if event.actions.state_delta:
-            _log.info(
-                "State update | agent={} keys={}",
-                event.author,
-                list(event.actions.state_delta.keys()),
-            )
+            # Token usage
+            if event.usage_metadata:
+                um = event.usage_metadata
+                prompt = um.prompt_token_count or 0
+                completion = um.candidates_token_count or 0
+                total_prompt += prompt
+                total_completion += completion
+                if prompt or completion:
+                    _log.info(
+                        "Tokens | agent={} prompt={} completion={}",
+                        event.author,
+                        prompt,
+                        completion,
+                    )
 
-        # Errors
-        if event.error_code:
-            _log.error(
-                "LLM error | agent={} code={} msg={}",
-                event.author,
-                event.error_code,
-                event.error_message,
-            )
+            # Text response (final, no function calls)
+            if event.content and event.content.parts and not event.get_function_calls():
+                texts = [p.text for p in event.content.parts if p.text]
+                if texts:
+                    preview = texts[0][:200]
+                    _log.trace("Response | agent={} text={}", event.author, preview)
+
+            # State changes
+            if event.actions.state_delta:
+                _log.info(
+                    "State update | agent={} keys={}",
+                    event.author,
+                    list(event.actions.state_delta.keys()),
+                )
+
+            # Errors
+            if event.error_code:
+                _log.error(
+                    "LLM error | agent={} code={} msg={}",
+                    event.author,
+                    event.error_code,
+                    event.error_message,
+                )
 
     total_elapsed = time.monotonic() - pipeline_start
     _log.info(
