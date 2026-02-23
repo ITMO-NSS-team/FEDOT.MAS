@@ -8,7 +8,7 @@
 
 FEDOT.MAS automatically generates and executes multi-agent pipelines from a plain-text task description.
 
-## Monorepo map
+## Repository map
 
 | Package | Path | Description |
 |---------|------|-------------|
