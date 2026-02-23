@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import settings
-from fedotmas.mcp.registry import MCPServerConfig, get_server_descriptions
+from fedotmas.mcp import MCPServerConfig, get_server_descriptions
 from fedotmas.meta.prompts import META_AGENT_SYSTEM_PROMPT
 from fedotmas.meta.schema_utils import needs_strict_schema, patch_schema_openai_strict
 from fedotmas.pipeline.models import PipelineConfig

@@ -19,3 +19,8 @@ dependencies = [
 
 [project.scripts]
 fedotmas-mcp-download = "fedotmas_mcp_download.server:main"
+
+[tool.fedotmas.mcp]
+name = "download-url-content"
+description = "Download files from URLs to the local filesystem. Supports single and batch downloads with size validation."
+tags = ["web", "files"]

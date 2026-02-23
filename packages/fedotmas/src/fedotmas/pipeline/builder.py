@@ -10,7 +10,7 @@ from google.adk.tools.exit_loop_tool import exit_loop
 
 from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import settings
-from fedotmas.mcp.registry import MCPServerConfig, create_toolset
+from fedotmas.mcp import MCPServerConfig, create_toolset
 from fedotmas.pipeline._ppline_utils import make_callbacks
 from fedotmas.pipeline.models import AgentConfig, PipelineConfig, StepConfig
 

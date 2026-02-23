@@ -5,7 +5,7 @@ from typing import Any
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
-from fedotmas.mcp.registry import MCP_SERVERS, MCPServerConfig
+from fedotmas.mcp import MCP_SERVERS, MCPServerConfig
 from fedotmas.meta.agent import generate_pipeline_config
 from fedotmas.pipeline._ppline_utils import print_tree
 from fedotmas.pipeline.builder import AgentCallback, build
