@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [tool.uv.workspace]
-members = ["packages/*", "mcp-servers/*"]
+members = ["packages/*"]
 
 [tool.uv.sources]
 fedot-mas = { workspace = true }
@@ -16,7 +16,14 @@ dev = [
     "prek>=0.3.3",
     "ruff>=0.15.1",
     "ty>=0.0.17",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.25",
+    "mongomock-motor>=0.0.34",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["packages/fedotmas-synapse/tests"]
 
 [tool.ty.rules]
 unresolved-import = "ignore"

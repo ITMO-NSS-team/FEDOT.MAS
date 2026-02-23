@@ -133,9 +133,8 @@ def http_server(
 # ---------------------------------------------------------------------------
 
 MCP_SERVERS: dict[str, MCPServerConfig] = {
-    "download-url-content": workspace_server(
+    "download-url-content": uvx_server(
         package="fedotmas-mcp-download",
-        entry_point="fedotmas-mcp-download",
         description=(
             "Download files from URLs to the local filesystem. "
             "Supports single and batch downloads with size validation."
