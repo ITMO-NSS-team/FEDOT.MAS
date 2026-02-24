@@ -119,6 +119,7 @@ async def generate_pipeline_config(
         app_name="fedotmas_meta",
         user_id="system",
         session_id=session_id,
+        state={"user_query": task},
     )
 
     runner = Runner(
