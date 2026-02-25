@@ -84,11 +84,17 @@ def _build_node(
 
 
 _STATE_VAR_RE = re.compile(r"\{(\w+)\}")
+_ANGLE_VAR_RE = re.compile(r"<(\w+)>")
 
 
 def _make_vars_optional(instruction: str) -> str:
     """Convert ``{var}`` → ``{var?}`` so ADK treats missing state as empty string."""
     return _STATE_VAR_RE.sub(r"{\1?}", instruction)
+
+
+def _normalize_angle_brackets(instruction: str) -> str:
+    """Convert ``<var>`` → ``{var}`` in case the LLM copied angle brackets from prompt examples."""
+    return _ANGLE_VAR_RE.sub(r"{\1}", instruction)
 
 
 def _make_llm(
@@ -128,7 +134,7 @@ def _build_llm_agent(
     return LlmAgent(
         name=cfg.name,
         model=model,
-        instruction=_make_vars_optional(cfg.instruction),
+        instruction=_make_vars_optional(_normalize_angle_brackets(cfg.instruction)),
         output_key=cfg.output_key,
         tools=tools,
     )

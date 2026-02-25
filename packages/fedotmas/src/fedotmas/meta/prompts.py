@@ -53,10 +53,14 @@ Choose models based on task complexity: use stronger models for critical/complex
 
 ## DATA FLOW
 
-- The user's original query is always available as `{{user_query}}` in any agent instruction.
-- Each agent writes its result to `session.state[output_key]`.
-- Downstream agents reference upstream results via `{{output_key}}` placeholders in their instruction.
+- Each agent writes its LLM response to session state under its `output_key`.
+- The user's original query is stored in state under key "user_query".
+- Downstream agents reference upstream results in their instructions by wrapping the state key name in single curly braces.
+- Example: if an upstream agent has output_key "research_result", a downstream agent references it as <research_result> in its instruction (see syntax note below).
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
+
+**IMPORTANT — syntax for state references in generated instructions:**
+Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output.
 
 ---
 
@@ -68,7 +72,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 4. **Every agent** must have a unique `name` and a unique `output_key`.
 5. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above.
 6. **Instructions must be specific and actionable** — tell the agent exactly what to do.
-7. **Include state references** in instructions: e.g., "Based on the research: {{research_result}}".
+7. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
 
 ---
 
@@ -80,7 +84,7 @@ Choose models based on task complexity: use stronger models for critical/complex
   "agents": [
     {
       "name": "solver",
-      "instruction": "Answer the user's question: {{user_query}}. Provide a clear, well-reasoned response.",
+      "instruction": "Answer the user's question: <user_query>. Provide a clear, well-reasoned response.",
       "output_key": "answer",
       "model": "openai/gpt-4o"
     }
@@ -95,14 +99,14 @@ Choose models based on task complexity: use stronger models for critical/complex
   "agents": [
     {
       "name": "researcher",
-      "instruction": "Research the topic: {{user_query}}. Gather key facts and findings.",
+      "instruction": "Research the topic: <user_query>. Gather key facts and findings.",
       "output_key": "research_result",
       "model": "openai/gpt-4o",
       "tools": ["download-url-content"]
     },
     {
       "name": "writer",
-      "instruction": "Write a comprehensive report based on the research: {{research_result}}",
+      "instruction": "Write a comprehensive report based on the research: <research_result>",
       "output_key": "report",
       "model": "openai/gpt-4o"
     }
@@ -123,25 +127,25 @@ Choose models based on task complexity: use stronger models for critical/complex
   "agents": [
     {
       "name": "researcher",
-      "instruction": "Research: {{user_query}}",
+      "instruction": "Research: <user_query>",
       "output_key": "research_data",
       "model": "openai/gpt-4o"
     },
     {
       "name": "technical_analyst",
-      "instruction": "Analyze the technical aspects of: {{research_data}}",
+      "instruction": "Analyze the technical aspects of: <research_data>",
       "output_key": "technical_analysis",
       "model": "openai/gpt-4o"
     },
     {
       "name": "business_analyst",
-      "instruction": "Analyze the business implications of: {{research_data}}",
+      "instruction": "Analyze the business implications of: <research_data>",
       "output_key": "business_analysis",
       "model": "openai/gpt-4o-mini"
     },
     {
       "name": "synthesizer",
-      "instruction": "Combine the technical analysis: {{technical_analysis}} and business analysis: {{business_analysis}} into a final report.",
+      "instruction": "Combine the technical analysis: <technical_analysis> and business analysis: <business_analysis> into a final report.",
       "output_key": "final_report",
       "model": "openai/gpt-4o"
     }
@@ -169,13 +173,13 @@ Choose models based on task complexity: use stronger models for critical/complex
   "agents": [
     {
       "name": "writer",
-      "instruction": "Write a draft on: {{user_query}}. If feedback exists, improve based on: {{feedback}}",
+      "instruction": "Write a draft on: <user_query>. If feedback exists, improve based on: <feedback>",
       "output_key": "draft",
       "model": "openai/gpt-4o"
     },
     {
       "name": "critic",
-      "instruction": "Review the draft: {{draft}}. If the quality is satisfactory, call exit_loop. Otherwise, provide specific feedback for improvement.",
+      "instruction": "Review the draft: <draft>. If the quality is satisfactory, call exit_loop. Otherwise, provide specific feedback for improvement.",
       "output_key": "feedback",
       "model": "openai/gpt-4o-mini"
     }
