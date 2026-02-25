@@ -4,9 +4,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, model_validator
 
-from fedotmas.common.logging import get_logger
-
-_log = get_logger("fedotmas.pipeline.models")
+from fedotmas.pipeline._validators import (
+    auto_fill_agent_name,
+    validate_node_refs,
+    warn_terminal_parallel,
+    warn_unused_agents,
+)
 
 
 class AgentConfig(BaseModel):
@@ -56,12 +59,9 @@ class PipelineConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_config(self) -> PipelineConfig:
         agent_names = {a.name for a in self.agents}
-        output_keys = [a.output_key for a in self.agents]
 
-        # if a single agent exists and a pipeline node of type
-        # "agent" is missing agent_name, fill it in automatically.
         if len(self.agents) == 1:
-            self._auto_fill_agent_name(self.pipeline, self.agents[0].name)
+            auto_fill_agent_name(self.pipeline, self.agents[0].name)
 
         # Unique agent names
         if len(agent_names) != len(self.agents):
@@ -72,6 +72,7 @@ class PipelineConfig(BaseModel):
                 seen.add(a.name)
 
         # Unique output keys
+        output_keys = [a.output_key for a in self.agents]
         if len(set(output_keys)) != len(output_keys):
             seen_keys: set[str] = set()
             for a in self.agents:
@@ -79,48 +80,8 @@ class PipelineConfig(BaseModel):
                     raise ValueError(f"Duplicate output_key: '{a.output_key}'")
                 seen_keys.add(a.output_key)
 
-        # Every agent_name referenced in the tree must exist
-        self._validate_node_refs(self.pipeline, agent_names)
-
-        # Warn about agents defined but never referenced
-        referenced: set[str] = set()
-        self._collect_agent_refs(self.pipeline, referenced)
-        unused = agent_names - referenced
-        if unused:
-            _log.warning("Unused agents: {}", sorted(unused))
+        validate_node_refs(self.pipeline, agent_names)
+        warn_unused_agents(self.pipeline, agent_names)
+        warn_terminal_parallel(self.pipeline)
 
         return self
-
-    def _auto_fill_agent_name(self, node: StepConfig, name: str) -> None:
-        """Fill missing agent_name when there is exactly one agent."""
-        if node.type == "agent" and node.agent_name is None:
-            node.agent_name = name
-        for child in node.children:
-            self._auto_fill_agent_name(child, name)
-
-    def _collect_agent_refs(
-        self, node: StepConfig, refs: set[str]
-    ) -> None:
-        if node.type == "agent" and node.agent_name:
-            refs.add(node.agent_name)
-        for child in node.children:
-            self._collect_agent_refs(child, refs)
-
-    def _validate_node_refs(
-        self, node: StepConfig, agent_names: set[str]
-    ) -> None:
-        if node.type == "agent":
-            if node.agent_name is None:
-                raise ValueError("Node of type 'agent' must have an agent_name")
-            if node.agent_name not in agent_names:
-                raise ValueError(
-                    f"Pipeline references unknown agent '{node.agent_name}'. "
-                    f"Available: {sorted(agent_names)}"
-                )
-        else:
-            if not node.children:
-                raise ValueError(
-                    f"Node of type '{node.type}' must have at least one child"
-                )
-            for child in node.children:
-                self._validate_node_refs(child, agent_names)

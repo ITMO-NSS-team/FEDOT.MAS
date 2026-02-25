@@ -58,6 +58,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 - Downstream agents reference upstream results in their instructions by wrapping the state key name in single curly braces.
 - Example: if an upstream agent has output_key "research_result", a downstream agent references it as <research_result> in its instruction (see syntax note below).
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
+- **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 
 **IMPORTANT — syntax for state references in generated instructions:**
 Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output.
@@ -73,6 +74,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 5. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above.
 6. **Instructions must be specific and actionable** — tell the agent exactly what to do.
 7. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
+8. **Never end with parallel.** A `parallel` node MUST be followed by a synthesizer agent that reads the `output_key` of every parallel sub-agent from state and produces a combined answer. Wrap the parallel node and the synthesizer in a `sequential` node.
 
 ---
 
