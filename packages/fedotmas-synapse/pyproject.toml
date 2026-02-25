@@ -1,15 +1,21 @@
 [build-system]
-requires = ["uv_build>=0.10.3,<0.11.0"]
 build-backend = "uv_build"
-
-[tool.uv.build-backend]
-module-name = "fedotmas_synapse"
+requires = [ "uv-build>=0.10.3,<0.11" ]
 
 [project]
 name = "fedotmas-synapse"
 version = "0.1.0"
 description = "Synapse Platform integration for FEDOT.MAS"
 requires-python = ">=3.12"
-dependencies = [
-    "fedot-mas",
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
 ]
+dependencies = [
+  "fedot-mas",
+]
+
+[tool.uv]
+build-backend.module-name = "fedotmas_synapse"

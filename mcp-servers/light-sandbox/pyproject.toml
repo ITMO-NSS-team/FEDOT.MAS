@@ -1,24 +1,28 @@
 [build-system]
-requires = ["uv_build>=0.10.3,<0.11.0"]
 build-backend = "uv_build"
-
-[tool.uv.build-backend]
-module-name = "lightsanbox"
+requires = [ "uv-build>=0.10.3,<0.11" ]
 
 [project]
 name = "light-sandbox"
 version = "0.1.0"
 description = "MCP server for fast code execution without dependencies"
 requires-python = ">=3.12"
-dependencies = [
-    "fastmcp>=2.14.5",
-    "pydantic-monty"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
 ]
+dependencies = [ "fastmcp>=2.14.5", "pydantic-monty" ]
+scripts.fedotmas-mcp-download = "lightsanbox.server:main"
 
-[project.scripts]
-fedotmas-mcp-download = "lightsanbox.server:main"
+[tool.uv]
+build-backend.module-name = "lightsanbox"
 
-[tool.fedotmas.mcp]
-name = "light-sandbox"
-description = "Secure Python sandbox for AI agents, a lightweight tool for quick code sketching that deliberately excludes third-party libraries and blocks unsafe operations like imports, file access, and eval."
-tags = ["code"]
+[tool.fedotmas]
+mcp.name = "light-sandbox"
+mcp.description = """\
+  Secure Python sandbox for AI agents, a lightweight tool for quick code sketching that deliberately excludes \
+  third-party libraries and blocks unsafe operations like imports, file access, and eval.\
+  """
+mcp.tags = [ "code" ]

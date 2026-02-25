@@ -1,26 +1,30 @@
 [build-system]
-requires = ["uv_build>=0.10.3,<0.11.0"]
 build-backend = "uv_build"
-
-[tool.uv.build-backend]
-module-name = "fedotmas_mcp_download"
+requires = [ "uv-build>=0.10.3,<0.11" ]
 
 [project]
 name = "fedotmas-mcp-download"
 version = "0.1.0"
 description = "MCP server for downloading files from URLs"
 requires-python = ">=3.12"
-dependencies = [
-    "fastmcp>=2.14.5",
-    "httpx>=0.27.0",
-    "pydantic>=2.12.5",
-    "python-dotenv>=1.2.1",
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
 ]
+dependencies = [
+  "fastmcp>=2.14.5",
+  "httpx>=0.27",
+  "pydantic>=2.12.5",
+  "python-dotenv>=1.2.1",
+]
+scripts.fedotmas-mcp-download = "fedotmas_mcp_download.server:main"
 
-[project.scripts]
-fedotmas-mcp-download = "fedotmas_mcp_download.server:main"
+[tool.uv]
+build-backend.module-name = "fedotmas_mcp_download"
 
-[tool.fedotmas.mcp]
-name = "download-url-content"
-description = "Download files from URLs to the local filesystem. Supports single and batch downloads with size validation."
-tags = ["web", "files"]
+[tool.fedotmas]
+mcp.name = "download-url-content"
+mcp.description = "Download files from URLs to the local filesystem. Supports single and batch downloads with size validation."
+mcp.tags = [ "web", "files" ]

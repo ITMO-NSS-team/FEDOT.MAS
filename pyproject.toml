@@ -3,28 +3,32 @@ name = "fedotmas-workspace"
 version = "0.0.0"
 description = "FEDOT.MAS workspace"
 requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
 dependencies = []
-
-[tool.uv.workspace]
-members = ["packages/*"]
-
-[tool.uv.sources]
-fedot-mas = { workspace = true }
 
 [dependency-groups]
 dev = [
-    "prek>=0.3.3",
-    "ruff>=0.15.1",
-    "ty>=0.0.17",
-    "pytest>=8.0",
-    "pytest-asyncio>=0.25",
-    "mongomock-motor>=0.0.34",
+  "mongomock-motor>=0.0.34",
+  "prek>=0.3.3",
+  "pytest>=8",
+  "pytest-asyncio>=0.25",
+  "ruff>=0.15.1",
+  "ty>=0.0.17",
 ]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["packages/fedotmas-synapse/tests"]
+[tool.uv]
+sources.fedot-mas = { workspace = true }
+workspace.members = [ "packages/*" ]
 
-[tool.ty.rules]
-unresolved-import = "ignore"
-possibly-missing-import = "ignore"
+[tool.pytest]
+ini_options.asyncio_mode = "auto"
+ini_options.testpaths = [ "packages/fedotmas-synapse/tests" ]
+
+[tool.ty]
+rules.unresolved-import = "ignore"
+rules.possibly-missing-import = "ignore"
