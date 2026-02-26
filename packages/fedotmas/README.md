@@ -29,11 +29,3 @@ async def main():
 
 asyncio.run(main())
 ```
-
-For finer control, split into two steps:
-
-```python
-config = await mas.generate_config("Compare Python and Rust for CLI tools")
-# inspect / edit config ...
-state = await mas.build_and_run(config, "Compare Python and Rust for CLI tools")
-```
