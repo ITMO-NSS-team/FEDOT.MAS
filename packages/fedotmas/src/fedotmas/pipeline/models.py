@@ -12,6 +12,34 @@ from fedotmas.pipeline._validators import (
 )
 
 
+class AgentPoolEntry(BaseModel):
+    """A single agent definition for stage-1 pool generation.
+
+    Unlike ``AgentConfig``, this does **not** carry ``output_key`` — wiring
+    is a stage-2 concern.
+    """
+
+    name: str
+    instruction: str
+    model: str | None = None
+    tools: list[str] = []
+
+
+class AgentPoolConfig(BaseModel):
+    """Agent pool produced by stage-1 of two-stage generation."""
+
+    agents: list[AgentPoolEntry]
+
+    @model_validator(mode="after")
+    def _unique_names(self) -> AgentPoolConfig:
+        seen: set[str] = set()
+        for a in self.agents:
+            if a.name in seen:
+                raise ValueError(f"Duplicate agent name in pool: '{a.name}'")
+            seen.add(a.name)
+        return self
+
+
 class AgentConfig(BaseModel):
     """Configuration for a single LLM agent."""
 

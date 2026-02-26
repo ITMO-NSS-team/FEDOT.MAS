@@ -2,7 +2,15 @@ import warnings
 
 from fedotmas.config.settings import ModelConfig
 from fedotmas.main import MAS
-from fedotmas.pipeline.models import AgentConfig, PipelineConfig, StepConfig
+from fedotmas.meta.pipeline_gen import PipelineGenerator
+from fedotmas.meta.pool_gen import PoolGenerator
+from fedotmas.pipeline.models import (
+    AgentConfig,
+    AgentPoolConfig,
+    AgentPoolEntry,
+    PipelineConfig,
+    StepConfig,
+)
 from fedotmas.pipeline.runner import PipelineResult
 
 # litellm's Message.__init__ deletes None-valued attributes from instances,
@@ -34,7 +42,11 @@ __all__ = [
     "MAS",
     "ModelConfig",
     "AgentConfig",
+    "AgentPoolConfig",
+    "AgentPoolEntry",
     "PipelineConfig",
+    "PipelineGenerator",
     "PipelineResult",
+    "PoolGenerator",
     "StepConfig",
 ]

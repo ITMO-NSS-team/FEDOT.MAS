@@ -8,6 +8,8 @@ from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import ModelConfig
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
 from fedotmas.meta.agent import MetaAgentResult, generate_pipeline_config
+from fedotmas.meta.pipeline_gen import PipelineGenerator
+from fedotmas.meta.pool_gen import PoolGenerator
 from fedotmas.pipeline._ppline_utils import print_tree
 from fedotmas.pipeline.builder import AgentCallback, build
 from fedotmas.pipeline.models import PipelineConfig
@@ -20,6 +22,11 @@ class MAS:
     """High-level API for automatic multi-agent pipeline generation and execution.
 
     Args:
+        two_stage: When ``True`` (default), pipeline generation is split into
+            two LLM calls — first an agent pool is generated, then the
+            pipeline tree is designed around that pool. This improves accuracy
+            by letting each call focus on a single concern.  Set to ``False``
+            for the legacy single-call behaviour.
         meta_model: LLM for the meta-agent that designs the pipeline.
             A model name string (e.g. ``"openai/gpt-4o"``) or a
             ``ModelConfig`` with custom endpoint/key. Defaults to the
@@ -49,7 +56,7 @@ class MAS:
 
     Usage::
 
-        mas = MAS()
+        mas = MAS()  # two_stage=True by default
         mas_with_mcp = MAS(mcp_servers=["browser", "filesystem"])
 
         # Full auto: generate + run
@@ -59,11 +66,15 @@ class MAS:
         config = await mas.generate_config("Research quantum computing trends")
         # ... inspect / edit config ...
         result = await mas.build_and_run(config, "Research quantum computing trends")
+
+        # Legacy single-stage generation:
+        mas_legacy = MAS(two_stage=False)
     """
 
     def __init__(
         self,
         *,
+        two_stage: bool = True,
         meta_model: str | ModelConfig | None = None,
         worker_models: list[str | ModelConfig] | None = None,
         temperature: float | None = None,
@@ -73,6 +84,7 @@ class MAS:
         before_agent_callbacks: list[AgentCallback] | None = None,
         after_agent_callbacks: list[AgentCallback] | None = None,
     ) -> None:
+        self._two_stage = two_stage
         self._meta_model = meta_model
         self._worker_models = worker_models
         self._temperature = temperature
@@ -140,15 +152,28 @@ class MAS:
 
         Returns a ``PipelineConfig`` that can be inspected, serialised to
         JSON for human review, and optionally edited before execution.
+
+        When ``two_stage=True`` the generation is split into two LLM calls:
+        1. **Pool generation** — produces a list of agents (no wiring).
+        2. **Pipeline generation** — wires the pool into a StepConfig tree.
         """
-        _log.info("Generating pipeline config for task: {}", task)
-        meta_result = await generate_pipeline_config(
+        _log.info(
+            "Generating pipeline config for task (two_stage={}): {}",
+            self._two_stage,
             task,
-            meta_model=self._meta_model,
-            worker_models=self._worker_models,
-            temperature=self._temperature,
-            mcp_registry=self._mcp_registry,
         )
+
+        if self._two_stage:
+            meta_result = await self._generate_two_stage(task)
+        else:
+            meta_result = await generate_pipeline_config(
+                task,
+                meta_model=self._meta_model,
+                worker_models=self._worker_models,
+                temperature=self._temperature,
+                mcp_registry=self._mcp_registry,
+            )
+
         self._last_meta_result = meta_result
         self._resolved_workers = meta_result.worker_models
         config = meta_result.config
@@ -158,6 +183,55 @@ class MAS:
             config.pipeline.type,
         )
         return config
+
+    async def _generate_two_stage(self, task: str) -> MetaAgentResult:
+        """Run pool generationthen pipeline generation."""
+        from fedotmas.config.settings import (
+            get_worker_models,
+            resolve_model_config,
+        )
+
+        _log.info("Two-stage | stage 1/2: generating agent pool")
+        pool_gen = PoolGenerator(
+            meta_model=self._meta_model,
+            worker_models=self._worker_models,
+            temperature=self._temperature,
+            mcp_registry=self._mcp_registry,
+        )
+        pool = await pool_gen.generate(task)
+
+        _log.info(
+            "Two-stage | stage 2/2: generating pipeline from {} agents",
+            len(pool.agents),
+        )
+        pipeline_gen = PipelineGenerator(
+            meta_model=self._meta_model,
+            worker_models=self._worker_models,
+            temperature=self._temperature,
+            mcp_registry=self._mcp_registry,
+        )
+        config = await pipeline_gen.generate(task, pool)
+
+        # Resolve workers for downstream use
+        resolved_workers = (
+            [resolve_model_config(m) for m in self._worker_models]
+            if self._worker_models
+            else [resolve_model_config(m) for m in get_worker_models()]
+        )
+
+        # Combine metrics from both stages
+        pool_r = pool_gen.result
+        pipe_r = pipeline_gen.result
+        return MetaAgentResult(
+            config=config,
+            worker_models=resolved_workers,
+            total_prompt_tokens=(pool_r.prompt_tokens if pool_r else 0)
+            + (pipe_r.prompt_tokens if pipe_r else 0),
+            total_completion_tokens=(pool_r.completion_tokens if pool_r else 0)
+            + (pipe_r.completion_tokens if pipe_r else 0),
+            elapsed=(pool_r.elapsed if pool_r else 0.0)
+            + (pipe_r.elapsed if pipe_r else 0.0),
+        )
 
     async def build_and_run(
         self,
