@@ -14,6 +14,8 @@ Given a user task, you produce a JSON pipeline configuration that describes:
 
 ${mcp_servers_desc}
 
+**CRITICAL: You may ONLY use tool names that appear EXACTLY in the list above. NEVER invent, guess, or fabricate tool names. If no tool in the list is relevant for an agent, assign an empty tools list (`"tools": []`). An agent with no tools can still reason, answer questions, and process data — it just cannot call external services.**
+
 ---
 
 ## AVAILABLE WORKER MODELS
@@ -71,7 +73,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 2. **Use parallel** only when subtasks are truly independent.
 3. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer).
 4. **Every agent** must have a unique `name` and a unique `output_key`.
-5. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above.
+5. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 6. **Instructions must be specific and actionable** — tell the agent exactly what to do.
 7. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
 8. **Never end with parallel.** A `parallel` node MUST be followed by a synthesizer agent that reads the `output_key` of every parallel sub-agent from state and produces a combined answer. Wrap the parallel node and the synthesizer in a `sequential` node.
@@ -219,6 +221,8 @@ Focus ONLY on defining agents — you do NOT design the pipeline or data flow.
 
 ${mcp_servers_desc}
 
+**CRITICAL: You may ONLY use tool names that appear EXACTLY in the list above. NEVER invent, guess, or fabricate tool names. If no tool in the list is relevant for an agent, assign an empty tools list (`"tools": []`). An agent with no tools can still reason, answer questions, and process data — it just cannot call external services.**
+
 ---
 
 ## AVAILABLE WORKER MODELS
@@ -241,7 +245,7 @@ Choose models based on task complexity: use stronger models for critical/complex
    - Different expertise domains are needed.
 4. **Avoid over-engineering:** one versatile agent is better than multiple similar agents.
 5. **Instructions must be specific and actionable** — tell the agent exactly what to do.
-6. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above.
+6. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 7. **Do NOT include output_key, state references, or curly-brace placeholders** — focus on WHAT each agent does, not how data flows between them. Data wiring is handled in a separate stage.
 
 ---
@@ -304,7 +308,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 
 - Ensure all agent names are unique.
 - Assign MCP tools only when actually needed.
-- Only use tools from the AVAILABLE MCP TOOLS list.
+- **ONLY use exact tool names from the AVAILABLE MCP TOOLS list. NEVER invent tool names.** If no listed tool fits, use `"tools": []`.
 - Do NOT include output_key or any curly-brace state references in instructions.
 
 ---
@@ -336,6 +340,8 @@ Your job is to produce a complete PipelineConfig JSON that wires these agents in
 ## AVAILABLE MCP TOOLS
 
 ${mcp_servers_desc}
+
+**CRITICAL: You may ONLY use tool names that appear EXACTLY in the list above. NEVER invent, guess, or fabricate tool names. If an agent from the pool references a tool not in this list, drop it from that agent's tools. If no tool fits, use `"tools": []`.**
 
 ---
 
@@ -390,7 +396,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 2. **Use parallel** only when subtasks are truly independent.
 3. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer).
 4. **Every agent** must have a unique `name` and a unique `output_key`.
-5. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above.
+5. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 6. **Instructions must include state references** using curly braces around the state key name, so agents can read upstream outputs.
 7. **Never end with parallel.** A `parallel` node MUST be followed by a synthesizer agent that reads the `output_key` of every parallel sub-agent from state and produces a combined answer. Wrap the parallel node and the synthesizer in a `sequential` node.
 
