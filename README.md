@@ -35,7 +35,7 @@ cp .env.example .env
 
 Open `.env` and set your model provider.
 
-Default model and agent settings live in `config.toml`. Environment variables override them (see `.env.example` for the full list).
+Default model and agent settings live in environment variables (see `.env.example` for the full list).
 
 3. Run the basic example
 
