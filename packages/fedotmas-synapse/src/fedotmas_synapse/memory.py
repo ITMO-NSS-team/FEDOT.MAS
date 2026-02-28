@@ -3,14 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from fedotmas.common.logging import get_logger
 from google.adk.memory import BaseMemoryService
 from google.adk.memory.base_memory_service import MemoryEntry, SearchMemoryResponse
 from google.adk.sessions import Session
 from google.genai import types
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import OperationFailure
-
-from fedotmas.common.logging import get_logger
 
 _COLLECTION = "fedotmas_memory"
 _log = get_logger("fedotmas_synapse.memory")
@@ -119,15 +118,22 @@ class SynapseMemoryServiceAdapter(BaseMemoryService):
 
         try:
             text_filter = {**base_filter, "$text": {"$search": query}}
-            cursor = self._collection.find(
-                text_filter,
-                {"score": {"$meta": "textScore"}},
-            ).sort([("score", {"$meta": "textScore"})]).limit(10)
+            cursor = (
+                self._collection.find(
+                    text_filter,
+                    {"score": {"$meta": "textScore"}},
+                )
+                .sort([("score", {"$meta": "textScore"})])
+                .limit(10)
+            )
             docs = [doc async for doc in cursor]
         except (OperationFailure, NotImplementedError):
             # Fallback for environments without $text support (e.g. mongomock)
             _log.debug("$text search unavailable, falling back to $regex")
-            regex_filter = {**base_filter, "content": {"$regex": query, "$options": "i"}}
+            regex_filter = {
+                **base_filter,
+                "content": {"$regex": query, "$options": "i"},
+            }
             cursor = self._collection.find(regex_filter).limit(10)
             docs = [doc async for doc in cursor]
 

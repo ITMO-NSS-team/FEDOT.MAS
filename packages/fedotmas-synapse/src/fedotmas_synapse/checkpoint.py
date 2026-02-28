@@ -1,18 +1,9 @@
-"""Checkpoint callback — snapshots session state before/after agent execution.
-
-Persists snapshots to the ``fedotmas_checkpoints`` collection in MongoDB.
-Used by ``SynapsePlugin`` for agent lifecycle hooks.
-
-See INCOMPATIBILITIES.md §1 for the ``invocation_id`` resolution.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
-
 from fedotmas.common.logging import get_logger
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 if TYPE_CHECKING:
     from google.adk.agents.base_agent import BaseAgent
@@ -42,9 +33,7 @@ class CheckpointCallback:
         project_id: Scoping identifier written into each checkpoint doc.
     """
 
-    def __init__(
-        self, *, db: AsyncIOMotorDatabase, project_id: str = ""
-    ) -> None:
+    def __init__(self, *, db: AsyncIOMotorDatabase, project_id: str = "") -> None:
         self._db = db
         self._project_id = project_id
         self._collection = db[_COLLECTION]

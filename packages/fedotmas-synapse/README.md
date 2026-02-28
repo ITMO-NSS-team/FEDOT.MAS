@@ -11,7 +11,5 @@ This package is under development.
 From the workspace root:
 
 ```
-uv sync --all-packages
+uv pip install packages/fedotmas-synapse
 ```
-
-The plugin depends on `fedot-mas` and will pull it in automatically.

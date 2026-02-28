@@ -1,5 +1,3 @@
-"""Synapse integration for FEDOT.MAS."""
-
 from fedotmas_synapse.bridge import MASEventBridge
 from fedotmas_synapse.checkpoint import CheckpointCallback
 from fedotmas_synapse.memory import SynapseMemoryServiceAdapter

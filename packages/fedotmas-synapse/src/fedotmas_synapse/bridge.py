@@ -1,12 +1,3 @@
-"""MAS Event Bridge — translates ADK lifecycle hooks to CodeSynapse SSE events.
-
-Each method is called from the corresponding ``SynapsePlugin`` hook and
-emits a typed SSE event via ``EventEmitter.emit()``.  All methods operate
-in **observe mode** (return ``None``, never short-circuit the pipeline).
-
-See INCOMPATIBILITIES.md §1 for the ``invocation_id`` resolution.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -14,14 +5,13 @@ from typing import TYPE_CHECKING, Any
 from fedotmas.common.logging import get_logger
 
 if TYPE_CHECKING:
+    from events.emitter import EventEmitter
     from google.adk.agents.base_agent import BaseAgent
     from google.adk.agents.callback_context import CallbackContext
     from google.adk.models.llm_request import LlmRequest
     from google.adk.models.llm_response import LlmResponse
     from google.adk.runners import InvocationContext
     from google.adk.tools import BaseTool, ToolContext
-
-    from events.emitter import EventEmitter
 
 _PREVIEW_MAX_LEN = 200
 _log = get_logger("fedotmas_synapse.bridge")
@@ -35,24 +25,18 @@ class MASEventBridge:
         project_id: Scoping identifier for all emitted events.
     """
 
-    def __init__(
-        self, event_emitter: EventEmitter, project_id: str
-    ) -> None:
+    def __init__(self, event_emitter: EventEmitter, project_id: str) -> None:
         self._emitter = event_emitter
         self._project_id = project_id
         self._run_start_time: float = 0.0
 
     # --- Runner lifecycle ---
 
-    async def pipeline_started(
-        self, invocation_context: InvocationContext
-    ) -> None:
+    async def pipeline_started(self, invocation_context: InvocationContext) -> None:
         """Emit ``mas_pipeline_started``.  Called from ``before_run_callback``."""
         raise NotImplementedError("MASEventBridge.pipeline_started")
 
-    async def pipeline_completed(
-        self, invocation_context: InvocationContext
-    ) -> None:
+    async def pipeline_completed(self, invocation_context: InvocationContext) -> None:
         """Emit ``mas_pipeline_completed``.  Called from ``after_run_callback``.
 
         Payload includes ``elapsed_seconds`` computed from

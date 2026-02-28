@@ -60,6 +60,23 @@ def _find_terminal_node(node: StepConfig) -> StepConfig:
     return node
 
 
+def validate_agent_models(
+    agents: list[dict[str, object]],
+    allowed_models: set[str],
+) -> None:
+    """Raise ``ValueError`` if any agent uses a model not in *allowed_models*.
+
+    Agents with ``model=None`` are valid (they use the default model).
+    """
+    for agent in agents:
+        model = agent.get("model")
+        if model is not None and model not in allowed_models:
+            raise ValueError(
+                f"Agent '{agent.get('name')}' uses unknown model '{model}'. "
+                f"Allowed: {sorted(allowed_models)}"
+            )
+
+
 def warn_terminal_parallel(pipeline: StepConfig) -> None:
     """Warn if the pipeline ends with a parallel node (no synthesizer)."""
     terminal = _find_terminal_node(pipeline)

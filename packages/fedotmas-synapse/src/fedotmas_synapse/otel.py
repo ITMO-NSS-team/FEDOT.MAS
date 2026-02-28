@@ -1,9 +1,3 @@
-"""OpenTelemetry integration for FEDOT.MAS ADK events.
-
-See INCOMPATIBILITIES.md §3 for the sync-context-manager vs async-hooks
-resolution.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -12,7 +6,6 @@ from fedotmas.common.logging import get_logger
 
 if TYPE_CHECKING:
     from google.adk.events import Event
-
     from telemetry.tracer import SynapseTracer
 
 _log = get_logger("fedotmas_synapse.otel")

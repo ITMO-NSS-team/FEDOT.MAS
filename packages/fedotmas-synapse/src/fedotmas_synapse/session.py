@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from fedotmas.common.logging import get_logger
 from google.adk.events import Event
 from google.adk.sessions import BaseSessionService, Session
 from google.adk.sessions.base_session_service import (
@@ -11,8 +12,6 @@ from google.adk.sessions.base_session_service import (
     ListSessionsResponse,
 )
 from motor.motor_asyncio import AsyncIOMotorDatabase
-
-from fedotmas.common.logging import get_logger
 
 _COLLECTION = "fedotmas_sessions"
 _log = get_logger("fedotmas_synapse.session")
@@ -127,11 +126,13 @@ class MongoSessionService(BaseSessionService):
         config: Optional[GetSessionConfig] = None,
     ) -> Optional[Session]:
         await self._ensure_indexes()
-        doc = await self._collection.find_one({
-            "app_name": app_name,
-            "user_id": user_id,
-            "session_id": session_id,
-        })
+        doc = await self._collection.find_one(
+            {
+                "app_name": app_name,
+                "user_id": user_id,
+                "session_id": session_id,
+            }
+        )
         if doc is None:
             return None
         return self._doc_to_session(doc)
@@ -160,11 +161,13 @@ class MongoSessionService(BaseSessionService):
         session_id: str,
     ) -> None:
         await self._ensure_indexes()
-        await self._collection.delete_one({
-            "app_name": app_name,
-            "user_id": user_id,
-            "session_id": session_id,
-        })
+        await self._collection.delete_one(
+            {
+                "app_name": app_name,
+                "user_id": user_id,
+                "session_id": session_id,
+            }
+        )
         _log.debug("deleted session {}", session_id)
 
     async def append_event(

@@ -1,29 +1,14 @@
-"""Unified ADK plugin for CodeSynapse integration.
-
-``SynapsePlugin`` is the single entry-point that intercepts all ADK
-lifecycle hooks and delegates to sub-components:
-
-- :class:`~fedotmas_synapse.checkpoint.CheckpointCallback`
-  (before/after agent → MongoDB snapshots)
-- :class:`~fedotmas_synapse.otel.OtelEventCallback`
-  (on_event → OTEL spans)
-- :class:`~fedotmas_synapse.bridge.MASEventBridge`
-  (all hooks → SSE events)
-- :class:`~fedotmas_synapse.model_gates.BifrostModelGates`
-  (before_model → temperature enforcement)
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
+from fedotmas.common.logging import get_logger
 from google.adk.events import Event
 from google.adk.models.llm_response import LlmResponse
 from google.adk.plugins import BasePlugin
 from google.genai import types
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from fedotmas.common.logging import get_logger
 from fedotmas_synapse.bridge import MASEventBridge
 from fedotmas_synapse.checkpoint import CheckpointCallback
 from fedotmas_synapse.memory import SynapseMemoryServiceAdapter
@@ -32,20 +17,19 @@ from fedotmas_synapse.otel import OtelEventCallback
 from fedotmas_synapse.session import MongoSessionService
 
 if TYPE_CHECKING:
+    from events.emitter import EventEmitter
     from google.adk.agents.base_agent import BaseAgent
     from google.adk.agents.callback_context import CallbackContext
     from google.adk.models.llm_request import LlmRequest
     from google.adk.runners import InvocationContext
     from google.adk.tools import BaseTool, ToolContext
-
-    from events.emitter import EventEmitter
     from telemetry.tracer import SynapseTracer
 
 _log = get_logger("fedotmas_synapse.plugin")
 
 
 class SynapsePlugin(BasePlugin):
-    """Unified ADK plugin for CodeSynapse integration.
+    """ADK plugin for CodeSynapse integration.
 
     Args:
         db: Motor async database instance (shared ``synaps`` DB from
@@ -72,15 +56,11 @@ class SynapsePlugin(BasePlugin):
         self._db = db
 
         if otel_endpoint is not None:
-            _log.warning(
-                "otel_endpoint is deprecated — pass tracer= instead"
-            )
+            _log.warning("otel_endpoint is deprecated — pass tracer= instead")
 
         # --- public services (exposed via mas_kwargs) ---
         self.session_service = MongoSessionService(db)
-        self.memory_service = SynapseMemoryServiceAdapter(
-            db, project_id=project_id
-        )
+        self.memory_service = SynapseMemoryServiceAdapter(db, project_id=project_id)
 
         # --- internal sub-components ---
         self._checkpoint = CheckpointCallback(db=db, project_id=project_id)
@@ -91,9 +71,7 @@ class SynapsePlugin(BasePlugin):
         )
         self._model_gates = BifrostModelGates()
         self._otel: OtelEventCallback | None = (
-            OtelEventCallback(tracer=tracer)
-            if (tracer or otel_endpoint)
-            else None
+            OtelEventCallback(tracer=tracer) if (tracer or otel_endpoint) else None
         )
 
     def mas_kwargs(self) -> dict[str, Any]:
@@ -128,9 +106,7 @@ class SynapsePlugin(BasePlugin):
             try:
                 await self._bridge.pipeline_completed(invocation_context)
             except Exception:
-                _log.warning(
-                    "bridge.pipeline_completed failed", exc_info=True
-                )
+                _log.warning("bridge.pipeline_completed failed", exc_info=True)
 
     async def before_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
@@ -188,9 +164,7 @@ class SynapsePlugin(BasePlugin):
     ) -> Optional[LlmResponse]:
         if self._bridge:
             try:
-                await self._bridge.model_error(
-                    callback_context, llm_request, error
-                )
+                await self._bridge.model_error(callback_context, llm_request, error)
             except Exception:
                 _log.warning("bridge.model_error failed", exc_info=True)
         return None
@@ -219,9 +193,7 @@ class SynapsePlugin(BasePlugin):
     ) -> Optional[dict]:
         if self._bridge:
             try:
-                await self._bridge.tool_completed(
-                    tool, tool_args, tool_context, result
-                )
+                await self._bridge.tool_completed(tool, tool_args, tool_context, result)
             except Exception:
                 _log.warning("bridge.tool_completed failed", exc_info=True)
         return None
@@ -236,9 +208,7 @@ class SynapsePlugin(BasePlugin):
     ) -> Optional[dict]:
         if self._bridge:
             try:
-                await self._bridge.tool_error(
-                    tool, tool_args, tool_context, error
-                )
+                await self._bridge.tool_error(tool, tool_args, tool_context, error)
             except Exception:
                 _log.warning("bridge.tool_error failed", exc_info=True)
         return None
