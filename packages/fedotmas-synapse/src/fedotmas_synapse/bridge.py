@@ -4,12 +4,14 @@ Each method is called from the corresponding ``SynapsePlugin`` hook and
 emits a typed SSE event via ``EventEmitter.emit()``.  All methods operate
 in **observe mode** (return ``None``, never short-circuit the pipeline).
 
-See INCOMPATIBILITIES.md §1 for the ``invocation_id`` private-API tension.
+See INCOMPATIBILITIES.md §1 for the ``invocation_id`` resolution.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+
+from fedotmas.common.logging import get_logger
 
 if TYPE_CHECKING:
     from google.adk.agents.base_agent import BaseAgent
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from events.emitter import EventEmitter
 
 _PREVIEW_MAX_LEN = 200
+_log = get_logger("fedotmas_synapse.bridge")
 
 
 class MASEventBridge:
@@ -112,7 +115,7 @@ class MASEventBridge:
         tool: BaseTool,
         tool_args: dict[str, Any],
         tool_context: ToolContext,
-        result: dict[str, Any],
+        result: dict,
     ) -> None:
         """Emit ``mas_tool_result``.  Called from ``after_tool_callback``.
 

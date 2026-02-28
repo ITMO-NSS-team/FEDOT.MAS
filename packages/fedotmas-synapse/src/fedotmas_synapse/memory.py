@@ -8,8 +8,12 @@ from google.adk.memory.base_memory_service import MemoryEntry, SearchMemoryRespo
 from google.adk.sessions import Session
 from google.genai import types
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.errors import OperationFailure
+
+from fedotmas.common.logging import get_logger
 
 _COLLECTION = "fedotmas_memory"
+_log = get_logger("fedotmas_synapse.memory")
 
 
 class SynapseMemoryServiceAdapter(BaseMemoryService):
@@ -88,6 +92,11 @@ class SynapseMemoryServiceAdapter(BaseMemoryService):
             {"$set": doc},
             upsert=True,
         )
+        _log.debug(
+            "ingested session {} ({} content parts)",
+            session.id,
+            len(content_parts),
+        )
 
     async def search_memory(
         self,
@@ -115,8 +124,9 @@ class SynapseMemoryServiceAdapter(BaseMemoryService):
                 {"score": {"$meta": "textScore"}},
             ).sort([("score", {"$meta": "textScore"})]).limit(10)
             docs = [doc async for doc in cursor]
-        except (TypeError, NotImplementedError, Exception):
+        except (OperationFailure, NotImplementedError):
             # Fallback for environments without $text support (e.g. mongomock)
+            _log.debug("$text search unavailable, falling back to $regex")
             regex_filter = {**base_filter, "content": {"$regex": query, "$options": "i"}}
             cursor = self._collection.find(regex_filter).limit(10)
             docs = [doc async for doc in cursor]

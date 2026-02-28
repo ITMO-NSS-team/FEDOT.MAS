@@ -15,12 +15,15 @@ lifecycle hooks and delegates to sub-components:
 
 from __future__ import annotations
 
-import warnings
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
+from google.adk.events import Event
+from google.adk.models.llm_response import LlmResponse
 from google.adk.plugins import BasePlugin
+from google.genai import types
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from fedotmas.common.logging import get_logger
 from fedotmas_synapse.bridge import MASEventBridge
 from fedotmas_synapse.checkpoint import CheckpointCallback
 from fedotmas_synapse.memory import SynapseMemoryServiceAdapter
@@ -29,8 +32,16 @@ from fedotmas_synapse.otel import OtelEventCallback
 from fedotmas_synapse.session import MongoSessionService
 
 if TYPE_CHECKING:
+    from google.adk.agents.base_agent import BaseAgent
+    from google.adk.agents.callback_context import CallbackContext
+    from google.adk.models.llm_request import LlmRequest
+    from google.adk.runners import InvocationContext
+    from google.adk.tools import BaseTool, ToolContext
+
     from events.emitter import EventEmitter
     from telemetry.tracer import SynapseTracer
+
+_log = get_logger("fedotmas_synapse.plugin")
 
 
 class SynapsePlugin(BasePlugin):
@@ -61,10 +72,8 @@ class SynapsePlugin(BasePlugin):
         self._db = db
 
         if otel_endpoint is not None:
-            warnings.warn(
-                "otel_endpoint is deprecated, pass tracer instead",
-                DeprecationWarning,
-                stacklevel=2,
+            _log.warning(
+                "otel_endpoint is deprecated — pass tracer= instead"
             )
 
         # --- public services (exposed via mas_kwargs) ---
@@ -102,70 +111,162 @@ class SynapsePlugin(BasePlugin):
 
     # --- BasePlugin lifecycle hooks ---
 
-    async def before_run_callback(self, *, invocation_context):
+    async def before_run_callback(
+        self, *, invocation_context: InvocationContext
+    ) -> Optional[types.Content]:
         if self._bridge:
-            await self._bridge.pipeline_started(invocation_context)
-
-    async def after_run_callback(self, *, invocation_context):
-        if self._bridge:
-            await self._bridge.pipeline_completed(invocation_context)
-
-    async def before_agent_callback(self, *, agent, callback_context):
-        await self._checkpoint.before_agent(agent, callback_context)
-        if self._bridge:
-            await self._bridge.agent_started(agent, callback_context)
-
-    async def after_agent_callback(self, *, agent, callback_context):
-        await self._checkpoint.after_agent(agent, callback_context)
-        if self._bridge:
-            await self._bridge.agent_completed(agent, callback_context)
-
-    async def before_model_callback(self, *, callback_context, llm_request):
-        self._model_gates.enforce(llm_request)
+            try:
+                await self._bridge.pipeline_started(invocation_context)
+            except Exception:
+                _log.warning("bridge.pipeline_started failed", exc_info=True)
         return None
 
-    async def after_model_callback(self, *, callback_context, llm_response):
+    async def after_run_callback(
+        self, *, invocation_context: InvocationContext
+    ) -> None:
         if self._bridge:
-            await self._bridge.model_call(callback_context, llm_response)
+            try:
+                await self._bridge.pipeline_completed(invocation_context)
+            except Exception:
+                _log.warning(
+                    "bridge.pipeline_completed failed", exc_info=True
+                )
+
+    async def before_agent_callback(
+        self, *, agent: BaseAgent, callback_context: CallbackContext
+    ) -> Optional[types.Content]:
+        try:
+            await self._checkpoint.before_agent(agent, callback_context)
+        except Exception:
+            _log.warning("checkpoint.before_agent failed", exc_info=True)
+        if self._bridge:
+            try:
+                await self._bridge.agent_started(agent, callback_context)
+            except Exception:
+                _log.warning("bridge.agent_started failed", exc_info=True)
+        return None
+
+    async def after_agent_callback(
+        self, *, agent: BaseAgent, callback_context: CallbackContext
+    ) -> Optional[types.Content]:
+        try:
+            await self._checkpoint.after_agent(agent, callback_context)
+        except Exception:
+            _log.warning("checkpoint.after_agent failed", exc_info=True)
+        if self._bridge:
+            try:
+                await self._bridge.agent_completed(agent, callback_context)
+            except Exception:
+                _log.warning("bridge.agent_completed failed", exc_info=True)
+        return None
+
+    async def before_model_callback(
+        self, *, callback_context: CallbackContext, llm_request: LlmRequest
+    ) -> Optional[LlmResponse]:
+        try:
+            self._model_gates.enforce(llm_request)
+        except Exception:
+            _log.warning("model_gates.enforce failed", exc_info=True)
+        return None
+
+    async def after_model_callback(
+        self, *, callback_context: CallbackContext, llm_response: LlmResponse
+    ) -> Optional[LlmResponse]:
+        if self._bridge:
+            try:
+                await self._bridge.model_call(callback_context, llm_response)
+            except Exception:
+                _log.warning("bridge.model_call failed", exc_info=True)
         return None
 
     async def on_model_error_callback(
-        self, *, callback_context, llm_request, error
-    ):
+        self,
+        *,
+        callback_context: CallbackContext,
+        llm_request: LlmRequest,
+        error: Exception,
+    ) -> Optional[LlmResponse]:
         if self._bridge:
-            await self._bridge.model_error(
-                callback_context, llm_request, error
-            )
+            try:
+                await self._bridge.model_error(
+                    callback_context, llm_request, error
+                )
+            except Exception:
+                _log.warning("bridge.model_error failed", exc_info=True)
         return None
 
-    async def before_tool_callback(self, *, tool, tool_args, tool_context):
+    async def before_tool_callback(
+        self,
+        *,
+        tool: BaseTool,
+        tool_args: dict[str, Any],
+        tool_context: ToolContext,
+    ) -> Optional[dict]:
         if self._bridge:
-            await self._bridge.tool_started(tool, tool_args, tool_context)
+            try:
+                await self._bridge.tool_started(tool, tool_args, tool_context)
+            except Exception:
+                _log.warning("bridge.tool_started failed", exc_info=True)
         return None
 
     async def after_tool_callback(
-        self, *, tool, tool_args, tool_context, result
-    ):
+        self,
+        *,
+        tool: BaseTool,
+        tool_args: dict[str, Any],
+        tool_context: ToolContext,
+        result: dict,
+    ) -> Optional[dict]:
         if self._bridge:
-            await self._bridge.tool_completed(
-                tool, tool_args, tool_context, result
-            )
+            try:
+                await self._bridge.tool_completed(
+                    tool, tool_args, tool_context, result
+                )
+            except Exception:
+                _log.warning("bridge.tool_completed failed", exc_info=True)
         return None
 
     async def on_tool_error_callback(
-        self, *, tool, tool_args, tool_context, error
-    ):
+        self,
+        *,
+        tool: BaseTool,
+        tool_args: dict[str, Any],
+        tool_context: ToolContext,
+        error: Exception,
+    ) -> Optional[dict]:
         if self._bridge:
-            await self._bridge.tool_error(tool, tool_args, tool_context, error)
+            try:
+                await self._bridge.tool_error(
+                    tool, tool_args, tool_context, error
+                )
+            except Exception:
+                _log.warning("bridge.tool_error failed", exc_info=True)
         return None
 
-    async def on_event_callback(self, *, invocation_context, event):
+    async def on_event_callback(
+        self, *, invocation_context: InvocationContext, event: Event
+    ) -> Optional[Event]:
         if self._otel:
             try:
                 self._otel(event)
-            except NotImplementedError:
-                pass
+            except Exception:
+                _log.warning("otel callback failed", exc_info=True)
         return None
 
-    async def close(self):
-        pass
+    # NOTE: on_user_message_callback is defined by BasePlugin but not
+    # overridden here.  Evaluate whether bridge/checkpoint should observe
+    # user messages when those components are implemented.  Base returns
+    # None (no-op), which is correct for now.
+
+    async def close(self) -> None:
+        """Release resources held by sub-components."""
+        if self._otel and hasattr(self._otel, "close"):
+            try:
+                self._otel.close()
+            except Exception:
+                _log.warning("otel close failed", exc_info=True)
+        if hasattr(self.session_service, "close"):
+            try:
+                await self.session_service.close()
+            except Exception:
+                _log.warning("session_service close failed", exc_info=True)

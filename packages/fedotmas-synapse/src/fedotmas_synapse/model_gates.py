@@ -10,13 +10,14 @@ See INCOMPATIBILITIES.md §2 for the gate-duplication tension.
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
+
+from fedotmas.common.logging import get_logger
 
 if TYPE_CHECKING:
     from google.adk.models.llm_request import LlmRequest
 
-logger = logging.getLogger(__name__)
+_log = get_logger("fedotmas_synapse.model_gates")
 
 _GPT5_PREFIX = "gpt-5-"
 _GPT5_EXCEPTIONS = frozenset({"gpt-5-chat-latest"})

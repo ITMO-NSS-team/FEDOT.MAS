@@ -3,7 +3,7 @@
 Persists snapshots to the ``fedotmas_checkpoints`` collection in MongoDB.
 Used by ``SynapsePlugin`` for agent lifecycle hooks.
 
-See INCOMPATIBILITIES.md §1 for the ``invocation_id`` private-API tension.
+See INCOMPATIBILITIES.md §1 for the ``invocation_id`` resolution.
 """
 
 from __future__ import annotations
@@ -12,11 +12,14 @@ from typing import TYPE_CHECKING
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from fedotmas.common.logging import get_logger
+
 if TYPE_CHECKING:
     from google.adk.agents.base_agent import BaseAgent
     from google.adk.agents.callback_context import CallbackContext
 
 _COLLECTION = "fedotmas_checkpoints"
+_log = get_logger("fedotmas_synapse.checkpoint")
 
 
 class CheckpointCallback:
@@ -50,16 +53,13 @@ class CheckpointCallback:
         self,
         agent: BaseAgent,
         callback_context: CallbackContext,
-        invocation_id: str = "",
     ) -> None:
         """Snapshot session state **before** agent execution.
 
         Args:
             agent: The ADK agent about to execute.
             callback_context: ADK callback context (carries session state).
-            invocation_id: Pipeline invocation ID for ADK Rewind scoping.
-                Falls back to extracting from
-                ``callback_context._invocation_context`` (private API).
+                Use ``callback_context.invocation_id`` for pipeline scoping.
         """
         raise NotImplementedError("CheckpointCallback.before_agent")
 
@@ -67,15 +67,12 @@ class CheckpointCallback:
         self,
         agent: BaseAgent,
         callback_context: CallbackContext,
-        invocation_id: str = "",
     ) -> None:
         """Snapshot session state **after** agent execution.
 
         Args:
             agent: The ADK agent that just executed.
             callback_context: ADK callback context (carries session state).
-            invocation_id: Pipeline invocation ID for ADK Rewind scoping.
-                Falls back to extracting from
-                ``callback_context._invocation_context`` (private API).
+                Use ``callback_context.invocation_id`` for pipeline scoping.
         """
         raise NotImplementedError("CheckpointCallback.after_agent")

@@ -12,7 +12,10 @@ from google.adk.sessions.base_session_service import (
 )
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from fedotmas.common.logging import get_logger
+
 _COLLECTION = "fedotmas_sessions"
+_log = get_logger("fedotmas_synapse.session")
 
 
 class MongoSessionService(BaseSessionService):
@@ -47,14 +50,38 @@ class MongoSessionService(BaseSessionService):
         """Remove ``temp:`` prefixed keys before persisting."""
         return {k: v for k, v in state.items() if not k.startswith("temp:")}
 
+    @staticmethod
+    def _serialize_event(event: Event) -> dict[str, Any]:
+        """Serialize an ADK Event to a MongoDB-storable dict."""
+        return event.model_dump(mode="python", by_alias=True)
+
+    @staticmethod
+    def _deserialize_event(doc: dict[str, Any]) -> Event:
+        """Deserialize a MongoDB dict back to an ADK Event."""
+        return Event.model_validate(doc)
+
     def _doc_to_session(self, doc: dict[str, Any]) -> Session:
         """Convert a MongoDB document to an ADK ``Session``."""
+        events: list[Event] = []
+        for raw_event in doc.get("events", []):
+            if isinstance(raw_event, dict) and "author" in raw_event:
+                try:
+                    events.append(self._deserialize_event(raw_event))
+                except Exception:
+                    _log.warning(
+                        "failed to deserialize event in session {}",
+                        doc.get("session_id"),
+                        exc_info=True,
+                    )
         return Session(
             app_name=doc["app_name"],
             user_id=doc["user_id"],
             id=doc["session_id"],
             state=doc.get("state", {}),
-            events=[],
+            events=events,
+            last_update_time=doc.get("updated_at", 0.0).timestamp()
+            if isinstance(doc.get("updated_at"), datetime)
+            else 0.0,
         )
 
     async def create_session(
@@ -80,6 +107,7 @@ class MongoSessionService(BaseSessionService):
             "updated_at": now,
         }
         await self._collection.insert_one(doc)
+        _log.debug("created session {} for app={}", session_id, app_name)
 
         return Session(
             app_name=app_name,
@@ -87,6 +115,7 @@ class MongoSessionService(BaseSessionService):
             id=session_id,
             state=dict(clean_state),
             events=[],
+            last_update_time=now.timestamp(),
         )
 
     async def get_session(
@@ -136,6 +165,7 @@ class MongoSessionService(BaseSessionService):
             "user_id": user_id,
             "session_id": session_id,
         })
+        _log.debug("deleted session {}", session_id)
 
     async def append_event(
         self,
@@ -148,10 +178,13 @@ class MongoSessionService(BaseSessionService):
         ``temp:`` prefixed keys in the delta are stripped before persisting.
         """
         await self._ensure_indexes()
+        now = datetime.now(timezone.utc)
+
+        serialized = self._serialize_event(event)
 
         update: dict[str, Any] = {
-            "$set": {"updated_at": datetime.now(timezone.utc)},
-            "$push": {"events": {"event_id": getattr(event, "id", None)}},
+            "$set": {"updated_at": now},
+            "$push": {"events": serialized},
         }
 
         if event.actions and event.actions.state_delta:
@@ -172,5 +205,8 @@ class MongoSessionService(BaseSessionService):
         if event.actions and event.actions.state_delta:
             clean_delta = self._strip_temp_keys(event.actions.state_delta)
             session.state.update(clean_delta)
+
+        session.events.append(event)
+        session.last_update_time = now.timestamp()
 
         return session
