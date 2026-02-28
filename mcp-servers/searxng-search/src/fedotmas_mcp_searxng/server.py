@@ -28,21 +28,8 @@ class SearchResponse(BaseModel):
 
 
 DESCRIPTION = """
-MCP server to access web information through self-hosted SearXNG metasearch engine.
-
-SearXNG aggregates results from 244+ search engines including Google, Bing, DuckDuckGo,
-academic sources, and specialized engines - providing comprehensive coverage without
-rate limits or API costs.
-
-Available tools:
-- Search the web with customizable engine selection
-- Filter by categories (general, news, images, videos, science, etc.)
-- Time-based filtering (day, week, month, year)
-- No rate limits (self-hosted)
-
-Example use cases:
-- General web research without API rate limits
-- Multi-source result aggregation
+MCP server for web search via self-hosted SearXNG. Supports filtering by category
+(general, news, science, etc.) and language. Requires SEARXNG_URL env var.
 """
 
 searxng_server = FastMCP("searxng-search", instructions=DESCRIPTION)
@@ -55,13 +42,6 @@ async def search(
     max_results: Annotated[
         int, Field(description="Maximum number of results to return", ge=1, le=100)
     ] = 10,
-    engines: Annotated[
-        str | None,
-        Field(
-            description="Comma-separated list of engines (e.g., 'google,bing,duckduckgo'). "
-            "Leave empty to use all configured engines."
-        ),
-    ] = None,
     categories: Annotated[
         str,
         Field(
@@ -84,10 +64,6 @@ async def search(
     Args:
         query: Search query text
         max_results: Maximum number of results (1-100)
-        engines: Specific engines to use (comma-separated). Examples:
-            - "google,bing,duckduckgo,brave,mullvadleta,mullvadleta brave,yahoo,presearch" - Main search engines
-            - "google scholar,arxiv" - Academic Sources
-            - Empty/None - Use all configured engines
         categories: general, news, images, videos, music, files, science, social media
         language: Language preference (e.g., "en", "es", "fr")
         safesearch: Content filtering - 0 (off), 1 (moderate), 2 (strict)
@@ -101,7 +77,6 @@ async def search(
         - infoboxes: Rich information boxes (if available)
 
     Examples:
-        searxng_search("machine learning papers", engines="google scholar,arxiv")
         searxng_search("breaking news AI", categories="news")
         searxng_search("python tutorials", max_results=20)
     """
@@ -118,11 +93,6 @@ async def search(
             "categories": categories,
             "safesearch": safesearch,
         }
-
-        if engines:
-            params["engines"] = engines
-        else:
-            params["engines"] = "bing,duckduckgo,brave,mullvadleta,mullvadleta brave,yahoo,presearch"
 
         if language != "auto":
             params["language"] = language
