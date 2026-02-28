@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from google.adk.sessions import BaseSessionService
+
 from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import (
     ModelConfig,
@@ -34,6 +36,7 @@ async def generate_pipeline_config(
     worker_models: list[str | ModelConfig] | None = None,
     temperature: float | None = None,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
+    session_service: BaseSessionService | None = None,
 ) -> MetaAgentResult:
     """Run the meta-agent and return a validated ``MetaAgentResult``.
 
@@ -70,6 +73,7 @@ async def generate_pipeline_config(
         output_key="pipeline_config",
         model=resolved_meta,
         temperature=resolved_temp,
+        session_service=session_service,
     )
 
     raw_config = result.raw_output

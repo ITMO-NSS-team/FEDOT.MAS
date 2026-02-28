@@ -8,7 +8,7 @@ from typing import Any
 from google.adk import Runner
 from google.adk.agents import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
-from google.adk.sessions import InMemorySessionService
+from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 from pydantic import BaseModel
 
@@ -56,6 +56,7 @@ async def run_meta_agent_call(
     output_key: str,
     model: ModelConfig,
     temperature: float,
+    session_service: BaseSessionService | None = None,
 ) -> LLMCallResult:
     """Run a single ADK LlmAgent call and return the structured result.
 
@@ -87,7 +88,7 @@ async def run_meta_agent_call(
         before_model_callback=_fix_schema_callback,  # type: ignore[arg-type]
     )
 
-    session_service = InMemorySessionService()
+    session_service = session_service or InMemorySessionService()
     session_id = uuid.uuid4().hex
     app_name = f"fedotmas_{agent_name}"
 

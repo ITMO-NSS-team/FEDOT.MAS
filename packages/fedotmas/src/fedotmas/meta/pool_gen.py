@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from google.adk.sessions import BaseSessionService
+
 from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import (
     ModelConfig,
@@ -26,6 +28,7 @@ class PoolGenerator:
         worker_models: list[str | ModelConfig] | None = None,
         temperature: float | None = None,
         mcp_registry: dict[str, MCPServerConfig] | None = None,
+        session_service: BaseSessionService | None = None,
     ) -> None:
         self._resolved_meta = (
             resolve_model_config(meta_model)
@@ -41,6 +44,7 @@ class PoolGenerator:
             temperature if temperature is not None else get_meta_temperature()
         )
         self._mcp_registry = mcp_registry
+        self._session_service = session_service
         self.result: LLMCallResult | None = None
 
     async def generate(self, task: str) -> AgentPoolConfig:
@@ -62,6 +66,7 @@ class PoolGenerator:
             output_key="agent_pool",
             model=self._resolved_meta,
             temperature=self._temperature,
+            session_service=self._session_service,
         )
 
         raw = self.result.raw_output

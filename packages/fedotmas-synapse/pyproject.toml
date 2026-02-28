@@ -15,6 +15,7 @@ classifiers = [
 ]
 dependencies = [
   "fedot-mas",
+  "motor",
 ]
 
 [tool.uv]

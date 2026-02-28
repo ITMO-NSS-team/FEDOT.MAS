@@ -9,6 +9,8 @@ from typing import Any
 from google.adk import Runner
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.events import Event
+from google.adk.memory import BaseMemoryService
+from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
@@ -34,6 +36,8 @@ async def run_pipeline(
     user_query: str,
     *,
     session_service: BaseSessionService | None = None,
+    memory_service: BaseMemoryService | None = None,
+    plugins: list[BasePlugin] | None = None,
     event_callback: EventCallback | None = None,
     app_name: str = "fedotmas",
     user_id: str = "user",
@@ -84,6 +88,8 @@ async def run_pipeline(
         app_name=app_name,
         agent=agent,
         session_service=session_service,
+        memory_service=memory_service,
+        plugins=plugins or [],
     ) as runner:
         async for event in runner.run_async(
             user_id=user_id,

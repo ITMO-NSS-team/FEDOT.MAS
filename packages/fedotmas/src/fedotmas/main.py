@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from google.adk.memory import BaseMemoryService
+from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
@@ -49,6 +51,10 @@ class MAS:
             - ``"all"`` - enable every registered server.
         session_service: ADK ``BaseSessionService`` for session persistence.
             Defaults to an in-memory service.
+        memory_service: ADK ``BaseMemoryService`` for long-term memory.
+            Defaults to ``None`` (no memory).
+        plugins: ADK ``BasePlugin`` instances registered on the ``Runner``.
+            Plugins intercept all agent, model, and tool lifecycle events.
         event_callback: Async or sync callable invoked on every ``Event``
             emitted during pipeline execution.
         before_agent_callbacks: Callbacks invoked before each agent step.
@@ -80,6 +86,8 @@ class MAS:
         temperature: float | None = None,
         mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"] = [],
         session_service: BaseSessionService | None = None,
+        memory_service: BaseMemoryService | None = None,
+        plugins: list[BasePlugin] | None = None,
         event_callback: EventCallback | None = None,
         before_agent_callbacks: list[AgentCallback] | None = None,
         after_agent_callbacks: list[AgentCallback] | None = None,
@@ -90,6 +98,8 @@ class MAS:
         self._temperature = temperature
         self._mcp_registry = resolve_mcp_registry(mcp_servers)
         self._session_service = session_service
+        self._memory_service = memory_service
+        self._plugins = plugins
         self._event_callback = event_callback
         self._before_agent_callbacks = before_agent_callbacks
         self._after_agent_callbacks = after_agent_callbacks
@@ -172,6 +182,7 @@ class MAS:
                 worker_models=self._worker_models,
                 temperature=self._temperature,
                 mcp_registry=self._mcp_registry,
+                session_service=self._session_service,
             )
 
         self._last_meta_result = meta_result
@@ -197,6 +208,7 @@ class MAS:
             worker_models=self._worker_models,
             temperature=self._temperature,
             mcp_registry=self._mcp_registry,
+            session_service=self._session_service,
         )
         pool = await pool_gen.generate(task)
 
@@ -209,6 +221,7 @@ class MAS:
             worker_models=self._worker_models,
             temperature=self._temperature,
             mcp_registry=self._mcp_registry,
+            session_service=self._session_service,
         )
         config = await pipeline_gen.generate(task, pool)
 
@@ -263,6 +276,8 @@ class MAS:
             agent,
             user_query,
             session_service=self._session_service,
+            memory_service=self._memory_service,
+            plugins=self._plugins,
             event_callback=self._event_callback,
             initial_state=initial_state,
         )
