@@ -112,7 +112,14 @@ async def run_pipeline(
 
             # Tool responses
             for fr in event.get_function_responses():
-                _log.info("Tool result | agent={} tool={}", event.author, fr.name)
+                resp_str = str(fr.response)[:200] if fr.response else ""
+                if fr.response and "error" in resp_str.lower():
+                    _log.warning(
+                        "Tool error | agent={} tool={} response={}",
+                        event.author, fr.name, resp_str,
+                    )
+                else:
+                    _log.info("Tool result | agent={} tool={}", event.author, fr.name)
 
             # Token usage
             if event.usage_metadata:
@@ -138,6 +145,11 @@ async def run_pipeline(
 
             # State changes
             if event.actions.state_delta:
+                for key, value in event.actions.state_delta.items():
+                    if value is None or (isinstance(value, str) and not value.strip()):
+                        _log.warning(
+                            "Empty output | agent={} key='{}'", event.author, key
+                        )
                 _log.info(
                     "State update | agent={} keys={}",
                     event.author,
@@ -151,6 +163,10 @@ async def run_pipeline(
                     event.author,
                     event.error_code,
                     event.error_message,
+                )
+                raise RuntimeError(
+                    f"Agent '{event.author}' failed with error {event.error_code}: "
+                    f"{event.error_message}"
                 )
 
     total_elapsed = time.monotonic() - pipeline_start
@@ -167,8 +183,12 @@ async def run_pipeline(
         user_id=user_id,
         session_id=session.id,
     )
+    if final_session is None:
+        raise RuntimeError(
+            f"Session '{session.id}' lost after pipeline execution — results unavailable"
+        )
     return PipelineResult(
-        state=dict(final_session.state) if final_session else state,
+        state=dict(final_session.state),
         total_prompt_tokens=total_prompt,
         total_completion_tokens=total_completion,
         elapsed=total_elapsed,

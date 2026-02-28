@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from dataclasses import dataclass
@@ -31,19 +32,22 @@ class LLMCallResult:
 
 def _fix_schema_callback(*, callback_context: Any, llm_request: Any) -> None:  # noqa: ARG001
     """Patch response_schema for OpenAI-compatible models (strict mode)."""
-    model = llm_request.model or ""
-    schema = llm_request.config and llm_request.config.response_schema
-    if not schema or not needs_strict_schema(model):
-        return None
+    try:
+        model = llm_request.model or ""
+        schema = llm_request.config and llm_request.config.response_schema
+        if not schema or not needs_strict_schema(model):
+            return None
 
-    if isinstance(schema, type) and issubclass(schema, BaseModel):
-        schema = schema.model_json_schema()
-    elif isinstance(schema, BaseModel):
-        schema = schema.__class__.model_json_schema()
-    elif not isinstance(schema, dict):
-        return None
+        if isinstance(schema, type) and issubclass(schema, BaseModel):
+            schema = schema.model_json_schema()
+        elif isinstance(schema, BaseModel):
+            schema = schema.__class__.model_json_schema()
+        elif not isinstance(schema, dict):
+            return None
 
-    llm_request.config.response_schema = patch_schema_openai_strict(schema)
+        llm_request.config.response_schema = patch_schema_openai_strict(schema)
+    except Exception as e:
+        _log.error("Schema patching failed, proceeding without patch: {}", e)
     return None
 
 
@@ -57,12 +61,58 @@ async def run_meta_agent_call(
     model: ModelConfig,
     temperature: float,
     session_service: BaseSessionService | None = None,
+    max_retries: int = 2,
 ) -> LLMCallResult:
     """Run a single ADK LlmAgent call and return the structured result.
 
     Used by both single-stage ``generate_pipeline_config`` and the two-stage
     ``PoolGenerator`` / ``PipelineGenerator``.
+
+    Retries up to *max_retries* times on ``RuntimeError`` or
+    ``ValidationError`` (e.g. invalid JSON from LLM) with exponential backoff.
     """
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await _execute_meta_call(
+                agent_name=agent_name,
+                instruction=instruction,
+                user_message=user_message,
+                output_schema=output_schema,
+                output_key=output_key,
+                model=model,
+                temperature=temperature,
+                session_service=session_service,
+            )
+        except (RuntimeError, ValueError, TypeError) as e:
+            last_error = e
+            if attempt < max_retries:
+                delay = 2**attempt
+                _log.warning(
+                    "{} attempt {}/{} failed: {}, retrying in {}s...",
+                    agent_name, attempt + 1, max_retries + 1, e, delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                _log.error(
+                    "{} failed after {} attempts: {}",
+                    agent_name, max_retries + 1, e,
+                )
+    raise last_error  # type: ignore[misc]
+
+
+async def _execute_meta_call(
+    *,
+    agent_name: str,
+    instruction: str,
+    user_message: str,
+    output_schema: type[BaseModel],
+    output_key: str,
+    model: ModelConfig,
+    temperature: float,
+    session_service: BaseSessionService | None = None,
+) -> LLMCallResult:
+    """Core execution logic for a single meta-agent LLM call."""
     _log.info(
         "{} | model={} temperature={}",
         agent_name,
@@ -137,8 +187,8 @@ async def run_meta_agent_call(
                 _log.debug("Response preview | text={}", texts[0][:200])
 
         if event.error_code:
-            _log.error(
-                "LLM error | code={} msg={}", event.error_code, event.error_message
+            raise RuntimeError(
+                f"{agent_name} LLM error {event.error_code}: {event.error_message}"
             )
 
     elapsed = time.monotonic() - start
@@ -156,8 +206,12 @@ async def run_meta_agent_call(
         user_id="system",
         session_id=session.id,
     )
+    if final_session is None:
+        raise RuntimeError(
+            f"{agent_name}: session lost after execution — results unavailable"
+        )
 
-    raw_output = final_session.state.get(output_key) if final_session else None
+    raw_output = final_session.state.get(output_key)
     _log.debug(
         "Raw output | key={} type={} preview={}",
         output_key,

@@ -29,6 +29,7 @@ class PoolGenerator:
         temperature: float | None = None,
         mcp_registry: dict[str, MCPServerConfig] | None = None,
         session_service: BaseSessionService | None = None,
+        max_retries: int = 2,
     ) -> None:
         self._resolved_meta = (
             resolve_model_config(meta_model)
@@ -45,6 +46,7 @@ class PoolGenerator:
         )
         self._mcp_registry = mcp_registry
         self._session_service = session_service
+        self._max_retries = max_retries
         self.result: LLMCallResult | None = None
 
     async def generate(self, task: str) -> AgentPoolConfig:
@@ -67,6 +69,7 @@ class PoolGenerator:
             model=self._resolved_meta,
             temperature=self._temperature,
             session_service=self._session_service,
+            max_retries=self._max_retries,
         )
 
         raw = self.result.raw_output

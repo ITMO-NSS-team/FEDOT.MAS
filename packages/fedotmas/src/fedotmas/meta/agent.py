@@ -37,6 +37,7 @@ async def generate_pipeline_config(
     temperature: float | None = None,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
     session_service: BaseSessionService | None = None,
+    max_retries: int = 2,
 ) -> MetaAgentResult:
     """Run the meta-agent and return a validated ``MetaAgentResult``.
 
@@ -74,6 +75,7 @@ async def generate_pipeline_config(
         model=resolved_meta,
         temperature=resolved_temp,
         session_service=session_service,
+        max_retries=max_retries,
     )
 
     raw_config = result.raw_output

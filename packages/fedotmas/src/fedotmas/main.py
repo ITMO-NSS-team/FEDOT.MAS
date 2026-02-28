@@ -59,6 +59,8 @@ class MAS:
             emitted during pipeline execution.
         before_agent_callbacks: Callbacks invoked before each agent step.
         after_agent_callbacks: Callbacks invoked after each agent step.
+        max_retries: Max retry attempts for meta-agent LLM calls on failure
+            (e.g. invalid JSON). Defaults to 3.
 
     Usage::
 
@@ -91,6 +93,7 @@ class MAS:
         event_callback: EventCallback | None = None,
         before_agent_callbacks: list[AgentCallback] | None = None,
         after_agent_callbacks: list[AgentCallback] | None = None,
+        max_retries: int = 3,
     ) -> None:
         self._two_stage = two_stage
         self._meta_model = meta_model
@@ -103,6 +106,7 @@ class MAS:
         self._event_callback = event_callback
         self._before_agent_callbacks = before_agent_callbacks
         self._after_agent_callbacks = after_agent_callbacks
+        self._max_retries = max_retries
         self._last_result: PipelineResult | None = None
         self._last_meta_result: MetaAgentResult | None = None
         self._resolved_workers: list[ModelConfig] | None = None
@@ -183,6 +187,7 @@ class MAS:
                 temperature=self._temperature,
                 mcp_registry=self._mcp_registry,
                 session_service=self._session_service,
+                max_retries=self._max_retries,
             )
 
         self._last_meta_result = meta_result
@@ -209,6 +214,7 @@ class MAS:
             temperature=self._temperature,
             mcp_registry=self._mcp_registry,
             session_service=self._session_service,
+            max_retries=self._max_retries,
         )
         pool = await pool_gen.generate(task)
 
@@ -222,6 +228,7 @@ class MAS:
             temperature=self._temperature,
             mcp_registry=self._mcp_registry,
             session_service=self._session_service,
+            max_retries=self._max_retries,
         )
         config = await pipeline_gen.generate(task, pool)
 
