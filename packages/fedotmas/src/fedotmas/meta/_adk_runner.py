@@ -8,13 +8,13 @@ from typing import Any
 
 from google.adk import Runner
 from google.adk.agents import LlmAgent
-from google.adk.models.lite_llm import LiteLlm
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 from pydantic import BaseModel
 
 from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import ModelConfig
+from fedotmas.llm import make_llm
 from fedotmas.meta.schema_utils import (
     inject_model_enum,
     needs_strict_schema,
@@ -149,15 +149,11 @@ async def _execute_meta_call(
         temperature,
     )
 
-    llm_kwargs: dict[str, Any] = {}
-    if model.api_base:
-        llm_kwargs["api_base"] = model.api_base
-    if model.api_key:
-        llm_kwargs["api_key"] = model.api_key
+    llm = make_llm(model)
 
     agent = LlmAgent(
         name=agent_name,
-        model=LiteLlm(model=model.model, **llm_kwargs),
+        model=llm,
         instruction=instruction,
         output_schema=output_schema,
         output_key=output_key,

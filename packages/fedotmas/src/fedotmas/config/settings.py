@@ -20,6 +20,7 @@ class ModelConfig:
     model: str                        # provider/model-name, e.g. "openai/gpt-4o"
     api_base: str | None = None       # custom endpoint URL
     api_key: str | None = None        # per-model API key
+    provider: str | None = None       # "openrouter" | "bifrost" | None (=litellm)
 
 
 def resolve_model_config(value: str | ModelConfig) -> ModelConfig:

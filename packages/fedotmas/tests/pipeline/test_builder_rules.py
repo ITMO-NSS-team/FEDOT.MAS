@@ -9,9 +9,10 @@ import pytest
 from fedotmas.config.settings import ModelConfig
 from fedotmas.pipeline.builder import (
     _inject_exit_loop,
-    _make_llm,
     _make_vars_optional,
     _normalize_angle_brackets,
+    _normalize_model_name,
+    _resolve_llm,
     build,
 )
 from fedotmas.pipeline.models import PipelineConfig
@@ -64,54 +65,57 @@ class TestAngleThenOptionalCombo:
         assert step2 == "Process {input?} and {context?}"
 
 
-# ---- Rules 4-7: _make_llm ----
+# ---- Rules 4-5: _normalize_model_name ----
 
 
-class TestMakeLlmDefaultFallback:
-    """Rule 4: None model → default."""
+class TestNormalizeModelNameDefault:
+    """Rule 4: None/empty model → default."""
 
     def test_none_model(self):
-        assert _make_llm(None, None) == "openai/gpt-oss-120b"
+        assert _normalize_model_name(None) == "openai/gpt-oss-120b"
 
     def test_empty_string(self):
-        assert _make_llm("", None) == "openai/gpt-oss-120b"
+        assert _normalize_model_name("") == "openai/gpt-oss-120b"
 
 
-class TestMakeLlmAutoPrefix:
+class TestNormalizeModelNamePrefix:
     """Rule 5: bare model name gets openai/ prefix."""
 
     def test_bare_name(self):
-        assert _make_llm("gpt-4o", None) == "openai/gpt-4o"
+        assert _normalize_model_name("gpt-4o") == "openai/gpt-4o"
 
     def test_already_prefixed(self):
-        assert _make_llm("openai/gpt-4o", None) == "openai/gpt-4o"
+        assert _normalize_model_name("openai/gpt-4o") == "openai/gpt-4o"
 
     def test_other_provider(self):
-        assert _make_llm("gemini/flash", None) == "gemini/flash"
+        assert _normalize_model_name("gemini/flash") == "gemini/flash"
 
 
-class TestMakeLlmCustomEndpoint:
-    """Rule 6: model with api_base → LiteLlm instance."""
+# ---- Rules 6-7: _resolve_llm ----
 
-    @patch("fedotmas.pipeline.builder.LiteLlm")
-    def test_custom_endpoint(self, mock_lite):
+
+class TestResolveLlmCustomEndpoint:
+    """Rule 6: model in worker_models → delegates to make_llm factory."""
+
+    @patch("fedotmas.pipeline.builder.make_llm")
+    def test_custom_endpoint(self, mock_factory):
         cfg = ModelConfig(model="my-model", api_base="http://localhost:8080")
-        _make_llm("my-model", {"my-model": cfg})
-        mock_lite.assert_called_once_with(model="my-model", api_base="http://localhost:8080")
+        _resolve_llm("my-model", {"my-model": cfg})
+        mock_factory.assert_called_once_with(cfg)
 
-    @patch("fedotmas.pipeline.builder.LiteLlm")
-    def test_custom_with_api_key(self, mock_lite):
+    @patch("fedotmas.pipeline.builder.make_llm")
+    def test_custom_with_api_key(self, mock_factory):
         cfg = ModelConfig(model="m", api_base="http://x", api_key="sk-123")
-        _make_llm("m", {"m": cfg})
-        mock_lite.assert_called_once_with(model="m", api_base="http://x", api_key="sk-123")
+        _resolve_llm("m", {"m": cfg})
+        mock_factory.assert_called_once_with(cfg)
 
 
-class TestMakeLlmNoCustom:
+class TestResolveLlmNoCustom:
     """Rule 7: model not in worker_models → plain string."""
 
     def test_not_in_registry(self):
         other = ModelConfig(model="other")
-        result = _make_llm("openai/gpt-4o", {"other": other})
+        result = _resolve_llm("openai/gpt-4o", {"other": other})
         assert result == "openai/gpt-4o"
 
 

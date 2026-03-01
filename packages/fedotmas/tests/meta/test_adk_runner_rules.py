@@ -177,7 +177,7 @@ class TestSessionLost:
 
         with (
             patch("fedotmas.meta._adk_runner.LlmAgent"),
-            patch("fedotmas.meta._adk_runner.LiteLlm"),
+            patch("fedotmas.meta._adk_runner.make_llm"),
             patch("fedotmas.meta._adk_runner.Runner") as mock_runner_cls,
         ):
             mock_runner_cls.return_value.run_async = _fake_run_async
@@ -214,7 +214,7 @@ class TestOutputKeyMissing:
 
         with (
             patch("fedotmas.meta._adk_runner.LlmAgent"),
-            patch("fedotmas.meta._adk_runner.LiteLlm"),
+            patch("fedotmas.meta._adk_runner.make_llm"),
             patch("fedotmas.meta._adk_runner.Runner") as mock_runner_cls,
         ):
             mock_runner_cls.return_value.run_async = _fake_run_async

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import re
-from typing import Any, TypeAlias
+from typing import TypeAlias
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent, _SingleAgentCallback
-from google.adk.models.lite_llm import LiteLlm
+from google.adk.models.base_llm import BaseLlm
 from google.adk.tools.exit_loop_tool import exit_loop
 
 from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import ModelConfig, get_max_loop_iterations
+from fedotmas.llm import make_llm
 from fedotmas.mcp import MCPServerConfig, create_toolset
 from fedotmas.pipeline._ppline_utils import make_callbacks
 from fedotmas.pipeline.models import AgentConfig, PipelineConfig, StepConfig
@@ -97,26 +98,26 @@ def _normalize_angle_brackets(instruction: str) -> str:
     return _ANGLE_VAR_RE.sub(r"{\1}", instruction)
 
 
-def _make_llm(
+_DEFAULT_MODEL = "openai/gpt-oss-120b"
+
+
+def _normalize_model_name(model_name: str | None) -> str:
+    """Ensure *model_name* has a provider prefix; fall back to the default."""
+    if not model_name:
+        return _DEFAULT_MODEL
+    if "/" not in model_name:
+        return f"openai/{model_name}"
+    return model_name
+
+
+def _resolve_llm(
     model_name: str | None,
     worker_models: dict[str, ModelConfig] | None,
-) -> str | LiteLlm:
-    """Create a LiteLlm instance or return a plain model string."""
-    if not model_name:
-        return "openai/gpt-oss-120b"
-    if worker_models and model_name in worker_models:
-        cfg = worker_models[model_name]
-        kwargs: dict[str, Any] = {}
-        if cfg.api_base:
-            kwargs["api_base"] = cfg.api_base
-        if cfg.api_key:
-            kwargs["api_key"] = cfg.api_key
-        if kwargs:
-            return LiteLlm(model=cfg.model, **kwargs)
-    # Plain string — no custom endpoint
-    name = model_name
-    if "/" not in name:
-        name = f"openai/{name}"
+) -> str | BaseLlm:
+    """Return a ``BaseLlm`` for known worker configs, else a plain model string."""
+    name = _normalize_model_name(model_name)
+    if worker_models and model_name and model_name in worker_models:
+        return make_llm(worker_models[model_name])
     return name
 
 
@@ -129,7 +130,7 @@ def _build_llm_agent(
     for tool_name in cfg.tools:
         tools.append(create_toolset(tool_name, registry=mcp_registry))
 
-    model = _make_llm(cfg.model, worker_models)
+    model = _resolve_llm(cfg.model, worker_models)
     _log.debug("Built agent | name={} model={}", cfg.name, model)
     return LlmAgent(
         name=cfg.name,
