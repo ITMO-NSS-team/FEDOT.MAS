@@ -1,42 +1,66 @@
-## MCP servers
+# searxng-search MCP server
 
-FEDOT.MAS uses [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) to give agents access to external tools: file downloads, web scraping, code execution, etc.
+Web search via self-hosted SearXNG. Registered automatically in FEDOT.MAS.
 
-When a user describes a task, the **meta-agent** sees the list of all registered MCP servers with their descriptions. It decides which tools each pipeline agent needs and includes them in the generated pipeline config. At runtime the pipeline builder launches the required servers as subprocesses via `uv run --directory` and connects to them over stdio.
 
-### Auto-discovery
+### Set up SearXNG
 
-MCP servers are discovered automatically at import time. The registry scans `mcp-servers/*/pyproject.toml` for a `[tool.fedotmas.mcp]` section and registers every server it finds.
+SearXNG provides a self-hosted metasearch engine for web searches without API rate limits.
 
-### Adding a new MCP server
+**Prerequisites:** Docker and Docker Compose installed
 
-1. Create a directory under `mcp-servers/`:
+**Manual setup (without just):**
 
+```bash
+# Clone SearXNG Docker repository
+cd ~
+git clone https://github.com/searxng/searxng-docker.git
+cd searxng-docker
+
+# Generate secret key
+sed -i "s|ultrasecretkey|$(openssl rand -hex 32)|g" searxng/settings.yml
+
+# Configure search formats
+cat >> searxng/settings.yml << EOF
+search:
+  formats:
+    - html
+    - json
+    - csv
+    - rss
+EOF
+
+# Update port in docker-compose.yaml
+sed -i "s/127.0.0.1:8080:8080/127.0.0.1:8888:8080/" docker-compose.yaml
+
+# Start services
+docker compose up -d
+
+# Verify running
+curl http://localhost:8888
 ```
-mcp-servers/my-server/
-  pyproject.toml
-  src/
-    my_server/
-      server.py
+
+**Important:** The `search.formats` configuration is required for API access. Without it, JSON responses won't be available.
+
+SearXNG will be available at `http://localhost:8888`
+
+
+## Usage in FEDOT.MAS
+
+In auto mode the meta-agent assigns the tool automatically when the task requires web search:
+
+```python
+mas = MAS()
+state = await mas.run("What are the latest AI research papers from 2025?")
 ```
 
-2. In `pyproject.toml`, add the standard project metadata **and** a `[tool.fedotmas.mcp]` section:
+To assign it explicitly to an agent:
 
-```toml
-[project]
-name = "my-mcp-server"
-version = "0.1.0"
-dependencies = ["fastmcp>=2.14.5"]
-
-[project.scripts]
-my-mcp-server = "my_server.server:main"
-
-[tool.fedotmas.mcp]
-name = "my-server"
-description = "Short description of what the server does — the meta-agent reads this to decide when to use it."
-tags = ["relevant", "tags"]
+```python
+AgentConfig(
+    name="researcher",
+    instruction="Search the web and answer: {user_query}",
+    output_key="result",
+    tools=["searxng-search"],
+)
 ```
-
-3. On next import of `fedotmas.mcp`, the server appears in the registry and becomes available to the meta-agent.
-
-The `name` field is the key used in pipeline configs (e.g. `"tools": ["my-server"]`). The entry point is taken from the first key in `[project.scripts]`. Each server has its own `uv`-managed virtualenv created on first run.
