@@ -13,18 +13,9 @@ from fedotmas.mcp._discovery import discover_servers
 
 _log = get_logger("fedotmas.mcp.registry")
 
-# ---------------------------------------------------------------------------
-# Default registry — auto-discovered local servers
-# ---------------------------------------------------------------------------
-
 MCP_SERVERS: dict[str, MCPServerConfig] = {
     **discover_servers(),
 }
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def create_toolset(

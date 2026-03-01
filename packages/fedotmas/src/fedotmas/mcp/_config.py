@@ -7,10 +7,6 @@ from typing import Union
 _UV_BIN = shutil.which("uv") or "uv"  # try to find a path to `uv` binary
 
 
-# ---------------------------------------------------------------------------
-# Config dataclasses
-# ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class StdioMCPServer:
@@ -37,10 +33,6 @@ class HttpMCPServer:
 
 MCPServerConfig = Union[StdioMCPServer, HttpMCPServer]
 
-
-# ---------------------------------------------------------------------------
-# Factory functions
-# ---------------------------------------------------------------------------
 
 
 def directory_server(

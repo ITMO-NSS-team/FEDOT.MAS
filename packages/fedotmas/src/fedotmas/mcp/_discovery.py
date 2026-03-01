@@ -47,8 +47,8 @@ def discover_servers(
         server_dir = pyproject_path.parent
         try:
             data = tomllib.loads(pyproject_path.read_text())
-        except Exception:
-            _log.warning("Failed to parse {}", pyproject_path)
+        except (tomllib.TOMLDecodeError, OSError) as e:
+            _log.warning("Failed to parse {}: {}", pyproject_path, e)
             continue
 
         mcp_meta = data.get("tool", {}).get("fedotmas", {}).get("mcp")

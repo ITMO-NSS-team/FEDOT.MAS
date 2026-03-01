@@ -3,15 +3,10 @@ from __future__ import annotations
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
-from fedotmas.config.settings import (
-    ModelConfig,
-    get_meta_model,
-    get_meta_temperature,
-    get_worker_models,
-    resolve_model_config,
-)
+from fedotmas.config.settings import ModelConfig
 from fedotmas.mcp import MCPServerConfig, get_server_descriptions
 from fedotmas.meta._adk_runner import LLMCallResult, run_meta_agent_call
+from fedotmas.meta._helpers import format_server_descriptions, parse_llm_output, resolve_meta_and_workers
 from fedotmas.meta.prompts import POOL_AGENT_SYSTEM_PROMPT
 from fedotmas.pipeline.models import AgentPoolConfig
 
@@ -31,18 +26,8 @@ class PoolGenerator:
         session_service: BaseSessionService | None = None,
         max_retries: int = 2,
     ) -> None:
-        self._resolved_meta = (
-            resolve_model_config(meta_model)
-            if meta_model
-            else resolve_model_config(get_meta_model())
-        )
-        self._resolved_workers = (
-            [resolve_model_config(m) for m in worker_models]
-            if worker_models
-            else [resolve_model_config(m) for m in get_worker_models()]
-        )
-        self._temperature = (
-            temperature if temperature is not None else get_meta_temperature()
+        self._resolved_meta, self._resolved_workers, self._temperature = (
+            resolve_meta_and_workers(meta_model, worker_models, temperature)
         )
         self._mcp_registry = mcp_registry
         self._session_service = session_service
@@ -52,7 +37,7 @@ class PoolGenerator:
     async def generate(self, task: str) -> AgentPoolConfig:
         """Run LLM to produce ``AgentPoolConfig``."""
         descriptions = get_server_descriptions(self._mcp_registry)
-        desc_text = _format_descriptions(descriptions)
+        desc_text = format_server_descriptions(descriptions)
         models_text = "\n".join(f"- `{m.model}`" for m in self._resolved_workers)
 
         instruction = POOL_AGENT_SYSTEM_PROMPT.substitute(
@@ -73,13 +58,7 @@ class PoolGenerator:
             allowed_models=[m.model for m in self._resolved_workers],
         )
 
-        raw = self.result.raw_output
-        if isinstance(raw, dict):
-            pool = AgentPoolConfig.model_validate(raw)
-        elif isinstance(raw, str):
-            pool = AgentPoolConfig.model_validate_json(raw)
-        else:
-            raise TypeError(f"Unexpected agent_pool type: {type(raw)}")
+        pool = parse_llm_output(self.result.raw_output, AgentPoolConfig)
 
         _log.info(
             "Pool generated | agents={}",
@@ -94,9 +73,3 @@ class PoolGenerator:
                 a.instruction[:120],
             )
         return pool
-
-
-def _format_descriptions(descriptions: dict[str, str]) -> str:
-    if not descriptions:
-        return "No MCP tools available."
-    return "\n".join(f"- **{name}**: {desc}" for name, desc in descriptions.items())

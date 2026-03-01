@@ -86,7 +86,7 @@ class MAS:
         meta_model: str | ModelConfig | None = None,
         worker_models: list[str | ModelConfig] | None = None,
         temperature: float | None = None,
-        mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"] = [],
+        mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"] | None = None,
         session_service: BaseSessionService | None = None,
         memory_service: BaseMemoryService | None = None,
         plugins: list[BasePlugin] | None = None,
@@ -99,7 +99,7 @@ class MAS:
         self._meta_model = meta_model
         self._worker_models = worker_models
         self._temperature = temperature
-        self._mcp_registry = resolve_mcp_registry(mcp_servers)
+        self._mcp_registry = resolve_mcp_registry(mcp_servers or [])
         self._session_service = session_service
         self._memory_service = memory_service
         self._plugins = plugins

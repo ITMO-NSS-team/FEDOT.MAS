@@ -1,5 +1,3 @@
-"""OpenRouter LLM provider — direct access via ``openai.AsyncOpenAI``."""
-
 from __future__ import annotations
 
 import os
@@ -22,6 +20,11 @@ class OpenRouterLlm(OpenAICompatibleLlm):
     quantizations: list[str] | None = None
 
     def _build_client(self) -> AsyncOpenAI:
+        key = self.api_key or os.getenv("OPENROUTER_API_KEY")
+        if not key:
+            raise ValueError(
+                "OpenRouter API key not provided. Set OPENROUTER_API_KEY env var or pass api_key."
+            )
         headers: dict[str, str] = {}
         if self.http_referer:
             headers["HTTP-Referer"] = self.http_referer
@@ -29,7 +32,7 @@ class OpenRouterLlm(OpenAICompatibleLlm):
             headers["X-Title"] = self.x_title
         return AsyncOpenAI(
             base_url=self.api_base,
-            api_key=self.api_key or os.getenv("OPENROUTER_API_KEY", ""),
+            api_key=key,
             default_headers=headers or None,
         )
 

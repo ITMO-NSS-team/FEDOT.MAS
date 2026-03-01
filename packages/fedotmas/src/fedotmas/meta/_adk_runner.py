@@ -64,8 +64,8 @@ def _make_schema_callback(
                 schema = patch_schema_openai_strict(schema)
 
             llm_request.config.response_schema = schema
-        except Exception as e:
-            _log.error("Schema patching failed, proceeding without patch: {}", e)
+        except (KeyError, TypeError, ValueError) as e:
+            _log.warning("Schema patching failed, proceeding without patch: {}", e)
         return None
 
     return _callback

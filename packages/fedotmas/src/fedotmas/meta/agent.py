@@ -5,15 +5,10 @@ from dataclasses import dataclass, field
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
-from fedotmas.config.settings import (
-    ModelConfig,
-    get_meta_model,
-    get_meta_temperature,
-    get_worker_models,
-    resolve_model_config,
-)
+from fedotmas.config.settings import ModelConfig
 from fedotmas.mcp import MCPServerConfig, get_server_descriptions
 from fedotmas.meta._adk_runner import run_meta_agent_call
+from fedotmas.meta._helpers import format_server_descriptions, parse_llm_output, resolve_meta_and_workers
 from fedotmas.meta.prompts import META_AGENT_SYSTEM_PROMPT
 from fedotmas.pipeline.models import PipelineConfig
 
@@ -43,22 +38,12 @@ async def generate_pipeline_config(
 
     This is the **single-stage** generation path (``two_stage=False``).
     """
-    # Resolve parameters with env fallback
-    resolved_meta = (
-        resolve_model_config(meta_model)
-        if meta_model
-        else resolve_model_config(get_meta_model())
+    resolved_meta, resolved_workers, resolved_temp = resolve_meta_and_workers(
+        meta_model, worker_models, temperature,
     )
-    resolved_workers = (
-        [resolve_model_config(m) for m in worker_models]
-        if worker_models
-        else [resolve_model_config(m) for m in get_worker_models()]
-    )
-    resolved_temp = temperature if temperature is not None else get_meta_temperature()
 
-    # Build prompt
     descriptions = get_server_descriptions(mcp_registry)
-    desc_text = _format_descriptions(descriptions)
+    desc_text = format_server_descriptions(descriptions)
     models_text = "\n".join(f"- `{m.model}`" for m in resolved_workers)
 
     instruction = META_AGENT_SYSTEM_PROMPT.substitute(
@@ -79,13 +64,7 @@ async def generate_pipeline_config(
         allowed_models=[m.model for m in resolved_workers],
     )
 
-    raw_config = result.raw_output
-    if isinstance(raw_config, dict):
-        config = PipelineConfig.model_validate(raw_config)
-    elif isinstance(raw_config, str):
-        config = PipelineConfig.model_validate_json(raw_config)
-    else:
-        raise TypeError(f"Unexpected pipeline_config type: {type(raw_config)}")
+    config = parse_llm_output(result.raw_output, PipelineConfig)
 
     _log.info("Config extracted | agents={}", len(config.agents))
     return MetaAgentResult(
@@ -95,12 +74,3 @@ async def generate_pipeline_config(
         total_completion_tokens=result.completion_tokens,
         elapsed=result.elapsed,
     )
-
-
-def _format_descriptions(descriptions: dict[str, str]) -> str:
-    if not descriptions:
-        return "No MCP tools available."
-    lines = []
-    for name, desc in descriptions.items():
-        lines.append(f"- **{name}**: {desc}")
-    return "\n".join(lines)

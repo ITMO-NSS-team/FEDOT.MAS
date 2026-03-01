@@ -43,9 +43,23 @@ def get_worker_models() -> list[str]:
 
 def get_meta_temperature() -> float:
     env = os.getenv("FEDOTMAS_META_AGENT_TEMPERATURE")
-    return float(env) if env else DEFAULT_META_TEMPERATURE
+    if not env:
+        return DEFAULT_META_TEMPERATURE
+    try:
+        return float(env)
+    except ValueError:
+        raise ValueError(
+            f"Invalid FEDOTMAS_META_AGENT_TEMPERATURE='{env}', expected a float"
+        ) from None
 
 
 def get_max_loop_iterations() -> int:
     env = os.getenv("FEDOTMAS_DEFAULT_MAX_LOOP_ITERATIONS")
-    return int(env) if env else DEFAULT_MAX_LOOP_ITERATIONS
+    if not env:
+        return DEFAULT_MAX_LOOP_ITERATIONS
+    try:
+        return int(env)
+    except ValueError:
+        raise ValueError(
+            f"Invalid FEDOTMAS_DEFAULT_MAX_LOOP_ITERATIONS='{env}', expected an integer"
+        ) from None

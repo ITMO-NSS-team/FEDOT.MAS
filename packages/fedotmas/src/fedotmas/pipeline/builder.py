@@ -9,7 +9,7 @@ from google.adk.models.base_llm import BaseLlm
 from google.adk.tools.exit_loop_tool import exit_loop
 
 from fedotmas.common.logging import get_logger
-from fedotmas.config.settings import ModelConfig, get_max_loop_iterations
+from fedotmas.config.settings import DEFAULT_META_MODEL, ModelConfig, get_max_loop_iterations
 from fedotmas.llm import make_llm
 from fedotmas.mcp import MCPServerConfig, create_toolset
 from fedotmas.pipeline._ppline_utils import make_callbacks
@@ -98,14 +98,17 @@ def _normalize_angle_brackets(instruction: str) -> str:
     return _ANGLE_VAR_RE.sub(r"{\1}", instruction)
 
 
-_DEFAULT_MODEL = "openai/gpt-oss-120b"
-
-
 def _normalize_model_name(model_name: str | None) -> str:
     """Ensure *model_name* has a provider prefix; fall back to the default."""
     if not model_name:
-        return _DEFAULT_MODEL
+        _log.warning("No model specified for agent, using default: {}", DEFAULT_META_MODEL)
+        return DEFAULT_META_MODEL
     if "/" not in model_name:
+        _log.warning(
+            "Model '{}' has no provider prefix, assuming 'openai/{}'",
+            model_name,
+            model_name,
+        )
         return f"openai/{model_name}"
     return model_name
 
@@ -116,8 +119,10 @@ def _resolve_llm(
 ) -> str | BaseLlm:
     """Return a ``BaseLlm`` for known worker configs, else a plain model string."""
     name = _normalize_model_name(model_name)
-    if worker_models and model_name and model_name in worker_models:
-        return make_llm(worker_models[model_name])
+    if worker_models and model_name:
+        cfg = worker_models.get(model_name) or worker_models.get(name)
+        if cfg:
+            return make_llm(cfg)
     return name
 
 

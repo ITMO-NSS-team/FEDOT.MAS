@@ -1,13 +1,6 @@
-"""OpenAI-compatible LLM base class and ADK ↔ OpenAI conversion functions.
-
-Provides ``OpenAICompatibleLlm``, a ``BaseLlm`` subclass that talks directly
-to any OpenAI-compatible API via ``openai.AsyncOpenAI``, bypassing LiteLLM.
-"""
-
 from __future__ import annotations
 
 import json
-import logging
 from abc import abstractmethod
 from typing import Any, AsyncGenerator
 
@@ -18,11 +11,9 @@ from google.genai import types
 from openai import AsyncOpenAI
 from pydantic import BaseModel, PrivateAttr
 
-logger = logging.getLogger(__name__)
+from fedotmas.common.logging import get_logger
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+_log = get_logger("fedotmas.llm._openai_compat")
 
 _FINISH_REASON_MAP: dict[str, types.FinishReason] = {
     "stop": types.FinishReason.STOP,
@@ -37,26 +28,21 @@ _MISSING_TOOL_RESULT = (
     "before a response was recorded)."
 )
 
-# ---------------------------------------------------------------------------
-# Pure conversion helpers
-# ---------------------------------------------------------------------------
-
 
 def _safe_json(obj: Any) -> str:
     """Serialize *obj* to a JSON string; fall back to ``str()``."""
     try:
         return json.dumps(obj, default=str)
     except (TypeError, ValueError):
+        _log.warning("Failed to serialize to JSON, falling back to str(): {}", type(obj))
         return str(obj)
 
 
 def _map_finish_reason(reason: str | None) -> types.FinishReason:
     if not reason:
+        _log.debug("No finish_reason in response, assuming STOP")
         return types.FinishReason.STOP
     return _FINISH_REASON_MAP.get(reason.lower(), types.FinishReason.OTHER)
-
-
-# -- Schema helpers ---------------------------------------------------------
 
 
 def _schema_to_dict(schema: types.Schema | dict[str, Any]) -> dict[str, Any]:
@@ -90,9 +76,6 @@ def _schema_to_dict(schema: types.Schema | dict[str, Any]) -> dict[str, Any]:
     return schema_dict
 
 
-# -- Content → messages -----------------------------------------------------
-
-
 def _content_to_messages(content: types.Content) -> list[dict[str, Any]]:
     """Convert a single ``types.Content`` to one or more OpenAI message dicts."""
     tool_msgs: list[dict[str, Any]] = []
@@ -112,7 +95,6 @@ def _content_to_messages(content: types.Content) -> list[dict[str, Any]]:
     if tool_msgs and not non_tool_parts:
         return tool_msgs
 
-    # Build user or assistant message from non-tool parts
     role = "user" if content.role == "user" else "assistant"
 
     if role == "user":
@@ -121,7 +103,6 @@ def _content_to_messages(content: types.Content) -> list[dict[str, Any]]:
         result = tool_msgs + [msg] if tool_msgs else [msg]
         return result
 
-    # Assistant / model
     tool_calls: list[dict[str, Any]] = []
     text_parts: list[str] = []
     for part in non_tool_parts:
@@ -155,9 +136,6 @@ def _adk_contents_to_messages(
     for content in contents:
         messages.extend(_content_to_messages(content))
     return messages
-
-
-# -- Tool declarations ------------------------------------------------------
 
 
 def _adk_tools_to_openai(
@@ -196,9 +174,6 @@ def _adk_tools_to_openai(
     return result or None
 
 
-# -- Response schema ---------------------------------------------------------
-
-
 def _response_schema_to_format(
     response_schema: Any,
 ) -> dict[str, Any] | None:
@@ -231,8 +206,8 @@ def _response_schema_to_format(
         schema_dict = response_schema.model_dump(exclude_none=True, mode="json")
         schema_name = response_schema.__class__.__name__
     else:
-        logger.warning(
-            "Unsupported response_schema type %s", type(response_schema)
+        _log.warning(
+            "Unsupported response_schema type: {}", type(response_schema)
         )
         return None
 
@@ -252,9 +227,6 @@ def _response_schema_to_format(
             "schema": schema_dict,
         },
     }
-
-
-# -- Config params -----------------------------------------------------------
 
 
 def _config_to_params(config: types.GenerateContentConfig) -> dict[str, Any]:
@@ -279,9 +251,6 @@ def _config_to_params(config: types.GenerateContentConfig) -> dict[str, Any]:
     return params
 
 
-# -- Ensure tool results ----------------------------------------------------
-
-
 def _ensure_tool_results(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Insert placeholder tool messages for any missing tool results."""
     if not messages:
@@ -294,7 +263,7 @@ def _ensure_tool_results(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
         role = msg.get("role")
 
         if pending_ids and role != "tool":
-            logger.warning("Missing tool results for tool_call_id(s): %s", pending_ids)
+            _log.warning("Missing tool results for tool_call_id(s): {}", pending_ids)
             healed.extend(
                 {"role": "tool", "tool_call_id": tid, "content": _MISSING_TOOL_RESULT}
                 for tid in pending_ids
@@ -314,16 +283,13 @@ def _ensure_tool_results(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
         healed.append(msg)
 
     if pending_ids:
-        logger.warning("Missing tool results for tool_call_id(s): %s", pending_ids)
+        _log.warning("Missing tool results for tool_call_id(s): {}", pending_ids)
         healed.extend(
             {"role": "tool", "tool_call_id": tid, "content": _MISSING_TOOL_RESULT}
             for tid in pending_ids
         )
 
     return healed
-
-
-# -- OpenAI response → LlmResponse -----------------------------------------
 
 
 def _openai_response_to_llm_response(
@@ -372,11 +338,6 @@ def _openai_response_to_llm_response(
     )
 
 
-# ---------------------------------------------------------------------------
-# OpenAICompatibleLlm base class
-# ---------------------------------------------------------------------------
-
-
 class OpenAICompatibleLlm(BaseLlm):
     """Base ``BaseLlm`` for any OpenAI-compatible endpoint.
 
@@ -388,8 +349,6 @@ class OpenAICompatibleLlm(BaseLlm):
     api_base: str | None = None
 
     _client: AsyncOpenAI | None = PrivateAttr(default=None)
-
-    # -- Subclass hooks -----------------------------------------------------
 
     @abstractmethod
     def _build_client(self) -> AsyncOpenAI:
@@ -403,14 +362,10 @@ class OpenAICompatibleLlm(BaseLlm):
         """Strip provider prefix or transform model name."""
         return raw_model
 
-    # -- Client caching -----------------------------------------------------
-
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
             self._client = self._build_client()
         return self._client
-
-    # -- generate_content_async ---------------------------------------------
 
     async def generate_content_async(
         self,
@@ -421,7 +376,6 @@ class OpenAICompatibleLlm(BaseLlm):
 
         effective_model = self._resolve_model(llm_request.model or self.model)
 
-        # Build messages — system_instruction may be str or Content
         raw_sys = (
             llm_request.config.system_instruction
             if llm_request.config
@@ -430,7 +384,6 @@ class OpenAICompatibleLlm(BaseLlm):
         if isinstance(raw_sys, str):
             system_instruction: str | None = raw_sys
         elif raw_sys is not None:
-            # types.Content — extract text from parts
             sys_parts = getattr(raw_sys, "parts", None) or []
             system_instruction = "\n".join(
                 p.text for p in sys_parts if p.text
@@ -443,20 +396,17 @@ class OpenAICompatibleLlm(BaseLlm):
         )
         messages = _ensure_tool_results(messages)
 
-        # Tools
         tools = None
         if llm_request.config and llm_request.config.tools:
             raw_tools = llm_request.config.tools
             tools = _adk_tools_to_openai(raw_tools)
 
-        # Response format
         response_format = None
         if llm_request.config and llm_request.config.response_schema:
             response_format = _response_schema_to_format(
                 llm_request.config.response_schema
             )
 
-        # Generation params
         create_kwargs: dict[str, Any] = {
             "model": effective_model,
             "messages": messages,
@@ -480,8 +430,6 @@ class OpenAICompatibleLlm(BaseLlm):
             response = await client.chat.completions.create(**create_kwargs)
             yield _openai_response_to_llm_response(response)
 
-    # -- Streaming -----------------------------------------------------------
-
     async def _stream(
         self,
         client: AsyncOpenAI,
@@ -493,13 +441,13 @@ class OpenAICompatibleLlm(BaseLlm):
         text = ""
         function_calls: dict[int, dict[str, Any]] = {}
         usage_metadata = None
+        # fallback_index tracks tool call index when tc_delta.index is None
         fallback_index = 0
         model_version: str | None = None
 
         async for chunk in await client.chat.completions.create(**create_kwargs):
             model_version = chunk.model or model_version
             if not chunk.choices:
-                # Usage-only chunk (sent after finish)
                 if chunk.usage:
                     usage_metadata = types.GenerateContentResponseUsageMetadata(
                         prompt_token_count=chunk.usage.prompt_tokens or 0,
@@ -511,7 +459,6 @@ class OpenAICompatibleLlm(BaseLlm):
             choice = chunk.choices[0]
             delta = choice.delta
 
-            # Tool call deltas
             if delta and delta.tool_calls:
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index if tc_delta.index is not None else fallback_index
@@ -529,7 +476,6 @@ class OpenAICompatibleLlm(BaseLlm):
                     if tc_delta.id:
                         function_calls[idx]["id"] = tc_delta.id
 
-            # Text delta
             if delta and delta.content:
                 text += delta.content
                 yield LlmResponse(
@@ -541,7 +487,6 @@ class OpenAICompatibleLlm(BaseLlm):
                     model_version=model_version,
                 )
 
-            # Check for usage in the chunk itself
             if chunk.usage:
                 usage_metadata = types.GenerateContentResponseUsageMetadata(
                     prompt_token_count=chunk.usage.prompt_tokens or 0,
@@ -549,7 +494,6 @@ class OpenAICompatibleLlm(BaseLlm):
                     total_token_count=chunk.usage.total_tokens or 0,
                 )
 
-        # Build final aggregated response
         parts: list[types.Part] = []
         if text:
             parts.append(types.Part.from_text(text=text))
@@ -563,15 +507,11 @@ class OpenAICompatibleLlm(BaseLlm):
                     part.function_call.id = fc["id"]
                 parts.append(part)
 
-        finish_reason = types.FinishReason.STOP
-        if function_calls:
-            finish_reason = types.FinishReason.STOP
-
         final = LlmResponse(
             content=types.Content(role="model", parts=parts) if parts else None,
             partial=False,
             model_version=model_version,
-            finish_reason=finish_reason,
+            finish_reason=types.FinishReason.STOP,
             usage_metadata=usage_metadata,
         )
         yield final

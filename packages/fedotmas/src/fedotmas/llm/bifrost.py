@@ -1,5 +1,3 @@
-"""Bifrost LLM provider — local OpenAI-compatible gateway."""
-
 from __future__ import annotations
 
 import os
@@ -8,7 +6,10 @@ from openai import AsyncOpenAI
 from pydantic import Field
 from typing_extensions import override
 
+from fedotmas.common.logging import get_logger
 from fedotmas.llm._openai_compat import OpenAICompatibleLlm
+
+_log = get_logger("fedotmas.llm.bifrost")
 
 
 class BifrostLlm(OpenAICompatibleLlm):
@@ -21,9 +22,12 @@ class BifrostLlm(OpenAICompatibleLlm):
     )
 
     def _build_client(self) -> AsyncOpenAI:
+        key = self.api_key or "bifrost"
+        if not self.api_key:
+            _log.warning("No Bifrost API key provided, using placeholder 'bifrost'")
         return AsyncOpenAI(
             base_url=self.api_base,
-            api_key=self.api_key or "bifrost",
+            api_key=key,
         )
 
     @override
