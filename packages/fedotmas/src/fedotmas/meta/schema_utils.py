@@ -31,6 +31,46 @@ def _patch_object(obj: dict) -> None:
     obj["required"] = list(props.keys())
 
 
+def inject_model_enum(schema: dict, allowed_models: list[str]) -> dict:
+    """Add ``enum`` constraint to the ``model`` field in agent definitions.
+
+    Looks for ``AgentConfig`` and ``AgentPoolEntry`` in ``$defs`` and injects
+    ``enum: allowed_models`` into their ``model`` property, preserving nullable
+    (``anyOf``) wrappers.
+
+    Returns a patched copy; the original is not mutated.
+    """
+    schema = copy.deepcopy(schema)
+    target_defs = ("AgentConfig", "AgentPoolEntry")
+
+    for def_name, definition in schema.get("$defs", {}).items():
+        if def_name not in target_defs:
+            continue
+        props = definition.get("properties", {})
+        model_prop = props.get("model")
+        if model_prop is None:
+            continue
+        _inject_enum_into_prop(model_prop, allowed_models)
+
+    return schema
+
+
+def _inject_enum_into_prop(prop: dict, allowed_models: list[str]) -> None:
+    """Inject ``enum`` into a property schema, handling ``anyOf`` (nullable)."""
+    # Direct string type: {"type": "string"} or {"type": "string", ...}
+    if prop.get("type") == "string":
+        prop["enum"] = allowed_models
+        return
+
+    # Nullable via anyOf: {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    any_of = prop.get("anyOf")
+    if any_of:
+        for variant in any_of:
+            if isinstance(variant, dict) and variant.get("type") == "string":
+                variant["enum"] = allowed_models
+                return
+
+
 def needs_strict_schema(model_name: str) -> bool:
     """Return ``True`` for models that require strict-compatible schemas.
 

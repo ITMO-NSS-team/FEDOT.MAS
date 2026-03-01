@@ -26,7 +26,7 @@ workspace.members = [ "packages/*" ]
 
 [tool.pytest]
 ini_options.asyncio_mode = "auto"
-ini_options.testpaths = [ "packages/fedotmas-synapse/tests" ]
+ini_options.testpaths = [ "packages/fedotmas-synapse/tests", "packages/fedotmas/tests" ]
 
 [tool.ty]
 rules.unresolved-import = "ignore"

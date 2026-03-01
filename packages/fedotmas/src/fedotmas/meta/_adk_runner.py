@@ -15,7 +15,11 @@ from pydantic import BaseModel
 
 from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import ModelConfig
-from fedotmas.meta.schema_utils import needs_strict_schema, patch_schema_openai_strict
+from fedotmas.meta.schema_utils import (
+    inject_model_enum,
+    needs_strict_schema,
+    patch_schema_openai_strict,
+)
 
 _log = get_logger("fedotmas.meta._adk_runner")
 
@@ -30,25 +34,41 @@ class LLMCallResult:
     elapsed: float
 
 
-def _fix_schema_callback(*, callback_context: Any, llm_request: Any) -> None:  # noqa: ARG001
-    """Patch response_schema for OpenAI-compatible models (strict mode)."""
-    try:
-        model = llm_request.model or ""
-        schema = llm_request.config and llm_request.config.response_schema
-        if not schema or not needs_strict_schema(model):
-            return None
+def _make_schema_callback(
+    allowed_models: list[str] | None = None,
+) -> Any:
+    """Create a ``before_model_callback`` that patches the response schema.
 
-        if isinstance(schema, type) and issubclass(schema, BaseModel):
-            schema = schema.model_json_schema()
-        elif isinstance(schema, BaseModel):
-            schema = schema.__class__.model_json_schema()
-        elif not isinstance(schema, dict):
-            return None
+    If *allowed_models* is provided, injects ``enum`` into the ``model``
+    field of agent definitions so the LLM is constrained at schema level.
+    """
 
-        llm_request.config.response_schema = patch_schema_openai_strict(schema)
-    except Exception as e:
-        _log.error("Schema patching failed, proceeding without patch: {}", e)
-    return None
+    def _callback(*, callback_context: Any, llm_request: Any) -> None:  # noqa: ARG001
+        try:
+            model = llm_request.model or ""
+            schema = llm_request.config and llm_request.config.response_schema
+            if not schema:
+                return None
+
+            if isinstance(schema, type) and issubclass(schema, BaseModel):
+                schema = schema.model_json_schema()
+            elif isinstance(schema, BaseModel):
+                schema = schema.__class__.model_json_schema()
+            elif not isinstance(schema, dict):
+                return None
+
+            if allowed_models:
+                schema = inject_model_enum(schema, allowed_models)
+
+            if needs_strict_schema(model):
+                schema = patch_schema_openai_strict(schema)
+
+            llm_request.config.response_schema = schema
+        except Exception as e:
+            _log.error("Schema patching failed, proceeding without patch: {}", e)
+        return None
+
+    return _callback
 
 
 async def run_meta_agent_call(
@@ -62,6 +82,7 @@ async def run_meta_agent_call(
     temperature: float,
     session_service: BaseSessionService | None = None,
     max_retries: int = 2,
+    allowed_models: list[str] | None = None,
 ) -> LLMCallResult:
     """Run a single ADK LlmAgent call and return the structured result.
 
@@ -83,6 +104,7 @@ async def run_meta_agent_call(
                 model=model,
                 temperature=temperature,
                 session_service=session_service,
+                allowed_models=allowed_models,
             )
         except (RuntimeError, ValueError, TypeError) as e:
             last_error = e
@@ -90,13 +112,19 @@ async def run_meta_agent_call(
                 delay = 2**attempt
                 _log.warning(
                     "{} attempt {}/{} failed: {}, retrying in {}s...",
-                    agent_name, attempt + 1, max_retries + 1, e, delay,
+                    agent_name,
+                    attempt + 1,
+                    max_retries + 1,
+                    e,
+                    delay,
                 )
                 await asyncio.sleep(delay)
             else:
                 _log.error(
                     "{} failed after {} attempts: {}",
-                    agent_name, max_retries + 1, e,
+                    agent_name,
+                    max_retries + 1,
+                    e,
                 )
     raise last_error  # type: ignore[misc]
 
@@ -111,6 +139,7 @@ async def _execute_meta_call(
     model: ModelConfig,
     temperature: float,
     session_service: BaseSessionService | None = None,
+    allowed_models: list[str] | None = None,
 ) -> LLMCallResult:
     """Core execution logic for a single meta-agent LLM call."""
     _log.info(
@@ -135,7 +164,7 @@ async def _execute_meta_call(
         generate_content_config=types.GenerateContentConfig(
             temperature=temperature,
         ),
-        before_model_callback=_fix_schema_callback,  # type: ignore[arg-type]
+        before_model_callback=_make_schema_callback(allowed_models),
     )
 
     session_service = session_service or InMemorySessionService()

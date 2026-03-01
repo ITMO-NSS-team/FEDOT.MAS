@@ -76,6 +76,7 @@ async def generate_pipeline_config(
         temperature=resolved_temp,
         session_service=session_service,
         max_retries=max_retries,
+        allowed_models=[m.model for m in resolved_workers],
     )
 
     raw_config = result.raw_output

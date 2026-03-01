@@ -70,6 +70,7 @@ class PoolGenerator:
             temperature=self._temperature,
             session_service=self._session_service,
             max_retries=self._max_retries,
+            allowed_models=[m.model for m in self._resolved_workers],
         )
 
         raw = self.result.raw_output
