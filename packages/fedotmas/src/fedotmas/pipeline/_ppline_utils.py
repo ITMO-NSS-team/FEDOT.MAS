@@ -44,7 +44,9 @@ def _build_tree(
 
 
 def _is_workflow_node(name: str) -> bool:
-    return name.startswith(("seq_", "par_", "loop_"))
+    from fedotmas.pipeline.builder import WORKFLOW_PREFIXES
+
+    return name.startswith(WORKFLOW_PREFIXES)
 
 
 def print_tree(config: PipelineConfig) -> None:

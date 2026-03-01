@@ -212,6 +212,12 @@ async def _execute_meta_call(
                 _log.debug("Response preview | text={}", texts[0][:200])
 
         if event.error_code:
+            _log.error(
+                "LLM error | agent={} code={} msg={}",
+                agent_name,
+                event.error_code,
+                event.error_message,
+            )
             raise RuntimeError(
                 f"{agent_name} LLM error {event.error_code}: {event.error_message}"
             )

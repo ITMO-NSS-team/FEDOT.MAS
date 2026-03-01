@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, model_validator
 
+from fedotmas.common.logging import get_logger
 from fedotmas.pipeline._validators import (
     auto_fill_agent_name,
     validate_node_refs,
     warn_terminal_parallel,
     warn_unused_agents,
 )
+
+_log = get_logger("fedotmas.pipeline.models")
+
+_STATE_VAR_RE = re.compile(r"\{(\w+)\}")
+_ANGLE_VAR_RE = re.compile(r"<(\w+)>")
 
 
 class AgentPoolEntry(BaseModel):
@@ -48,6 +55,23 @@ class AgentConfig(BaseModel):
     model: str | None = None
     output_key: str
     tools: list[str] = []
+
+    @model_validator(mode="after")
+    def _normalize_fields(self) -> AgentConfig:
+        # Normalize model name
+        if self.model is not None:
+            if "/" not in self.model:
+                _log.warning(
+                    "Model '{}' has no provider prefix, assuming 'openai/{}'",
+                    self.model,
+                    self.model,
+                )
+                self.model = f"openai/{self.model}"
+
+        # Normalize instruction: <var> → {var} → {var?}
+        instr = _ANGLE_VAR_RE.sub(r"{\1}", self.instruction)
+        self.instruction = _STATE_VAR_RE.sub(r"{\1?}", instr)
+        return self
 
 
 class StepConfig(BaseModel):

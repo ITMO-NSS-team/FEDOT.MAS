@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import TypeAlias
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
@@ -84,46 +83,24 @@ def _build_node(
     raise ValueError(f"Unknown node type: {node.type}")
 
 
-_STATE_VAR_RE = re.compile(r"\{(\w+)\}")
-_ANGLE_VAR_RE = re.compile(r"<(\w+)>")
-
-
-def _make_vars_optional(instruction: str) -> str:
-    """Convert ``{var}`` → ``{var?}`` so ADK treats missing state as empty string."""
-    return _STATE_VAR_RE.sub(r"{\1?}", instruction)
-
-
-def _normalize_angle_brackets(instruction: str) -> str:
-    """Convert ``<var>`` → ``{var}`` in case the LLM copied angle brackets from prompt examples."""
-    return _ANGLE_VAR_RE.sub(r"{\1}", instruction)
-
-
-def _normalize_model_name(model_name: str | None) -> str:
-    """Ensure *model_name* has a provider prefix; fall back to the default."""
-    if not model_name:
-        _log.warning("No model specified for agent, using default: {}", DEFAULT_META_MODEL)
-        return DEFAULT_META_MODEL
-    if "/" not in model_name:
-        _log.warning(
-            "Model '{}' has no provider prefix, assuming 'openai/{}'",
-            model_name,
-            model_name,
-        )
-        return f"openai/{model_name}"
-    return model_name
-
-
 def _resolve_llm(
     model_name: str | None,
     worker_models: dict[str, ModelConfig] | None,
 ) -> str | BaseLlm:
-    """Return a ``BaseLlm`` for known worker configs, else a plain model string."""
-    name = _normalize_model_name(model_name)
-    if worker_models and model_name:
-        cfg = worker_models.get(model_name) or worker_models.get(name)
+    """Return a ``BaseLlm`` for known worker configs, else a plain model string.
+
+    Model name normalization (provider prefix) is handled by
+    ``AgentConfig`` model_validator, so *model_name* here is already
+    normalized or ``None``.
+    """
+    if not model_name:
+        _log.warning("No model specified for agent, using default: {}", DEFAULT_META_MODEL)
+        return DEFAULT_META_MODEL
+    if worker_models:
+        cfg = worker_models.get(model_name)
         if cfg:
             return make_llm(cfg)
-    return name
+    return model_name
 
 
 def _build_llm_agent(
@@ -140,7 +117,7 @@ def _build_llm_agent(
     return LlmAgent(
         name=cfg.name,
         model=model,
-        instruction=_make_vars_optional(_normalize_angle_brackets(cfg.instruction)),
+        instruction=cfg.instruction,
         output_key=cfg.output_key,
         tools=tools,
     )
@@ -175,6 +152,9 @@ def _inject_exit_loop(children: list[BaseAgent]) -> None:
                 agent.tools.append(exit_loop)  # type: ignore[arg-type]
             _log.debug("Injected exit_loop into agent={}", agent.name)
             break
+
+
+WORKFLOW_PREFIXES = ("seq_", "par_", "loop_")
 
 
 def _seq_name(children: list[BaseAgent]) -> str:

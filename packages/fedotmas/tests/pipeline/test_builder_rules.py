@@ -4,91 +4,95 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from fedotmas.config.settings import ModelConfig
 from fedotmas.pipeline.builder import (
     _inject_exit_loop,
-    _make_vars_optional,
-    _normalize_angle_brackets,
-    _normalize_model_name,
     _resolve_llm,
     build,
 )
-from fedotmas.pipeline.models import PipelineConfig
+from fedotmas.pipeline.models import AgentConfig, PipelineConfig
 
 
-# ---- Rules 1-3: text normalization (pure functions) ----
+# ---- Rules 1-3: text normalization (via AgentConfig model_validator) ----
 
 
 class TestNormalizeAngleBrackets:
-    """Rule 1: <var> → {var}."""
+    """Rule 1: <var> → {var} (via AgentConfig)."""
+
+    def _make(self, instruction: str) -> AgentConfig:
+        return AgentConfig(name="t", instruction=instruction, output_key="k")
 
     def test_single_var(self):
-        assert _normalize_angle_brackets("<var>") == "{var}"
+        assert self._make("<var>").instruction == "{var?}"
 
     def test_multiple_vars(self):
-        assert _normalize_angle_brackets("<a> and <b>") == "{a} and {b}"
+        assert self._make("<a> and <b>").instruction == "{a?} and {b?}"
 
     def test_no_vars(self):
-        assert _normalize_angle_brackets("plain text") == "plain text"
+        assert self._make("plain text").instruction == "plain text"
 
 
 class TestMakeVarsOptional:
-    """Rule 2: {var} → {var?}."""
+    """Rule 2: {var} → {var?} (via AgentConfig)."""
+
+    def _make(self, instruction: str) -> AgentConfig:
+        return AgentConfig(name="t", instruction=instruction, output_key="k")
 
     def test_single_var(self):
-        assert _make_vars_optional("{foo}") == "{foo?}"
+        assert self._make("{foo}").instruction == "{foo?}"
 
     def test_multiple_vars(self):
-        assert _make_vars_optional("{a} then {b}") == "{a?} then {b?}"
+        assert self._make("{a} then {b}").instruction == "{a?} then {b?}"
 
     def test_no_vars(self):
-        assert _make_vars_optional("plain text") == "plain text"
+        assert self._make("plain text").instruction == "plain text"
 
-    def test_already_optional_gets_doubled(self):
-        # Edge: if already optional, regex still matches the non-? part
-        # {var?} has no \w match for '?' so it stays as-is
-        result = _make_vars_optional("{var?}")
-        # The regex \w+ won't match "var?" so it passes through unchanged
+    def test_already_optional_stays(self):
+        result = self._make("{var?}").instruction
         assert result == "{var?}"
 
 
 class TestAngleThenOptionalCombo:
-    """Rule 3: <var> → {var} → {var?} chain."""
+    """Rule 3: <var> → {var} → {var?} chain (via AgentConfig)."""
 
     def test_chain(self):
-        raw = "Process <input> and <context>"
-        step1 = _normalize_angle_brackets(raw)
-        assert step1 == "Process {input} and {context}"
-        step2 = _make_vars_optional(step1)
-        assert step2 == "Process {input?} and {context?}"
+        cfg = AgentConfig(
+            name="t",
+            instruction="Process <input> and <context>",
+            output_key="k",
+        )
+        assert cfg.instruction == "Process {input?} and {context?}"
 
 
-# ---- Rules 4-5: _normalize_model_name ----
+# ---- Rules 4-5: model normalization (via AgentConfig) ----
 
 
 class TestNormalizeModelNameDefault:
-    """Rule 4: None/empty model → default."""
+    """Rule 4: None/empty model → stays None (resolved later by _resolve_llm)."""
 
     def test_none_model(self):
-        assert _normalize_model_name(None) == "openai/gpt-oss-120b"
+        cfg = AgentConfig(name="t", instruction="x", output_key="k", model=None)
+        assert cfg.model is None
 
-    def test_empty_string(self):
-        assert _normalize_model_name("") == "openai/gpt-oss-120b"
+    def test_resolve_none_gives_default(self):
+        result = _resolve_llm(None, None)
+        assert result == "openai/gpt-oss-120b"
 
 
 class TestNormalizeModelNamePrefix:
-    """Rule 5: bare model name gets openai/ prefix."""
+    """Rule 5: bare model name gets openai/ prefix (via AgentConfig)."""
 
     def test_bare_name(self):
-        assert _normalize_model_name("gpt-4o") == "openai/gpt-4o"
+        cfg = AgentConfig(name="t", instruction="x", output_key="k", model="gpt-4o")
+        assert cfg.model == "openai/gpt-4o"
 
     def test_already_prefixed(self):
-        assert _normalize_model_name("openai/gpt-4o") == "openai/gpt-4o"
+        cfg = AgentConfig(name="t", instruction="x", output_key="k", model="openai/gpt-4o")
+        assert cfg.model == "openai/gpt-4o"
 
     def test_other_provider(self):
-        assert _normalize_model_name("gemini/flash") == "gemini/flash"
+        cfg = AgentConfig(name="t", instruction="x", output_key="k", model="gemini/flash")
+        assert cfg.model == "gemini/flash"
 
 
 # ---- Rules 6-7: _resolve_llm ----

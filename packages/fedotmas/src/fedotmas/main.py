@@ -45,7 +45,7 @@ class MAS:
                 worker_models=[ModelConfig(model="openai/gpt-4o", api_key="sk-...")]
         temperature: Sampling temperature for LLM calls. ``None`` keeps
             the provider default.
-        mcp_servers: MCP servers to use. Defaults to ``[]`` (no MCP tools).
+        mcp_servers: MCP servers to use. Defaults to ``None`` (no MCP tools).
             - ``["server1", "server2"]`` - filter: use only these registered servers.
             - ``{name: MCPServerConfig, ...}`` - explicit server configurations.
             - ``"all"`` - enable every registered server.
