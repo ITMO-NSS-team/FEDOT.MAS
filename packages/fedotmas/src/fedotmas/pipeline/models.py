@@ -95,6 +95,7 @@ class StepConfig(BaseModel):
         if not isinstance(data, dict):
             return data
         if "type" not in data:
+            data = dict(data)  # avoid mutating the original
             if "agent_name" in data:
                 data["type"] = "agent"
             elif "children" in data:

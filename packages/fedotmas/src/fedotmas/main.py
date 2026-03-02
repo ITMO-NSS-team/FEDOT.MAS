@@ -6,7 +6,7 @@ from google.adk.memory import BaseMemoryService
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService
 
-from fedotmas.common.logging import get_logger
+from fedotmas.common.logging import get_logger, setup_logging
 from fedotmas.config.settings import ModelConfig
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
 from fedotmas.meta.agent import MetaAgentResult, generate_pipeline_config
@@ -95,6 +95,7 @@ class MAS:
         after_agent_callbacks: list[AgentCallback] | None = None,
         max_retries: int = 3,
     ) -> None:
+        setup_logging()
         self._two_stage = two_stage
         self._meta_model = meta_model
         self._worker_models = worker_models

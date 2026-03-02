@@ -44,7 +44,9 @@ def _build_node(
     extra_after: list[_SingleAgentCallback] | None = None,
 ) -> BaseAgent:
     if node.type == "agent":
-        agent = _build_llm_agent(agents[node.agent_name], mcp_registry, worker_models)  # type: ignore[arg-type]
+        if node.agent_name is None:
+            raise ValueError(f"Agent node missing 'agent_name': {node}")
+        agent = _build_llm_agent(agents[node.agent_name], mcp_registry, worker_models)
         _attach_callbacks(agent, extra_before, extra_after)
         return agent
 
@@ -157,13 +159,22 @@ def _inject_exit_loop(children: list[BaseAgent]) -> None:
 WORKFLOW_PREFIXES = ("seq_", "par_", "loop_")
 
 
-def _seq_name(children: list[BaseAgent]) -> str:
-    return "seq_" + "_".join(c.name for c in children)
+_node_counter = 0
 
 
-def _par_name(children: list[BaseAgent]) -> str:
-    return "par_" + "_".join(c.name for c in children)
+def _next_id() -> int:
+    global _node_counter  # noqa: PLW0603
+    _node_counter += 1
+    return _node_counter
 
 
-def _loop_name(children: list[BaseAgent]) -> str:
-    return "loop_" + "_".join(c.name for c in children)
+def _seq_name(_children: list[BaseAgent]) -> str:
+    return f"seq_{_next_id()}"
+
+
+def _par_name(_children: list[BaseAgent]) -> str:
+    return f"par_{_next_id()}"
+
+
+def _loop_name(_children: list[BaseAgent]) -> str:
+    return f"loop_{_next_id()}"

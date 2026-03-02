@@ -92,6 +92,8 @@ async def run_meta_agent_call(
     Retries up to *max_retries* times on ``RuntimeError`` or
     ``ValidationError`` (e.g. invalid JSON from LLM) with exponential backoff.
     """
+    if max_retries < 0:
+        raise ValueError(f"max_retries must be >= 0, got {max_retries}")
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
@@ -126,7 +128,8 @@ async def run_meta_agent_call(
                     max_retries + 1,
                     e,
                 )
-    raise last_error  # type: ignore[misc]
+    assert last_error is not None  # guaranteed by loop executing at least once
+    raise last_error
 
 
 async def _execute_meta_call(
@@ -174,12 +177,6 @@ async def _execute_meta_call(
         state={},
     )
 
-    runner = Runner(
-        app_name=app_name,
-        agent=agent,
-        session_service=session_service,
-    )
-
     message = types.Content(
         role="user",
         parts=[types.Part.from_text(text=user_message)],
@@ -189,38 +186,43 @@ async def _execute_meta_call(
     total_completion = 0
     start = time.monotonic()
 
-    async for event in runner.run_async(
-        user_id="system",
-        session_id=session.id,
-        new_message=message,
-    ):
-        if event.partial:
-            continue
+    async with Runner(
+        app_name=app_name,
+        agent=agent,
+        session_service=session_service,
+    ) as runner:
+        async for event in runner.run_async(
+            user_id="system",
+            session_id=session.id,
+            new_message=message,
+        ):
+            if event.partial:
+                continue
 
-        if event.usage_metadata:
-            um = event.usage_metadata
-            prompt = um.prompt_token_count or 0
-            completion = um.candidates_token_count or 0
-            total_prompt += prompt
-            total_completion += completion
-            if prompt or completion:
-                _log.info("Tokens | prompt={} completion={}", prompt, completion)
+            if event.usage_metadata:
+                um = event.usage_metadata
+                prompt = um.prompt_token_count or 0
+                completion = um.candidates_token_count or 0
+                total_prompt += prompt
+                total_completion += completion
+                if prompt or completion:
+                    _log.info("Tokens | prompt={} completion={}", prompt, completion)
 
-        if event.content and event.content.parts:
-            texts = [p.text for p in event.content.parts if p.text]
-            if texts:
-                _log.debug("Response preview | text={}", texts[0][:200])
+            if event.content and event.content.parts:
+                texts = [p.text for p in event.content.parts if p.text]
+                if texts:
+                    _log.debug("Response preview | text={}", texts[0][:200])
 
-        if event.error_code:
-            _log.error(
-                "LLM error | agent={} code={} msg={}",
-                agent_name,
-                event.error_code,
-                event.error_message,
-            )
-            raise RuntimeError(
-                f"{agent_name} LLM error {event.error_code}: {event.error_message}"
-            )
+            if event.error_code:
+                _log.error(
+                    "LLM error | agent={} code={} msg={}",
+                    agent_name,
+                    event.error_code,
+                    event.error_message,
+                )
+                raise RuntimeError(
+                    f"{agent_name} LLM error {event.error_code}: {event.error_message}"
+                )
 
     elapsed = time.monotonic() - start
     _log.info(

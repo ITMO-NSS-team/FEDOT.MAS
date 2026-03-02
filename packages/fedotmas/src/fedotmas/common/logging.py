@@ -57,13 +57,6 @@ def setup_logging(level: str | None = None) -> None:
     )
 
 
-_initialized = False
-
-
 def get_logger(name: str) -> Logger:
     """Return a logger bound to *name*."""
-    global _initialized  # noqa: PLW0603
-    if not _initialized:
-        setup_logging()
-        _initialized = True
     return logger.bind(name=name)

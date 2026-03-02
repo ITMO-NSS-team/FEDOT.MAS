@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import functools
+
 from google.adk.tools.mcp_tool import (
     McpToolset,
     SseConnectionParams,
@@ -13,16 +15,18 @@ from fedotmas.mcp._discovery import discover_servers
 
 _log = get_logger("fedotmas.mcp.registry")
 
-MCP_SERVERS: dict[str, MCPServerConfig] = {
-    **discover_servers(),
-}
+
+@functools.cache
+def get_mcp_servers() -> dict[str, MCPServerConfig]:
+    """Discover and return the MCP server registry."""
+    return discover_servers()
 
 
 def create_toolset(
     name: str, registry: dict[str, MCPServerConfig] | None = None
 ) -> McpToolset:
     """Create an ADK ``McpToolset`` for the named server."""
-    reg = registry or MCP_SERVERS
+    reg = registry or get_mcp_servers()
     if name not in reg:
         _log.error("Unknown MCP server: '{}' | available={}", name, sorted(reg))
         raise ValueError(f"Unknown MCP server: '{name}'. Available: {sorted(reg)}")
@@ -46,6 +50,8 @@ def create_toolset(
                 headers=cfg.headers or None,
                 timeout=cfg.timeout,
             )
+        case _:
+            raise TypeError(f"Unsupported MCP server type: {type(cfg)}")
 
     return McpToolset(connection_params=params)
 
@@ -60,7 +66,7 @@ def get_server_descriptions(
     If *tags* is given, only servers whose tags overlap with the
     requested set are included.
     """
-    reg = registry or MCP_SERVERS
+    reg = registry or get_mcp_servers()
     if tags:
         reg = {k: v for k, v in reg.items() if tags & set(v.tags)}
     return {name: cfg.description or f"MCP server: {name}" for name, cfg in reg.items()}

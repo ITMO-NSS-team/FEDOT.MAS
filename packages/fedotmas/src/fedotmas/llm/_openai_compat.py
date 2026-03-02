@@ -149,7 +149,8 @@ def _adk_tools_to_openai(
         if not tool.function_declarations:
             continue
         for fd in tool.function_declarations:
-            assert fd.name
+            if not fd.name:
+                raise ValueError("Function declaration missing 'name'")
             parameters: dict[str, Any] = {"type": "object", "properties": {}}
             if fd.parameters and fd.parameters.properties:
                 properties = {
@@ -441,7 +442,10 @@ class OpenAICompatibleLlm(BaseLlm):
         text = ""
         function_calls: dict[int, dict[str, Any]] = {}
         usage_metadata = None
-        # fallback_index tracks tool call index when tc_delta.index is None
+        # fallback_index tracks tool call index when tc_delta.index is None.
+        # NOTE: This is a heuristic — json.loads on partial args may produce
+        # false positives if intermediate JSON happens to be valid. This path
+        # is only used when the provider omits tc_delta.index.
         fallback_index = 0
         model_version: str | None = None
 

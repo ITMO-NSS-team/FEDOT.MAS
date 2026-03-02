@@ -180,7 +180,11 @@ class TestSessionLost:
             patch("fedotmas.meta._adk_runner.make_llm"),
             patch("fedotmas.meta._adk_runner.Runner") as mock_runner_cls,
         ):
-            mock_runner_cls.return_value.run_async = _fake_run_async
+            mock_runner = MagicMock()
+            mock_runner.run_async = _fake_run_async
+            mock_runner.__aenter__ = AsyncMock(return_value=mock_runner)
+            mock_runner.__aexit__ = AsyncMock(return_value=False)
+            mock_runner_cls.return_value = mock_runner
 
             with pytest.raises(RuntimeError, match="session lost"):
                 await run_meta_agent_call(
@@ -217,7 +221,11 @@ class TestOutputKeyMissing:
             patch("fedotmas.meta._adk_runner.make_llm"),
             patch("fedotmas.meta._adk_runner.Runner") as mock_runner_cls,
         ):
-            mock_runner_cls.return_value.run_async = _fake_run_async
+            mock_runner = MagicMock()
+            mock_runner.run_async = _fake_run_async
+            mock_runner.__aenter__ = AsyncMock(return_value=mock_runner)
+            mock_runner.__aexit__ = AsyncMock(return_value=False)
+            mock_runner_cls.return_value = mock_runner
 
             with pytest.raises(RuntimeError, match="did not produce"):
                 await run_meta_agent_call(
