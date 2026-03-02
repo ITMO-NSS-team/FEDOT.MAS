@@ -23,10 +23,14 @@ class ModelConfig:
 
 
 def resolve_model_config(value: str | ModelConfig) -> ModelConfig:
-    """Convert a plain string to ModelConfig if needed."""
+    """Convert a plain string to ModelConfig, picking up env defaults."""
     if isinstance(value, ModelConfig):
         return value
-    return ModelConfig(model=value)
+    return ModelConfig(
+        model=value,
+        api_base=os.getenv("OPENAI_BASE_URL"),
+        api_key=os.getenv("OPENAI_API_KEY"),
+    )
 
 
 def get_meta_model() -> str:

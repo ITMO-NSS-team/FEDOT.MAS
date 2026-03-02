@@ -5,7 +5,7 @@
         {
           "name": "default-key",
           "value": "env.OPENAI_API_KEY",
-          "models": ["*"],
+          "models": [],
           "weight": 1.0
         }
       ]
@@ -15,5 +15,10 @@
     "enabled": true,
     "type": "sqlite",
     "config": { "path": "./data/config.db" }
+  },
+  "logs_store": {
+    "enabled": true,
+    "type": "sqlite",
+    "config": { "path": "./data/logs.db" }
   }
 }

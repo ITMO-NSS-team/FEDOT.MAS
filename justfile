@@ -22,7 +22,7 @@ bifrost:
     docker run -d --name bifrost \
       -p {{ bifrost_port }}:8080 \
       -v bifrost_data:/app/data \
-      -v $(pwd)/bifrost/config.json:/app/config.json \
+      -v $(pwd)/bifrost/config.json:/app/data/config.json \
       --env-file .env \
       maximhq/bifrost
     @echo "Bifrost running at {{ bifrost_url }}"
