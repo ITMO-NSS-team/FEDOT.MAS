@@ -14,10 +14,18 @@ venv-dev:
     uv run prek install
     @echo "Dev environment ready"
 
+upd-hooks:
+    prek uninstall
+    prek install
+
 bifrost:
-    docker run -d --name bifrost -p {{ bifrost_port }}:8080 -v bifrost_data:/app/data maximhq/bifrost
+    docker run -d --name bifrost \
+      -p {{ bifrost_port }}:8080 \
+      -v bifrost_data:/app/data \
+      -v $(pwd)/bifrost/config.json:/app/config.json \
+      --env-file .env \
+      maximhq/bifrost
     @echo "Bifrost running at {{ bifrost_url }}"
-    just bifrost-setup
 
 bifrost-stop:
     docker stop bifrost && docker rm bifrost

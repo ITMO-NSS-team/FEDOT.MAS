@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import ModelConfig
-from fedotmas.llm import make_llm
+from fedotmas.common.llm import make_llm
 from fedotmas.meta.schema_utils import (
     inject_model_enum,
     needs_strict_schema,

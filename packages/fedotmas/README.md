@@ -2,21 +2,32 @@
 
 Core library for FEDOT.MAS.
 
-## Bifrost
+## LLM Configuration
 
-Run it locally via Docker:
+FEDOT.MAS uses [LiteLLM](https://docs.litellm.ai/) under the hood via Google ADK. Model routing is determined by the model prefix (`openai/...`, `openrouter/...`, etc.) and standard environment variables:
+
+```env
+OPENAI_API_KEY=your-key-here
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+```
+
+See `.env.example` for all available options.
+
+## Bifrost (optional local proxy)
+
+Run Bifrost locally via Docker to get load balancing, failover, and centralized key management:
 
 ```
 just bifrost
 ```
 
-And use it as .env variable:
+Then point your base URL at the proxy:
 
-```
-FEDOTMAS_DEFAULT_PROXY=bifrost
+```env
+OPENAI_BASE_URL=http://localhost:9090/litellm
 ```
 
-Bifrost will be available at `http://localhost:9090` by default (to switch default url use var: `FEDOTMAS_BIFROST_BASE_URL=`). To stop:
+To stop:
 
 ```
 just bifrost-stop

@@ -8,8 +8,12 @@ from google.adk.models.base_llm import BaseLlm
 from google.adk.tools.exit_loop_tool import exit_loop
 
 from fedotmas.common.logging import get_logger
-from fedotmas.config.settings import DEFAULT_META_MODEL, ModelConfig, get_max_loop_iterations
-from fedotmas.llm import make_llm
+from fedotmas.config.settings import (
+    DEFAULT_META_MODEL,
+    ModelConfig,
+    get_max_loop_iterations,
+)
+from fedotmas.common.llm import make_llm
 from fedotmas.mcp import MCPServerConfig, create_toolset
 from fedotmas.pipeline._ppline_utils import make_callbacks
 from fedotmas.pipeline.models import AgentConfig, PipelineConfig, StepConfig
@@ -30,8 +34,12 @@ def build(
     """Convert a ``PipelineConfig`` into an executable ADK agent tree."""
     agents_by_name: dict[str, AgentConfig] = {a.name: a for a in config.agents}
     return _build_node(
-        config.pipeline, agents_by_name, mcp_registry, worker_models,
-        before_agent_callbacks, after_agent_callbacks,
+        config.pipeline,
+        agents_by_name,
+        mcp_registry,
+        worker_models,
+        before_agent_callbacks,
+        after_agent_callbacks,
     )
 
 
@@ -96,7 +104,9 @@ def _resolve_llm(
     normalized or ``None``.
     """
     if not model_name:
-        _log.warning("No model specified for agent, using default: {}", DEFAULT_META_MODEL)
+        _log.warning(
+            "No model specified for agent, using default: {}", DEFAULT_META_MODEL
+        )
         return DEFAULT_META_MODEL
     if worker_models:
         cfg = worker_models.get(model_name)

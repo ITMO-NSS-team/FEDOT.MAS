@@ -24,13 +24,13 @@ Managed with [uv](https://github.com/astral-sh/uv).
 
 Create a virtual environment and install both packages:
 
-```
+```sh
 just venv
 ```
 
 Set up a full dev environment (linters, hooks):
 
-```
+```sh
 just venv-dev
 ```
 
@@ -70,7 +70,7 @@ uv run ty check
 
 ### Tests
 
-```
+```sh
 just test-unit
 ```
 
