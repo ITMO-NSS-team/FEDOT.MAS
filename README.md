@@ -18,7 +18,9 @@ FEDOT.MAS automatically generates and executes multi-agent pipelines from a plai
 
 ## Quick start
 
-### With [just](https://github.com/casey/just)
+Managed with [uv](https://github.com/astral-sh/uv).
+
+### With [just](https://github.com/casey/just):
 
 Create a virtual environment and install both packages:
 
@@ -32,7 +34,7 @@ Set up a full dev environment (linters, hooks):
 just venv-dev
 ```
 
-### With [uv](https://github.com/astral-sh/uv)
+### Manual setup:
 
 Create a virtual environment and install workspace packages:
 
