@@ -39,6 +39,9 @@ class _ProxyClient:
     def __init__(self, base_url: str, api_key: str):
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
+    def __repr__(self) -> str:
+        return f"_ProxyClient(base_url={self._client.base_url!r})"
+
     async def acompletion(self, model, messages, tools, **kwargs):
         kw = {"model": model, "messages": messages, **kwargs}
         if tools:
