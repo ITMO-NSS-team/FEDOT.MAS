@@ -87,11 +87,15 @@ class TestNormalizeModelNamePrefix:
         assert cfg.model == "openai/gpt-4o"
 
     def test_already_prefixed(self):
-        cfg = AgentConfig(name="t", instruction="x", output_key="k", model="openai/gpt-4o")
+        cfg = AgentConfig(
+            name="t", instruction="x", output_key="k", model="openai/gpt-4o"
+        )
         assert cfg.model == "openai/gpt-4o"
 
     def test_other_provider(self):
-        cfg = AgentConfig(name="t", instruction="x", output_key="k", model="gemini/flash")
+        cfg = AgentConfig(
+            name="t", instruction="x", output_key="k", model="gemini/flash"
+        )
         assert cfg.model == "gemini/flash"
 
 
@@ -103,7 +107,7 @@ class TestResolveLlmCustomEndpoint:
 
     @patch("fedotmas.pipeline.builder.make_llm")
     def test_custom_endpoint(self, mock_factory):
-        cfg = ModelConfig(model="my-model", api_base="http://localhost:8080")
+        cfg = ModelConfig(model="my-model", api_base="http://localhost:9090")
         _resolve_llm("my-model", {"my-model": cfg})
         mock_factory.assert_called_once_with(cfg)
 
@@ -131,6 +135,7 @@ class TestInjectExitLoop:
 
     def _make_mock_llm_agent(self, name: str, tools: list | None = None) -> MagicMock:
         from google.adk.agents import LlmAgent
+
         agent = MagicMock(spec=LlmAgent)
         agent.name = name
         agent.tools = tools if tools is not None else []
@@ -138,6 +143,7 @@ class TestInjectExitLoop:
 
     def _make_mock_seq_agent(self, name: str) -> MagicMock:
         from google.adk.agents import SequentialAgent
+
         agent = MagicMock(spec=SequentialAgent)
         agent.name = name
         agent.tools = []
@@ -191,11 +197,15 @@ class TestInjectExitLoop:
 class TestBuildSequentialTree:
     """Rule 11: PipelineConfig → SequentialAgent with children."""
 
-    @patch("fedotmas.pipeline.builder.make_callbacks", return_value=(MagicMock(), MagicMock()))
+    @patch(
+        "fedotmas.pipeline.builder.make_callbacks",
+        return_value=(MagicMock(), MagicMock()),
+    )
     @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
     def test_sequential(self, _mock_toolset, _mock_cb, simple_pipeline_config):
         root = build(simple_pipeline_config)
         from google.adk.agents import SequentialAgent
+
         assert isinstance(root, SequentialAgent)
         assert len(root.sub_agents) == 2
         assert root.sub_agents[0].name == "alpha"
@@ -205,24 +215,30 @@ class TestBuildSequentialTree:
 class TestBuildParallelTree:
     """Rule 12: parallel type → ParallelAgent."""
 
-    @patch("fedotmas.pipeline.builder.make_callbacks", return_value=(MagicMock(), MagicMock()))
+    @patch(
+        "fedotmas.pipeline.builder.make_callbacks",
+        return_value=(MagicMock(), MagicMock()),
+    )
     @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
     def test_parallel(self, _mock_toolset, _mock_cb):
-        config = PipelineConfig.model_validate({
-            "agents": [
-                {"name": "a", "instruction": "do a", "output_key": "oa"},
-                {"name": "b", "instruction": "do b", "output_key": "ob"},
-            ],
-            "pipeline": {
-                "type": "parallel",
-                "children": [
-                    {"type": "agent", "agent_name": "a"},
-                    {"type": "agent", "agent_name": "b"},
+        config = PipelineConfig.model_validate(
+            {
+                "agents": [
+                    {"name": "a", "instruction": "do a", "output_key": "oa"},
+                    {"name": "b", "instruction": "do b", "output_key": "ob"},
                 ],
-            },
-        })
+                "pipeline": {
+                    "type": "parallel",
+                    "children": [
+                        {"type": "agent", "agent_name": "a"},
+                        {"type": "agent", "agent_name": "b"},
+                    ],
+                },
+            }
+        )
         root = build(config)
         from google.adk.agents import ParallelAgent
+
         assert isinstance(root, ParallelAgent)
         assert len(root.sub_agents) == 2
 
@@ -230,31 +246,37 @@ class TestBuildParallelTree:
 class TestBuildNestedSeqPar:
     """Rule 13: nested sequential → parallel."""
 
-    @patch("fedotmas.pipeline.builder.make_callbacks", return_value=(MagicMock(), MagicMock()))
+    @patch(
+        "fedotmas.pipeline.builder.make_callbacks",
+        return_value=(MagicMock(), MagicMock()),
+    )
     @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
     def test_nested(self, _mock_toolset, _mock_cb):
-        config = PipelineConfig.model_validate({
-            "agents": [
-                {"name": "a", "instruction": "do a", "output_key": "oa"},
-                {"name": "b", "instruction": "do b", "output_key": "ob"},
-                {"name": "c", "instruction": "do c", "output_key": "oc"},
-            ],
-            "pipeline": {
-                "type": "sequential",
-                "children": [
-                    {"type": "agent", "agent_name": "a"},
-                    {
-                        "type": "parallel",
-                        "children": [
-                            {"type": "agent", "agent_name": "b"},
-                            {"type": "agent", "agent_name": "c"},
-                        ],
-                    },
+        config = PipelineConfig.model_validate(
+            {
+                "agents": [
+                    {"name": "a", "instruction": "do a", "output_key": "oa"},
+                    {"name": "b", "instruction": "do b", "output_key": "ob"},
+                    {"name": "c", "instruction": "do c", "output_key": "oc"},
                 ],
-            },
-        })
+                "pipeline": {
+                    "type": "sequential",
+                    "children": [
+                        {"type": "agent", "agent_name": "a"},
+                        {
+                            "type": "parallel",
+                            "children": [
+                                {"type": "agent", "agent_name": "b"},
+                                {"type": "agent", "agent_name": "c"},
+                            ],
+                        },
+                    ],
+                },
+            }
+        )
         root = build(config)
         from google.adk.agents import ParallelAgent, SequentialAgent
+
         assert isinstance(root, SequentialAgent)
         assert isinstance(root.sub_agents[1], ParallelAgent)
         assert len(root.sub_agents[1].sub_agents) == 2
@@ -263,23 +285,33 @@ class TestBuildNestedSeqPar:
 class TestBuildLoopMaxIterations:
     """Rule 14: loop with explicit max_iterations."""
 
-    @patch("fedotmas.pipeline.builder.make_callbacks", return_value=(MagicMock(), MagicMock()))
+    @patch(
+        "fedotmas.pipeline.builder.make_callbacks",
+        return_value=(MagicMock(), MagicMock()),
+    )
     @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
     def test_loop_explicit(self, _mock_toolset, _mock_cb):
-        config = PipelineConfig.model_validate({
-            "agents": [
-                {"name": "worker", "instruction": "iterate", "output_key": "result"},
-            ],
-            "pipeline": {
-                "type": "loop",
-                "max_iterations": 5,
-                "children": [
-                    {"type": "agent", "agent_name": "worker"},
+        config = PipelineConfig.model_validate(
+            {
+                "agents": [
+                    {
+                        "name": "worker",
+                        "instruction": "iterate",
+                        "output_key": "result",
+                    },
                 ],
-            },
-        })
+                "pipeline": {
+                    "type": "loop",
+                    "max_iterations": 5,
+                    "children": [
+                        {"type": "agent", "agent_name": "worker"},
+                    ],
+                },
+            }
+        )
         root = build(config)
         from google.adk.agents import LoopAgent
+
         assert isinstance(root, LoopAgent)
         assert root.max_iterations == 5
 
@@ -287,22 +319,32 @@ class TestBuildLoopMaxIterations:
 class TestBuildLoopDefaultMaxIterations:
     """Rule 15: loop without max_iterations → settings default."""
 
-    @patch("fedotmas.pipeline.builder.make_callbacks", return_value=(MagicMock(), MagicMock()))
+    @patch(
+        "fedotmas.pipeline.builder.make_callbacks",
+        return_value=(MagicMock(), MagicMock()),
+    )
     @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
     @patch("fedotmas.pipeline.builder.get_max_loop_iterations", return_value=10)
     def test_loop_default(self, _mock_max, _mock_toolset, _mock_cb):
-        config = PipelineConfig.model_validate({
-            "agents": [
-                {"name": "worker", "instruction": "iterate", "output_key": "result"},
-            ],
-            "pipeline": {
-                "type": "loop",
-                "children": [
-                    {"type": "agent", "agent_name": "worker"},
+        config = PipelineConfig.model_validate(
+            {
+                "agents": [
+                    {
+                        "name": "worker",
+                        "instruction": "iterate",
+                        "output_key": "result",
+                    },
                 ],
-            },
-        })
+                "pipeline": {
+                    "type": "loop",
+                    "children": [
+                        {"type": "agent", "agent_name": "worker"},
+                    ],
+                },
+            }
+        )
         root = build(config)
         from google.adk.agents import LoopAgent
+
         assert isinstance(root, LoopAgent)
         assert root.max_iterations == 10

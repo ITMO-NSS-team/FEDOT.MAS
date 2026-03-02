@@ -4,7 +4,7 @@ Core library for FEDOT.MAS.
 
 ## Bifrost
 
-[Bifrost](https://github.com/maximhq/bifrost) is a unified LLM gateway. Run it locally via Docker:
+Run it locally via Docker:
 
 ```
 just bifrost
@@ -16,7 +16,7 @@ And use it as .env variable:
 FEDOTMAS_DEFAULT_PROXY=bifrost
 ```
 
-Bifrost will be available at `http://localhost:8080` by default (to switch default url use var: `FEDOTMAS_BIFROST_BASE_URL=`). To stop:
+Bifrost will be available at `http://localhost:9090` by default (to switch default url use var: `FEDOTMAS_BIFROST_BASE_URL=`). To stop:
 
 ```
 just bifrost-stop

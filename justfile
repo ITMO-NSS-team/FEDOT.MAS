@@ -1,6 +1,13 @@
+bifrost_port := "9090"
+bifrost_url := "http://localhost:" + bifrost_port
+
+# User section:
+
 venv:
     uv sync
     cp -n .env.example .env 2>/dev/null || true
+
+# Dev section:
 
 venv-dev:
     uv sync --group dev
@@ -8,8 +15,9 @@ venv-dev:
     @echo "Dev environment ready"
 
 bifrost:
-    docker run -d --name bifrost -p 8080:8080 maximhq/bifrost
-    @echo "Bifrost running at http://localhost:8080"
+    docker run -d --name bifrost -p {{ bifrost_port }}:8080 -v bifrost_data:/app/data maximhq/bifrost
+    @echo "Bifrost running at {{ bifrost_url }}"
+    just bifrost-setup
 
 bifrost-stop:
     docker stop bifrost && docker rm bifrost

@@ -17,14 +17,14 @@ class BifrostLlm(OpenAICompatibleLlm):
 
     api_base: str = Field(
         default_factory=lambda: os.getenv(
-            "FEDOTMAS_BIFROST_BASE_URL", "http://localhost:8080/api/v1"
+            "FEDOTMAS_BIFROST_BASE_URL", "http://localhost:9090/v1"
         )
     )
 
     def _build_client(self) -> AsyncOpenAI:
         key = self.api_key or "bifrost"
         if not self.api_key:
-            _log.warning("No Bifrost API key provided, using placeholder 'bifrost'")
+            _log.debug("No Bifrost API key provided, using placeholder 'bifrost'")
         return AsyncOpenAI(
             base_url=self.api_base,
             api_key=key,

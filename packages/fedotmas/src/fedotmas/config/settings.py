@@ -34,10 +34,10 @@ def get_default_proxy() -> str | None:
 class ModelConfig:
     """Configuration for a single LLM model endpoint."""
 
-    model: str                        # provider/model-name, e.g. "openai/gpt-4o"
-    api_base: str | None = None       # custom endpoint URL
-    api_key: str | None = None        # per-model API key
-    proxy: str | None = None          # "openrouter" | "bifrost" | None (=litellm)
+    model: str  # provider/model-name, e.g. "openai/gpt-4o"
+    api_base: str | None = None  # custom endpoint URL
+    api_key: str | None = None  # per-model API key
+    proxy: str | None = None  # "openrouter" | "bifrost" | None (=litellm)
 
 
 def resolve_model_config(value: str | ModelConfig) -> ModelConfig:
@@ -48,13 +48,20 @@ def resolve_model_config(value: str | ModelConfig) -> ModelConfig:
 
 
 def get_meta_model() -> str:
-    return os.getenv("FEDOTMAS_META_MODEL") or DEFAULT_META_MODEL
+    return (
+        os.getenv("FEDOTMAS_META_AGENT_MODEL")
+        or os.getenv("FEDOTMAS_DEFAULT_MODEL")
+        or DEFAULT_META_MODEL
+    )
 
 
 def get_worker_models() -> list[str]:
     env = os.getenv("FEDOTMAS_WORKER_MODELS")
     if env:
         return [m.strip() for m in env.split(",") if m.strip()]
+    default = os.getenv("FEDOTMAS_DEFAULT_MODEL")
+    if default:
+        return [default]
     return list(DEFAULT_WORKER_MODELS)
 
 
