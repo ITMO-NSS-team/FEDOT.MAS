@@ -11,6 +11,23 @@ DEFAULT_META_MODEL = "openai/gpt-oss-120b"
 DEFAULT_WORKER_MODELS: list[str] = ["openai/gpt-oss-120b"]
 DEFAULT_META_TEMPERATURE = 0.3
 DEFAULT_MAX_LOOP_ITERATIONS = 3
+VALID_PROXIES = ("openrouter", "bifrost", "litellm")
+
+
+def get_default_proxy() -> str | None:
+    """Read FEDOTMAS_DEFAULT_PROXY env var. Returns None for litellm."""
+    env = os.getenv("FEDOTMAS_DEFAULT_PROXY")
+    if not env:
+        return None
+    env = env.strip().lower()
+    if env == "litellm":
+        return None  # litellm represented as None internally
+    if env not in VALID_PROXIES:
+        raise ValueError(
+            f"Invalid FEDOTMAS_DEFAULT_PROXY='{env}', "
+            f"expected one of: {', '.join(VALID_PROXIES)}"
+        )
+    return env
 
 
 @dataclass(frozen=True)
@@ -20,14 +37,14 @@ class ModelConfig:
     model: str                        # provider/model-name, e.g. "openai/gpt-4o"
     api_base: str | None = None       # custom endpoint URL
     api_key: str | None = None        # per-model API key
-    provider: str | None = None       # "openrouter" | "bifrost" | None (=litellm)
+    proxy: str | None = None          # "openrouter" | "bifrost" | None (=litellm)
 
 
 def resolve_model_config(value: str | ModelConfig) -> ModelConfig:
     """Convert a plain string to ModelConfig if needed."""
     if isinstance(value, ModelConfig):
         return value
-    return ModelConfig(model=value)
+    return ModelConfig(model=value, proxy=get_default_proxy())
 
 
 def get_meta_model() -> str:

@@ -1,4 +1,4 @@
-"""Factory dispatch tests — make_llm routes to the correct provider."""
+"""Factory dispatch tests — make_llm routes to the correct proxy."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from fedotmas.llm.bifrost import BifrostLlm
 from fedotmas.llm.openrouter import OpenRouterLlm
 
 
-class TestDefaultProvider:
-    """provider=None → LiteLlm."""
+class TestDefaultProxy:
+    """proxy=None → LiteLlm."""
 
     @patch("fedotmas.llm.LiteLlm")
     def test_default_litellm(self, mock_lite):
@@ -30,13 +30,13 @@ class TestDefaultProvider:
         )
 
 
-class TestOpenRouterProvider:
-    """provider="openrouter" → OpenRouterLlm."""
+class TestOpenRouterProxy:
+    """proxy="openrouter" → OpenRouterLlm."""
 
     def test_creates_openrouter(self):
         cfg = ModelConfig(
             model="openrouter/meta-llama/llama-3-70b",
-            provider="openrouter",
+            proxy="openrouter",
             api_key="or-key",
         )
         llm = make_llm(cfg)
@@ -52,13 +52,13 @@ class TestOpenRouterProvider:
         assert llm._resolve_model("foo/bar") == "foo/bar"
 
 
-class TestBifrostProvider:
-    """provider="bifrost" → BifrostLlm."""
+class TestBifrostProxy:
+    """proxy="bifrost" → BifrostLlm."""
 
     def test_creates_bifrost(self):
         cfg = ModelConfig(
             model="bifrost/my-model",
-            provider="bifrost",
+            proxy="bifrost",
         )
         llm = make_llm(cfg)
         assert isinstance(llm, BifrostLlm)
@@ -66,7 +66,7 @@ class TestBifrostProvider:
     def test_custom_api_base(self):
         cfg = ModelConfig(
             model="bifrost/m",
-            provider="bifrost",
+            proxy="bifrost",
             api_base="http://custom:9090/v1",
         )
         llm = make_llm(cfg)

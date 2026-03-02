@@ -23,14 +23,14 @@ __all__ = [
 
 
 def make_llm(cfg: ModelConfig) -> BaseLlm:
-    """Create the appropriate ``BaseLlm`` based on ``cfg.provider``."""
-    if cfg.provider == "openrouter":
+    """Create the appropriate ``BaseLlm`` based on ``cfg.proxy``."""
+    if cfg.proxy == "openrouter":
         return OpenRouterLlm(
             model=cfg.model,
             api_key=cfg.api_key,
             api_base=cfg.api_base or "https://openrouter.ai/api/v1",
         )
-    if cfg.provider == "bifrost":
+    if cfg.proxy == "bifrost":
         kwargs: dict[str, str] = {"model": cfg.model}
         if cfg.api_key:
             kwargs["api_key"] = cfg.api_key
@@ -48,6 +48,6 @@ def make_llm(cfg: ModelConfig) -> BaseLlm:
         return LiteLlm(model=cfg.model, **llm_kwargs)
     except ImportError:
         raise ImportError(
-            "litellm is required for the default LLM provider. "
+            "litellm is required for the default LLM proxy. "
             "Install it with: pip install fedotmas[litellm]"
         ) from None
