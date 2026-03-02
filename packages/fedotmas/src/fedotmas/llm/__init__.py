@@ -31,15 +31,23 @@ def make_llm(cfg: ModelConfig) -> BaseLlm:
             api_base=cfg.api_base or "https://openrouter.ai/api/v1",
         )
     if cfg.provider == "bifrost":
-        kwargs: dict[str, str | None] = {"model": cfg.model, "api_key": cfg.api_key}
+        kwargs: dict[str, str] = {"model": cfg.model}
+        if cfg.api_key:
+            kwargs["api_key"] = cfg.api_key
         if cfg.api_base:
             kwargs["api_base"] = cfg.api_base
         return BifrostLlm(**kwargs)
 
     # Default: LiteLlm
-    llm_kwargs: dict[str, str | None] = {}
+    llm_kwargs: dict[str, str] = {}
     if cfg.api_base:
         llm_kwargs["api_base"] = cfg.api_base
     if cfg.api_key:
         llm_kwargs["api_key"] = cfg.api_key
-    return LiteLlm(model=cfg.model, **llm_kwargs)
+    try:
+        return LiteLlm(model=cfg.model, **llm_kwargs)
+    except ImportError:
+        raise ImportError(
+            "litellm is required for the default LLM provider. "
+            "Install it with: pip install fedotmas[litellm]"
+        ) from None

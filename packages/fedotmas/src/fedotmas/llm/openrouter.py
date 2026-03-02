@@ -47,8 +47,8 @@ class OpenRouterLlm(OpenAICompatibleLlm):
         return {"extra_body": {"provider": provider}} if provider else {}
 
     @override
-    def _resolve_model(self, raw: str) -> str:
-        return raw.removeprefix("openrouter/")
+    def _resolve_model(self, raw_model: str) -> str:
+        return raw_model.removeprefix("openrouter/")
 
     @classmethod
     @override

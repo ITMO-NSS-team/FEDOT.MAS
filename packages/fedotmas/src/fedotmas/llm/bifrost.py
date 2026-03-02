@@ -31,8 +31,8 @@ class BifrostLlm(OpenAICompatibleLlm):
         )
 
     @override
-    def _resolve_model(self, raw: str) -> str:
-        return raw.removeprefix("bifrost/")
+    def _resolve_model(self, raw_model: str) -> str:
+        return raw_model.removeprefix("bifrost/")
 
     @classmethod
     @override
