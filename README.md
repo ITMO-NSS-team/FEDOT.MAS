@@ -16,29 +16,64 @@ FEDOT.MAS automatically generates and executes multi-agent pipelines from a plai
 | **fedotmas-synapse** | [`packages/fedotmas-synapse`](packages/fedotmas-synapse) | Synapse Platform integration plugin |
 | **mcp-servers** | [`mcp-servers/`](mcp-servers/) | Internal MCP-servers registry |
 
+## Quick start
+
+### With just (recommended)
+
+Create a virtual environment and install both packages:
+
+```
+just venv
+```
+
+Set up a full dev environment (linters, hooks):
+
+```
+just venv-dev
+```
+
+### Without just
+
+Create a virtual environment and install workspace packages:
+
+```sh
+uv sync
+cp -n .env.example .env 2>/dev/null || true
+```
+
+For development (linters, type checker, pre-commit hooks):
+
+```sh
+uv sync --group dev
+uv run prek install
+```
 
 ## Development
 
-Install dev dependencies (ruff, ty, prek):
+### Linting & type checking
 
 ```
-uv sync --group dev
+just lint        # ruff check + format
+just typecheck   # ty check
+just check       # both
 ```
 
-### Pre-commit hooks
+Or manually:
 
-Install the hooks into your local repo:
-
-```
-prek install
-```
-
-After that, `ruff` and `ty` will run automatically before each commit.
-
-### Running checks manually
-
-```
-uv run ruff check . --fix
+```sh
+uv run ruff check --fix .
 uv run ruff format .
-uv run ty check packages/
+uv run ty check
+```
+
+### Tests
+
+```
+just test-unit
+```
+
+Or manually:
+
+```sh
+uv run pytest
 ```

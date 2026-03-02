@@ -1,9 +1,8 @@
 venv:
-    uv venv
-    uv pip install -e packages/fedotmas -e packages/fedotmas-synapse
-    uv run python -c "import shutil, os; shutil.copy('.env.example', '.env') if not os.path.exists('.env') else None"
+    uv sync
+    cp -n .env.example .env 2>/dev/null || true
 
-venv-dev: venv
+venv-dev:
     uv sync --group dev
     uv run prek install
     @echo "Dev environment ready"
@@ -14,6 +13,15 @@ bifrost:
 
 bifrost-stop:
     docker stop bifrost && docker rm bifrost
+
+lint:
+    uv run ruff check . --fix
+    uv run ruff format .
+
+typecheck:
+    uv run ty check packages/
+
+check: lint typecheck
 
 edge-structures:
     uv run python examples/edge_cases/pipeline_structures.py

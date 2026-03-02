@@ -1,19 +1,25 @@
-# fedot-mas
+# fedotmas
 
 Core library for FEDOT.MAS.
 
-## Installation
+## Bifrost
 
-From the workspace root:
-
-```
-uv sync --all-packages
-```
-
-Or standalone:
+[Bifrost](https://github.com/maximhq/bifrost) is a unified LLM gateway. Run it locally via Docker:
 
 ```
-uv pip install -e packages/fedotmas
+just bifrost
+```
+
+And use it as .env variable:
+
+```
+FEDOTMAS_DEFAULT_PROXY=bifrost
+```
+
+Bifrost will be available at `http://localhost:8080` by default (to switch default url use var: `FEDOTMAS_BIFROST_BASE_URL=`). To stop:
+
+```
+just bifrost-stop
 ```
 
 ## Usage
