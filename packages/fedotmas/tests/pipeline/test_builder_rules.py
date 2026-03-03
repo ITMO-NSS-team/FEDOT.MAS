@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from fedotmas.config.settings import ModelConfig
 from fedotmas.pipeline.builder import (
+    _build_llm_agent,
     _inject_exit_loop,
     _resolve_llm,
     build,
@@ -348,3 +349,39 @@ class TestBuildLoopDefaultMaxIterations:
 
         assert isinstance(root, LoopAgent)
         assert root.max_iterations == 10
+
+
+# ---- Rules 16-18: max_tool_calls instruction ----
+
+
+class TestToolLimitInstruction:
+    """Rules 16-18: tool-call limit instruction appended to agents with tools."""
+
+    def _agent_cfg(self, *, tools: list[str] | None = None) -> AgentConfig:
+        return AgentConfig(
+            name="worker",
+            instruction="Do the work",
+            output_key="result",
+            tools=tools or [],
+        )
+
+    @patch("fedotmas.pipeline.builder.create_toolset", return_value=MagicMock())
+    def test_tool_limit_instruction_appended(self, _mock_toolset):
+        """Rule 16: agent with tools gets instruction suffix."""
+        cfg = self._agent_cfg(tools=["search"])
+        agent = _build_llm_agent(cfg, None, None, max_tool_calls=5)
+        assert "at most 5 tool calls" in agent.instruction
+
+    @patch("fedotmas.pipeline.builder.create_toolset", return_value=MagicMock())
+    def test_no_tools_no_limit_instruction(self, _mock_toolset):
+        """Rule 17: agent without tools → instruction unchanged."""
+        cfg = self._agent_cfg(tools=[])
+        agent = _build_llm_agent(cfg, None, None, max_tool_calls=5)
+        assert "tool calls" not in agent.instruction
+
+    @patch("fedotmas.pipeline.builder.create_toolset", return_value=MagicMock())
+    def test_max_tool_calls_none_no_instruction(self, _mock_toolset):
+        """Rule 18: max_tool_calls=None → no suffix even with tools."""
+        cfg = self._agent_cfg(tools=["search"])
+        agent = _build_llm_agent(cfg, None, None, max_tool_calls=None)
+        assert "tool calls" not in agent.instruction
