@@ -30,7 +30,6 @@ def build(
     worker_models: dict[str, ModelConfig] | None = None,
     before_agent_callbacks: list[_SingleAgentCallback] | None = None,
     after_agent_callbacks: list[_SingleAgentCallback] | None = None,
-    max_tool_calls: int | None = None,
 ) -> BaseAgent:
     """Convert a ``PipelineConfig`` into an executable ADK agent tree."""
     agents_by_name: dict[str, AgentConfig] = {a.name: a for a in config.agents}
@@ -41,7 +40,6 @@ def build(
         worker_models,
         before_agent_callbacks,
         after_agent_callbacks,
-        max_tool_calls=max_tool_calls,
     )
 
 
@@ -52,31 +50,16 @@ def _build_node(
     worker_models: dict[str, ModelConfig] | None,
     extra_before: list[_SingleAgentCallback] | None = None,
     extra_after: list[_SingleAgentCallback] | None = None,
-    *,
-    max_tool_calls: int | None = None,
 ) -> BaseAgent:
     if node.type == "agent":
         if node.agent_name is None:
             raise ValueError(f"Agent node missing 'agent_name': {node}")
-        agent = _build_llm_agent(
-            agents[node.agent_name],
-            mcp_registry,
-            worker_models,
-            max_tool_calls=max_tool_calls,
-        )
+        agent = _build_llm_agent(agents[node.agent_name], mcp_registry, worker_models)
         _attach_callbacks(agent, extra_before, extra_after)
         return agent
 
     children = [
-        _build_node(
-            c,
-            agents,
-            mcp_registry,
-            worker_models,
-            extra_before,
-            extra_after,
-            max_tool_calls=max_tool_calls,
-        )
+        _build_node(c, agents, mcp_registry, worker_models, extra_before, extra_after)
         for c in node.children
     ]
 
@@ -136,26 +119,17 @@ def _build_llm_agent(
     cfg: AgentConfig,
     mcp_registry: dict[str, MCPServerConfig] | None,
     worker_models: dict[str, ModelConfig] | None,
-    *,
-    max_tool_calls: int | None = None,
 ) -> LlmAgent:
     tools: list = []
     for tool_name in cfg.tools:
         tools.append(create_toolset(tool_name, registry=mcp_registry))
-
-    instruction = cfg.instruction
-    if tools and max_tool_calls is not None:
-        instruction += (
-            f"\n\nUse tools efficiently — make at most {max_tool_calls} "
-            "tool calls per step. Prefer fewer precise queries over many broad ones."
-        )
 
     model = _resolve_llm(cfg.model, worker_models)
     _log.debug("Built agent | name={} model={}", cfg.name, model)
     return LlmAgent(
         name=cfg.name,
         model=model,
-        instruction=instruction,
+        instruction=cfg.instruction,
         output_key=cfg.output_key,
         tools=tools,
     )

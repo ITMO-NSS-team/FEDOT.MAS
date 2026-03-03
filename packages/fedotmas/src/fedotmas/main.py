@@ -61,9 +61,6 @@ class MAS:
         after_agent_callbacks: Callbacks invoked after each agent step.
         max_retries: Max retry attempts for meta-agent LLM calls on failure
             (e.g. invalid JSON). Defaults to 3.
-        max_tool_calls: Maximum number of tool calls per agent step.
-            Appends an instruction hint to agents that have tools.
-            Set to ``None`` to disable. Defaults to 5.
 
     Usage::
 
@@ -89,10 +86,7 @@ class MAS:
         meta_model: str | ModelConfig | None = None,
         worker_models: list[str | ModelConfig] | None = None,
         temperature: float | None = None,
-        mcp_servers: list[str]
-        | dict[str, MCPServerConfig]
-        | Literal["all"]
-        | None = None,
+        mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"] | None = None,
         session_service: BaseSessionService | None = None,
         memory_service: BaseMemoryService | None = None,
         plugins: list[BasePlugin] | None = None,
@@ -100,7 +94,6 @@ class MAS:
         before_agent_callbacks: list[AgentCallback] | None = None,
         after_agent_callbacks: list[AgentCallback] | None = None,
         max_retries: int = 3,
-        max_tool_calls: int | None = 5,
     ) -> None:
         setup_logging()
         self._two_stage = two_stage
@@ -115,7 +108,6 @@ class MAS:
         self._before_agent_callbacks = before_agent_callbacks
         self._after_agent_callbacks = after_agent_callbacks
         self._max_retries = max_retries
-        self._max_tool_calls = max_tool_calls
         self._last_result: PipelineResult | None = None
         self._last_meta_result: MetaAgentResult | None = None
         self._resolved_workers: list[ModelConfig] | None = None
@@ -285,7 +277,6 @@ class MAS:
             worker_models=worker_map,
             before_agent_callbacks=self._before_agent_callbacks,
             after_agent_callbacks=self._after_agent_callbacks,
-            max_tool_calls=self._max_tool_calls,
         )
         print_tree(config)
         _log.info("Running pipeline")
