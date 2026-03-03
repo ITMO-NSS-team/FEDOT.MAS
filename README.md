@@ -71,9 +71,3 @@ uv run ty check
 ```sh
 just test-unit
 ```
-
-Or manually:
-
-```sh
-uv run pytest
-```
