@@ -6,9 +6,24 @@ When a user describes a task, the **meta-agent** sees the list of all registered
 
 ### Auto-discovery
 
-When `MAS` is created without explicit `mcp_servers` (default `None`), the registry walks up from the `fedotmas` package to find the workspace root (a `pyproject.toml` with `[tool.uv.workspace]`), then scans `mcp-servers/*/pyproject.toml` for `[tool.fedotmas.mcp]` sections. Pass `mcp_servers={}` to disable discovery.
+Discovery triggers when `mcp_servers` is `"all"` or a list of server names
+(e.g. `["download-url-content"]`). The registry walks up from the `fedotmas`
+package to find the workspace root (a `pyproject.toml` with
+`[tool.uv.workspace]`), then scans `mcp-servers/*/pyproject.toml` for
+`[tool.fedotmas.mcp]` sections. Default `mcp_servers=None` means no servers,
+no discovery.
 
-When installed from PyPI (outside a workspace), discovery finds no root and returns an empty registry. In this case servers are configured explicitly via `MAS(mcp_servers={...})`.
+When installed from PyPI (outside a workspace), discovery finds no root and
+returns an empty registry. To use servers in this case, either pass a
+`dict[str, MCPServerConfig]` directly, or point `discover_servers()` at any
+directory with the same layout:
+
+```python
+from fedotmas import MAS
+from fedotmas.mcp import discover_servers
+
+mas = MAS(mcp_servers=discover_servers("/path/to/my-servers"))
+```
 
 ### Adding a new MCP server
 
@@ -39,6 +54,6 @@ description = "Short description of what the server does — the meta-agent read
 tags = ["relevant", "tags"]
 ```
 
-3. On next import of `fedotmas.mcp`, the server appears in the registry and becomes available to the meta-agent.
+3. On next `MAS(mcp_servers="all")` call, the server appears in the registry and becomes available to the meta-agent.
 
 The `name` field is the key used in pipeline configs (e.g. `"tools": ["my-server"]`). The entry point is taken from the first key in `[project.scripts]`. Each server has its own `uv`-managed virtualenv created on first run.
