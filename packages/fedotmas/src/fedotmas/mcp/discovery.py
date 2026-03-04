@@ -27,15 +27,39 @@ def _find_repo_root() -> Path:
 
 
 def discover_servers(
-    base_dir: str | Path = "mcp-servers",
+    servers_dir: str | Path | None = None,
 ) -> dict[str, MCPServerConfig]:
-    """Scan *base_dir*/\\*/pyproject.toml for ``[tool.fedotmas.mcp]`` sections.
+    """Scan a directory of MCP server packages and return a registry.
 
-    Each discovered server is built via :func:`directory_server` so it launches
-    with ``uv run --directory <server_dir> <entry_point>``.
+    Args:
+        servers_dir: Absolute path to the directory containing server
+            sub-directories.  Each sub-directory must have a ``pyproject.toml``.
+            Defaults to ``<workspace_root>/mcp-servers``.
+
+    Expected layout::
+
+        servers_dir/
+        ├── my-server/
+        │   ├── pyproject.toml   # must contain [tool.fedotmas.mcp] and [project.scripts]
+        │   └── ...
+        └── another-server/
+            ├── pyproject.toml
+            └── ...
+
+    Each ``pyproject.toml`` must declare:
+
+    - ``[tool.fedotmas.mcp]`` with at least ``name`` (str).
+      Optional: ``description`` (str), ``tags`` (list[str]).
+    - ``[project.scripts]`` — the first entry is used as the server entry point.
+
+    Returns:
+        ``{name: MCPServerConfig}`` for every successfully discovered server.
     """
-    repo_root = _find_repo_root()
-    servers_dir = repo_root / base_dir
+    if servers_dir is not None:
+        servers_dir = Path(servers_dir)
+    else:
+        repo_root = _find_repo_root()
+        servers_dir = repo_root / "mcp-servers"
 
     if not servers_dir.is_dir():
         _log.warning("MCP servers directory not found: {}", servers_dir)
@@ -70,15 +94,12 @@ def discover_servers(
         description = mcp_meta.get("description", "")
         tags = tuple(mcp_meta.get("tags", ()))
 
-        # Use relative path from repo root for portability
-        relative_dir = str(server_dir.relative_to(repo_root))
-
         result[name] = directory_server(
-            directory=relative_dir,
+            directory=str(server_dir),
             entry_point=entry_point,
             description=description,
             tags=tags,
         )
-        _log.debug("Discovered MCP server: {} -> {}", name, relative_dir)
+        _log.debug("Discovered MCP server: {} -> {}", name, server_dir)
 
     return result
