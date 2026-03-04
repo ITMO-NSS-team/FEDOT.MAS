@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from google.adk.agents import BaseAgent
 from google.adk.memory import BaseMemoryService
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService
@@ -86,7 +87,10 @@ class MAS:
         meta_model: str | ModelConfig | None = None,
         worker_models: list[str | ModelConfig] | None = None,
         temperature: float | None = None,
-        mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"] | None = None,
+        mcp_servers: list[str]
+        | dict[str, MCPServerConfig]
+        | Literal["all"]
+        | None = None,
         session_service: BaseSessionService | None = None,
         memory_service: BaseMemoryService | None = None,
         plugins: list[BasePlugin] | None = None,
@@ -169,8 +173,8 @@ class MAS:
         JSON for human review, and optionally edited before execution.
 
         When ``two_stage=True`` the generation is split into two LLM calls:
-        1. **Pool generation** — produces a list of agents (no wiring).
-        2. **Pipeline generation** — wires the pool into a StepConfig tree.
+        1. **Pool generation** produces a list of agents.
+        2. **Pipeline generation** wires the pool into a StepConfig tree.
         """
         _log.info(
             "Generating pipeline config for task (two_stage={}): {}",
@@ -208,7 +212,7 @@ class MAS:
             resolve_model_config,
         )
 
-        _log.info("Two-stage | stage 1/2: generating agent pool")
+        _log.info("Stage 1/2: generating agent pool")
         pool_gen = PoolGenerator(
             meta_model=self._meta_model,
             worker_models=self._worker_models,
@@ -220,7 +224,7 @@ class MAS:
         pool = await pool_gen.generate(task)
 
         _log.info(
-            "Two-stage | stage 2/2: generating pipeline from {} agents",
+            "Stage 2/2: generating pipeline from {} agents",
             len(pool.agents),
         )
         pipeline_gen = PipelineGenerator(
@@ -254,17 +258,8 @@ class MAS:
             + (pipe_r.elapsed if pipe_r else 0.0),
         )
 
-    async def build_and_run(
-        self,
-        config: PipelineConfig,
-        user_query: str,
-        *,
-        initial_state: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Build the ADK agent tree from *config* and execute it.
-
-        Returns the final ``session.state`` dict.
-        """
+    def build(self, config: PipelineConfig) -> BaseAgent:
+        """Build the ADK agent tree from *config* and return it."""
         _log.info("Building agent tree")
         worker_map = (
             {m.model: m for m in self._resolved_workers}
@@ -279,6 +274,20 @@ class MAS:
             after_agent_callbacks=self._after_agent_callbacks,
         )
         print_tree(config)
+        return agent
+
+    async def build_and_run(
+        self,
+        config: PipelineConfig,
+        user_query: str,
+        *,
+        initial_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build the ADK agent tree from *config* and execute it.
+
+        Returns the final ``session.state`` dict.
+        """
+        agent = self.build(config)
         _log.info("Running pipeline")
         self._last_result = await run_pipeline(
             agent,
