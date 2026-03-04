@@ -100,7 +100,7 @@ class MAS:
         self._meta_model = meta_model
         self._worker_models = worker_models
         self._temperature = temperature
-        self._mcp_registry = resolve_mcp_registry(mcp_servers or [])
+        self._mcp_registry = resolve_mcp_registry(mcp_servers)
         self._session_service = session_service
         self._memory_service = memory_service
         self._plugins = plugins
