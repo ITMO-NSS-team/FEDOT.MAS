@@ -2,19 +2,18 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from google.adk.agents import BaseAgent
 from google.adk.memory import BaseMemoryService
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger, setup_logging
-from fedotmas.config.settings import ModelConfig
+from fedotmas.config.settings import ModelConfig, resolve_model_config
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
 from fedotmas.meta.agent import MetaAgentResult, generate_pipeline_config
 from fedotmas.meta.pipeline_gen import PipelineGenerator
 from fedotmas.meta.pool_gen import PoolGenerator
 from fedotmas.pipeline._ppline_utils import print_tree
-from fedotmas.pipeline.builder import AgentCallback, build
+from fedotmas.pipeline.builder import AgentCallback, AgentTree, build
 from fedotmas.pipeline.models import PipelineConfig
 from fedotmas.pipeline.runner import EventCallback, PipelineResult, run_pipeline
 
@@ -75,6 +74,9 @@ class MAS:
         config = await mas.generate_config("Research quantum computing trends")
         # ... inspect / edit config ...
         result = await mas.build_and_run(config, "Research quantum computing trends")
+
+        # Build only (returns an AgentTree for custom execution):
+        agent = mas.build(config)
 
         # Legacy single-stage generation:
         mas_legacy = MAS(two_stage=False)
@@ -166,6 +168,20 @@ class MAS:
         meta = self._last_meta_result.elapsed if self._last_meta_result else 0.0
         return pipeline + meta
 
+    def _ensure_resolved_workers(self) -> None:
+        if self._resolved_workers is not None:
+            return
+        if self._worker_models:
+            self._resolved_workers = [
+                resolve_model_config(m) for m in self._worker_models
+            ]
+
+    def _worker_map(self) -> dict[str, ModelConfig] | None:
+        self._ensure_resolved_workers()
+        if self._resolved_workers:
+            return {m.model: m for m in self._resolved_workers}
+        return None
+
     async def generate_config(self, task: str) -> PipelineConfig:
         """Ask the meta-agent to design a pipeline for *task*.
 
@@ -206,11 +222,8 @@ class MAS:
         return config
 
     async def _generate_two_stage(self, task: str) -> MetaAgentResult:
-        """Run pool generationthen pipeline generation."""
-        from fedotmas.config.settings import (
-            get_worker_models,
-            resolve_model_config,
-        )
+        """Run pool generation then pipeline generation."""
+        from fedotmas.config.settings import get_worker_models
 
         _log.info("Stage 1/2: generating agent pool")
         pool_gen = PoolGenerator(
@@ -237,14 +250,9 @@ class MAS:
         )
         config = await pipeline_gen.generate(task, pool)
 
-        # Resolve workers for downstream use
-        resolved_workers = (
-            [resolve_model_config(m) for m in self._worker_models]
-            if self._worker_models
-            else [resolve_model_config(m) for m in get_worker_models()]
-        )
+        sources = self._worker_models or get_worker_models()
+        resolved_workers = [resolve_model_config(m) for m in sources]
 
-        # Combine metrics from both stages
         pool_r = pool_gen.result
         pipe_r = pipeline_gen.result
         return MetaAgentResult(
@@ -258,24 +266,13 @@ class MAS:
             + (pipe_r.elapsed if pipe_r else 0.0),
         )
 
-    def build(self, config: PipelineConfig) -> BaseAgent:
-        """Build the ADK agent tree from *config* and return it."""
+    def build(self, config: PipelineConfig) -> AgentTree:
+        """Build an ADK agent tree from *config*."""
         _log.info("Building agent tree")
-        if not self._resolved_workers and self._worker_models:
-            from fedotmas.config.settings import resolve_model_config
-
-            self._resolved_workers = [
-                resolve_model_config(m) for m in self._worker_models
-            ]
-        worker_map = (
-            {m.model: m for m in self._resolved_workers}
-            if self._resolved_workers
-            else None
-        )
         agent = build(
             config,
             mcp_registry=self._mcp_registry,
-            worker_models=worker_map,
+            worker_models=self._worker_map(),
             before_agent_callbacks=self._before_agent_callbacks,
             after_agent_callbacks=self._after_agent_callbacks,
         )

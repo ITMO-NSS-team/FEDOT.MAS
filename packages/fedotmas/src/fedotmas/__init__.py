@@ -4,6 +4,7 @@ from fedotmas.config.settings import ModelConfig
 from fedotmas.main import MAS
 from fedotmas.meta.pipeline_gen import PipelineGenerator
 from fedotmas.meta.pool_gen import PoolGenerator
+from fedotmas.pipeline.builder import AgentTree
 from fedotmas.pipeline.models import (
     AgentConfig,
     AgentPoolConfig,
@@ -40,6 +41,7 @@ warnings.filterwarnings(
 
 __all__ = [
     "MAS",
+    "AgentTree",
     "ModelConfig",
     "AgentConfig",
     "AgentPoolConfig",

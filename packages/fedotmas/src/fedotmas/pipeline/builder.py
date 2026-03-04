@@ -19,6 +19,7 @@ from fedotmas.pipeline._ppline_utils import make_callbacks
 from fedotmas.pipeline.models import AgentConfig, PipelineConfig, StepConfig
 
 AgentCallback: TypeAlias = _SingleAgentCallback
+AgentTree: TypeAlias = BaseAgent
 
 _log = get_logger("fedotmas.pipeline.builder")
 

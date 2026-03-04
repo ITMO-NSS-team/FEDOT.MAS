@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import time
 
 from google.adk.agents.base_agent import _SingleAgentCallback
@@ -47,11 +48,13 @@ def _is_workflow_node(name: str) -> bool:
 
 
 def print_tree(config: PipelineConfig) -> None:
-    """Print the pipeline tree once to the console."""
+    """Log the pipeline tree structure."""
     agents_by_name = {a.name: a.output_key for a in config.agents}
     tree = Tree("[bold]pipeline[/bold]")
     _build_tree(config.pipeline, tree, agents_by_name)
-    Console().print(tree)
+    buf = io.StringIO()
+    Console(file=buf, highlight=False).print(tree)
+    _log.info("Pipeline tree:\n{}", buf.getvalue().rstrip())
 
 
 def make_callbacks(name: str) -> tuple[_SingleAgentCallback, _SingleAgentCallback]:

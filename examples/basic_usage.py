@@ -5,7 +5,7 @@ from fedotmas import MAS, AgentConfig, PipelineConfig, StepConfig
 
 
 async def full_auto():
-    mas = MAS()
+    mas = MAS(mcp_servers="all")
     state = await mas.run("Explain the difference between TCP and UDP in 3 sentences")
     print(json.dumps(state, indent=2, default=str))
 
