@@ -6,7 +6,9 @@ When a user describes a task, the **meta-agent** sees the list of all registered
 
 ### Auto-discovery
 
-MCP servers are discovered automatically at import time. The registry scans `mcp-servers/*/pyproject.toml` for a `[tool.fedotmas.mcp]` section and registers every server it finds.
+When `MAS` is created without explicit `mcp_servers` (default `None`), the registry walks up from the `fedotmas` package to find the workspace root (a `pyproject.toml` with `[tool.uv.workspace]`), then scans `mcp-servers/*/pyproject.toml` for `[tool.fedotmas.mcp]` sections. Pass `mcp_servers={}` to disable discovery.
+
+When installed from PyPI (outside a workspace), discovery finds no root and returns an empty registry. In this case servers are configured explicitly via `MAS(mcp_servers={...})`.
 
 ### Adding a new MCP server
 
