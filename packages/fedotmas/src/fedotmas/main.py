@@ -86,7 +86,10 @@ class MAS:
         meta_model: str | ModelConfig | None = None,
         worker_models: list[str | ModelConfig] | None = None,
         temperature: float | None = None,
-        mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"] | None = None,
+        mcp_servers: list[str]
+        | dict[str, MCPServerConfig]
+        | Literal["all"]
+        | None = None,
         session_service: BaseSessionService | None = None,
         memory_service: BaseMemoryService | None = None,
         plugins: list[BasePlugin] | None = None,
@@ -266,6 +269,12 @@ class MAS:
         Returns the final ``session.state`` dict.
         """
         _log.info("Building agent tree")
+        if not self._resolved_workers and self._worker_models:
+            from fedotmas.config.settings import resolve_model_config
+
+            self._resolved_workers = [
+                resolve_model_config(m) for m in self._worker_models
+            ]
         worker_map = (
             {m.model: m for m in self._resolved_workers}
             if self._resolved_workers
