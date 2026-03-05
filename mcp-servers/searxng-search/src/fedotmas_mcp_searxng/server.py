@@ -28,7 +28,8 @@ class SearchResponse(BaseModel):
 
 
 DESCRIPTION = """
-MCP server for web search via self-hosted SearXNG. Requires SEARXNG_URL env var.
+MCP server for web search via self-hosted SearXNG. Supports filtering by category
+(general, news, science, etc.) and language. Requires SEARXNG_URL env var.
 """
 
 ENGINES = "bing,duckduckgo,brave,mullvadleta,mullvadleta brave,yahoo,presearch"
