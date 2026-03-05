@@ -13,7 +13,7 @@ from fedotmas.pipeline.models import (
     StepConfig,
 )
 from fedotmas.pipeline.runner import PipelineResult
-from fedotmas.serving import MASAgentLoader, create_api_app
+from fedotmas.serving import serve
 
 # litellm's Message.__init__ deletes None-valued attributes from instances,
 # causing Pydantic to warn about missing fields during serialization.
@@ -52,6 +52,5 @@ __all__ = [
     "PipelineResult",
     "PoolGenerator",
     "StepConfig",
-    "MASAgentLoader",
-    "create_api_app",
+    "serve",
 ]

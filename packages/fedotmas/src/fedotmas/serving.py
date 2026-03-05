@@ -9,11 +9,10 @@ from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.cli.utils.base_agent_loader import BaseAgentLoader
 
 
-class MASAgentLoader(BaseAgentLoader):
+class _AgentLoader(BaseAgentLoader):
     """Agent loader that serves pre-built BaseAgent instances.
 
-    Use this instead of ADK's filesystem-based AgentLoader when agents
-    are built programmatically (e.g. via MAS().build()).
+    Used by `serve` to bridge MAS-built agents to ADK's serving infrastructure.
     """
 
     def __init__(self) -> None:
@@ -35,7 +34,7 @@ class MASAgentLoader(BaseAgentLoader):
         return sorted(self._agents)
 
 
-def create_api_app(
+def serve(
     agents: dict[str, BaseAgent | App],
     *,
     session_service_uri: str | None = None,
@@ -57,7 +56,7 @@ def create_api_app(
         host: Bind address.
         port: Bind port.
     """
-    loader = MASAgentLoader()
+    loader = _AgentLoader()
     for name, agent in agents.items():
         loader.register(name, agent)
 
