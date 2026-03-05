@@ -13,9 +13,10 @@ from fedotmas.meta.agent import MetaAgentResult, generate_pipeline_config
 from fedotmas.meta.pipeline_gen import PipelineGenerator
 from fedotmas.meta.pool_gen import PoolGenerator
 from fedotmas.pipeline._ppline_utils import print_tree
-from fedotmas.pipeline.builder import AgentCallback, AgentTree, build
+from fedotmas.pipeline.builder import AgentTree, build
 from fedotmas.pipeline.models import PipelineConfig
-from fedotmas.pipeline.runner import EventCallback, PipelineResult, run_pipeline
+from fedotmas.pipeline.runner import PipelineResult, run_pipeline
+from fedotmas.plugins import LoggingPlugin
 
 _log = get_logger("fedotmas.main")
 
@@ -55,10 +56,8 @@ class MAS:
             Defaults to ``None`` (no memory).
         plugins: ADK ``BasePlugin`` instances registered on the ``Runner``.
             Plugins intercept all agent, model, and tool lifecycle events.
-        event_callback: Async or sync callable invoked on every ``Event``
-            emitted during pipeline execution.
-        before_agent_callbacks: Callbacks invoked before each agent step.
-        after_agent_callbacks: Callbacks invoked after each agent step.
+            A ``LoggingPlugin`` is automatically prepended unless one is
+            already present.
         max_retries: Max retry attempts for meta-agent LLM calls on failure
             (e.g. invalid JSON). Defaults to 3.
 
@@ -96,9 +95,6 @@ class MAS:
         session_service: BaseSessionService | None = None,
         memory_service: BaseMemoryService | None = None,
         plugins: list[BasePlugin] | None = None,
-        event_callback: EventCallback | None = None,
-        before_agent_callbacks: list[AgentCallback] | None = None,
-        after_agent_callbacks: list[AgentCallback] | None = None,
         max_retries: int = 3,
     ) -> None:
         setup_logging()
@@ -109,10 +105,9 @@ class MAS:
         self._mcp_registry = resolve_mcp_registry(mcp_servers)
         self._session_service = session_service
         self._memory_service = memory_service
-        self._plugins = plugins
-        self._event_callback = event_callback
-        self._before_agent_callbacks = before_agent_callbacks
-        self._after_agent_callbacks = after_agent_callbacks
+        self._plugins = list(plugins or [])
+        if not any(isinstance(p, LoggingPlugin) for p in self._plugins):
+            self._plugins.insert(0, LoggingPlugin())
         self._max_retries = max_retries
         self._last_result: PipelineResult | None = None
         self._last_meta_result: MetaAgentResult | None = None
@@ -273,8 +268,6 @@ class MAS:
             config,
             mcp_registry=self._mcp_registry,
             worker_models=self._worker_map(),
-            before_agent_callbacks=self._before_agent_callbacks,
-            after_agent_callbacks=self._after_agent_callbacks,
         )
         print_tree(config)
         return agent
@@ -298,7 +291,6 @@ class MAS:
             session_service=self._session_service,
             memory_service=self._memory_service,
             plugins=self._plugins,
-            event_callback=self._event_callback,
             initial_state=initial_state,
         )
         return self._last_result.state

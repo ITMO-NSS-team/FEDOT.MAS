@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TypeAlias
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
-from google.adk.agents.base_agent import BaseAgent, _SingleAgentCallback
+from google.adk.agents.base_agent import BaseAgent
 from google.adk.models.base_llm import BaseLlm
 from google.adk.tools.exit_loop_tool import exit_loop
 
@@ -15,10 +15,8 @@ from fedotmas.config.settings import (
 )
 from fedotmas.common.llm import make_llm
 from fedotmas.mcp import MCPServerConfig, create_toolset
-from fedotmas.pipeline._ppline_utils import make_callbacks
 from fedotmas.pipeline.models import AgentConfig, PipelineConfig, StepConfig
 
-AgentCallback: TypeAlias = _SingleAgentCallback
 AgentTree: TypeAlias = BaseAgent
 
 _log = get_logger("fedotmas.pipeline.builder")
@@ -29,8 +27,6 @@ def build(
     *,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
     worker_models: dict[str, ModelConfig] | None = None,
-    before_agent_callbacks: list[_SingleAgentCallback] | None = None,
-    after_agent_callbacks: list[_SingleAgentCallback] | None = None,
 ) -> BaseAgent:
     """Convert a ``PipelineConfig`` into an executable ADK agent tree."""
     agents_by_name: dict[str, AgentConfig] = {a.name: a for a in config.agents}
@@ -39,8 +35,6 @@ def build(
         agents_by_name,
         mcp_registry,
         worker_models,
-        before_agent_callbacks,
-        after_agent_callbacks,
     )
 
 
@@ -49,47 +43,36 @@ def _build_node(
     agents: dict[str, AgentConfig],
     mcp_registry: dict[str, MCPServerConfig] | None,
     worker_models: dict[str, ModelConfig] | None,
-    extra_before: list[_SingleAgentCallback] | None = None,
-    extra_after: list[_SingleAgentCallback] | None = None,
 ) -> BaseAgent:
     if node.type == "agent":
         if node.agent_name is None:
             raise ValueError(f"Agent node missing 'agent_name': {node}")
-        agent = _build_llm_agent(agents[node.agent_name], mcp_registry, worker_models)
-        _attach_callbacks(agent, extra_before, extra_after)
-        return agent
+        return _build_llm_agent(agents[node.agent_name], mcp_registry, worker_models)
 
     children = [
-        _build_node(c, agents, mcp_registry, worker_models, extra_before, extra_after)
-        for c in node.children
+        _build_node(c, agents, mcp_registry, worker_models) for c in node.children
     ]
 
     if node.type == "sequential":
         name = _seq_name(children)
         _log.debug("Built sequential node | name={}", name)
-        agent = SequentialAgent(name=name, sub_agents=children)
-        _attach_callbacks(agent, extra_before, extra_after)
-        return agent
+        return SequentialAgent(name=name, sub_agents=children)
 
     if node.type == "parallel":
         name = _par_name(children)
         _log.debug("Built parallel node | name={}", name)
-        agent = ParallelAgent(name=name, sub_agents=children)
-        _attach_callbacks(agent, extra_before, extra_after)
-        return agent
+        return ParallelAgent(name=name, sub_agents=children)
 
     if node.type == "loop":
         # Inject exit_loop tool into the last sub-agent if it's an LlmAgent.
         _inject_exit_loop(children)
         max_iter = node.max_iterations or get_max_loop_iterations()
         _log.debug("Built loop node | max_iterations={}", max_iter)
-        agent = LoopAgent(
+        return LoopAgent(
             name=_loop_name(children),
             sub_agents=children,
             max_iterations=max_iter,
         )
-        _attach_callbacks(agent, extra_before, extra_after)
-        return agent
 
     raise ValueError(f"Unknown node type: {node.type}")
 
@@ -134,25 +117,6 @@ def _build_llm_agent(
         output_key=cfg.output_key,
         tools=tools,
     )
-
-
-def _attach_callbacks(
-    agent: BaseAgent,
-    extra_before: list[_SingleAgentCallback] | None = None,
-    extra_after: list[_SingleAgentCallback] | None = None,
-) -> None:
-    before_log, after_log = make_callbacks(agent.name)
-
-    before_cbs: list[_SingleAgentCallback] = [before_log]
-    if extra_before:
-        before_cbs.extend(extra_before)
-
-    after_cbs: list[_SingleAgentCallback] = [after_log]
-    if extra_after:
-        after_cbs.extend(extra_after)
-
-    agent.before_agent_callback = before_cbs
-    agent.after_agent_callback = after_cbs
 
 
 def _inject_exit_loop(children: list[BaseAgent]) -> None:

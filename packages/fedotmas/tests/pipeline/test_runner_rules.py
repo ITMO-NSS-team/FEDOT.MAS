@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import logging
 from contextlib import asynccontextmanager
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -73,8 +71,16 @@ class TestTokenAccumulation:
     @pytest.mark.asyncio
     async def test_tokens_summed(self, mock_session_service):
         events = [
-            FakeEvent(usage_metadata=FakeUsageMetadata(prompt_token_count=10, candidates_token_count=5)),
-            FakeEvent(usage_metadata=FakeUsageMetadata(prompt_token_count=20, candidates_token_count=15)),
+            FakeEvent(
+                usage_metadata=FakeUsageMetadata(
+                    prompt_token_count=10, candidates_token_count=5
+                )
+            ),
+            FakeEvent(
+                usage_metadata=FakeUsageMetadata(
+                    prompt_token_count=20, candidates_token_count=15
+                )
+            ),
         ]
         with _patch_runner(events):
             result = await run_pipeline(
@@ -119,29 +125,8 @@ class TestSessionLostAfterRun:
                 )
 
 
-class TestEventCallbackInvoked:
-    """Rule 5: event_callback called for each non-partial event."""
-
-    @pytest.mark.asyncio
-    async def test_callback_called(self, mock_session_service):
-        events = [
-            FakeEvent(partial=True),
-            FakeEvent(author="a1"),
-            FakeEvent(author="a2"),
-        ]
-        callback = AsyncMock()
-        with _patch_runner(events):
-            await run_pipeline(
-                _fake_agent(),
-                "hello",
-                session_service=mock_session_service,
-                event_callback=callback,
-            )
-        assert callback.call_count == 2
-
-
 class TestInitialStateMerged:
-    """Rule 6: initial_state is passed into create_session."""
+    """Rule 5: initial_state is passed into create_session."""
 
     @pytest.mark.asyncio
     async def test_initial_state(self, mock_session_service):
@@ -160,7 +145,7 @@ class TestInitialStateMerged:
 
 
 class TestStateInResult:
-    """Rule 7: final session state → PipelineResult.state."""
+    """Rule 6: final session state → PipelineResult.state."""
 
     @pytest.mark.asyncio
     async def test_state_returned(self, mock_session_service):
@@ -177,20 +162,42 @@ class TestStateInResult:
 
 
 class TestEmptyOutputWarning:
-    """Rule 8: state_delta with None value → warning log (no crash)."""
+    """Rule 7: state_delta with None value → no crash (logging in plugin)."""
 
     @pytest.mark.asyncio
-    async def test_none_value_warning(self, mock_session_service, caplog):
+    async def test_none_value_no_crash(self, mock_session_service):
         events = [
             FakeEvent(actions=FakeActions(state_delta={"key": None})),
         ]
         with _patch_runner(events):
-            with caplog.at_level(logging.WARNING):
-                result = await run_pipeline(
-                    _fake_agent(),
-                    "hello",
-                    session_service=mock_session_service,
-                )
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
         assert isinstance(result, PipelineResult)
-        # The logger uses loguru; caplog may not capture it.
-        # Main assertion: no crash occurred.
+
+
+class TestPluginsPassed:
+    """Rule 8: plugins list is passed through to Runner."""
+
+    @pytest.mark.asyncio
+    async def test_plugins_forwarded(self, mock_session_service):
+        from google.adk.plugins import BasePlugin
+
+        class StubPlugin(BasePlugin):
+            def __init__(self):
+                super().__init__(name="stub")
+
+        plugin = StubPlugin()
+        events: list[FakeEvent] = []
+        with _patch_runner(events) as runner_patch:
+            await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+                plugins=[plugin],
+            )
+        # Runner was called; check plugins kwarg
+        call_kwargs = runner_patch.call_args
+        assert plugin in call_kwargs.kwargs.get("plugins", [])

@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from google.adk import Runner
 from google.adk.agents.base_agent import BaseAgent
-from google.adk.events import Event
 from google.adk.memory import BaseMemoryService
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService, InMemorySessionService
@@ -17,8 +15,6 @@ from google.genai import types
 from fedotmas.common.logging import get_logger
 
 _log = get_logger("fedotmas.pipeline.runner")
-
-EventCallback = Callable[[Event], Awaitable[None] | None]
 
 
 @dataclass
@@ -38,7 +34,6 @@ async def run_pipeline(
     session_service: BaseSessionService | None = None,
     memory_service: BaseMemoryService | None = None,
     plugins: list[BasePlugin] | None = None,
-    event_callback: EventCallback | None = None,
     app_name: str = "fedotmas",
     user_id: str = "user",
     session_id: str | None = None,
@@ -49,6 +44,7 @@ async def run_pipeline(
     Args:
         agent: Root agent (output of ``builder.build``).
         user_query: The user's task.
+        plugins: ADK plugins registered on the Runner (logging, etc.).
         app_name: Application name for the ADK runner.
         user_id: User identifier for the session.
         session_id: Optional session id (auto-generated if omitted).
@@ -99,64 +95,13 @@ async def run_pipeline(
             if event.partial:
                 continue
 
-            if event_callback:
-                result = event_callback(event)
-                if result is not None:
-                    await result
-
-            # Tool calls
-            for fc in event.get_function_calls():
-                _log.info(
-                    "Tool call | agent={} tool={} args={}", event.author, fc.name, fc.args
-                )
-
-            # Tool responses
-            for fr in event.get_function_responses():
-                resp_str = str(fr.response)[:200] if fr.response else ""
-                if fr.response and "error" in resp_str.lower():
-                    _log.warning(
-                        "Tool error | agent={} tool={} response={}",
-                        event.author, fr.name, resp_str,
-                    )
-                else:
-                    _log.info("Tool result | agent={} tool={}", event.author, fr.name)
-
-            # Token usage
+            # Token accumulation (business logic — stays in runner)
             if event.usage_metadata:
                 um = event.usage_metadata
-                prompt = um.prompt_token_count or 0
-                completion = um.candidates_token_count or 0
-                total_prompt += prompt
-                total_completion += completion
-                if prompt or completion:
-                    _log.info(
-                        "Tokens | agent={} prompt={} completion={}",
-                        event.author,
-                        prompt,
-                        completion,
-                    )
+                total_prompt += um.prompt_token_count or 0
+                total_completion += um.candidates_token_count or 0
 
-            # Text response (final, no function calls)
-            if event.content and event.content.parts and not event.get_function_calls():
-                texts = [p.text for p in event.content.parts if p.text]
-                if texts:
-                    preview = texts[0][:200]
-                    _log.trace("Response | agent={} text={}", event.author, preview)
-
-            # State changes
-            if event.actions.state_delta:
-                for key, value in event.actions.state_delta.items():
-                    if value is None or (isinstance(value, str) and not value.strip()):
-                        _log.warning(
-                            "Empty output | agent={} key='{}'", event.author, key
-                        )
-                _log.info(
-                    "State update | agent={} keys={}",
-                    event.author,
-                    list(event.actions.state_delta.keys()),
-                )
-
-            # Errors
+            # Error handling (control flow — stays in runner)
             if event.error_code:
                 _log.error(
                     "LLM error | agent={} code={} msg={}",

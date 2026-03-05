@@ -13,6 +13,7 @@ from fedotmas.pipeline.models import (
     StepConfig,
 )
 from fedotmas.pipeline.runner import PipelineResult
+from fedotmas.plugins import LoggingPlugin
 from fedotmas.serving import serve
 
 # litellm's Message.__init__ deletes None-valued attributes from instances,
@@ -43,6 +44,7 @@ warnings.filterwarnings(
 __all__ = [
     "MAS",
     "AgentTree",
+    "LoggingPlugin",
     "ModelConfig",
     "AgentConfig",
     "AgentPoolConfig",

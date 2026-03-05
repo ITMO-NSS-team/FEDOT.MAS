@@ -197,12 +197,8 @@ class TestInjectExitLoop:
 class TestBuildSequentialTree:
     """Rule 11: PipelineConfig → SequentialAgent with children."""
 
-    @patch(
-        "fedotmas.pipeline.builder.make_callbacks",
-        return_value=(MagicMock(), MagicMock()),
-    )
     @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
-    def test_sequential(self, _mock_toolset, _mock_cb, simple_pipeline_config):
+    def test_sequential(self, _mock_toolset, simple_pipeline_config):
         root = build(simple_pipeline_config)
         from google.adk.agents import SequentialAgent
 
@@ -215,12 +211,8 @@ class TestBuildSequentialTree:
 class TestBuildParallelTree:
     """Rule 12: parallel type → ParallelAgent."""
 
-    @patch(
-        "fedotmas.pipeline.builder.make_callbacks",
-        return_value=(MagicMock(), MagicMock()),
-    )
     @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
-    def test_parallel(self, _mock_toolset, _mock_cb):
+    def test_parallel(self, _mock_toolset):
         config = PipelineConfig.model_validate(
             {
                 "agents": [
@@ -246,12 +238,8 @@ class TestBuildParallelTree:
 class TestBuildNestedSeqPar:
     """Rule 13: nested sequential → parallel."""
 
-    @patch(
-        "fedotmas.pipeline.builder.make_callbacks",
-        return_value=(MagicMock(), MagicMock()),
-    )
     @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
-    def test_nested(self, _mock_toolset, _mock_cb):
+    def test_nested(self, _mock_toolset):
         config = PipelineConfig.model_validate(
             {
                 "agents": [
@@ -285,12 +273,8 @@ class TestBuildNestedSeqPar:
 class TestBuildLoopMaxIterations:
     """Rule 14: loop with explicit max_iterations."""
 
-    @patch(
-        "fedotmas.pipeline.builder.make_callbacks",
-        return_value=(MagicMock(), MagicMock()),
-    )
     @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
-    def test_loop_explicit(self, _mock_toolset, _mock_cb):
+    def test_loop_explicit(self, _mock_toolset):
         config = PipelineConfig.model_validate(
             {
                 "agents": [
@@ -319,13 +303,9 @@ class TestBuildLoopMaxIterations:
 class TestBuildLoopDefaultMaxIterations:
     """Rule 15: loop without max_iterations → settings default."""
 
-    @patch(
-        "fedotmas.pipeline.builder.make_callbacks",
-        return_value=(MagicMock(), MagicMock()),
-    )
     @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
     @patch("fedotmas.pipeline.builder.get_max_loop_iterations", return_value=10)
-    def test_loop_default(self, _mock_max, _mock_toolset, _mock_cb):
+    def test_loop_default(self, _mock_max, _mock_toolset):
         config = PipelineConfig.model_validate(
             {
                 "agents": [

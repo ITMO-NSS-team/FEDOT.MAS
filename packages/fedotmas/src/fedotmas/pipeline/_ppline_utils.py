@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import io
-import time
 
-from google.adk.agents.base_agent import _SingleAgentCallback
-from google.adk.agents.callback_context import CallbackContext
 from rich.console import Console
 from rich.tree import Tree
 
@@ -41,12 +38,6 @@ def _build_tree(
         _build_tree(child, branch, agents_by_name)
 
 
-def _is_workflow_node(name: str) -> bool:
-    from fedotmas.pipeline.builder import WORKFLOW_PREFIXES
-
-    return name.startswith(WORKFLOW_PREFIXES)
-
-
 def print_tree(config: PipelineConfig) -> None:
     """Log the pipeline tree structure."""
     agents_by_name = {a.name: a.output_key for a in config.agents}
@@ -55,24 +46,3 @@ def print_tree(config: PipelineConfig) -> None:
     buf = io.StringIO()
     Console(file=buf, highlight=False).print(tree)
     _log.info("Pipeline tree:\n{}", buf.getvalue().rstrip())
-
-
-def make_callbacks(name: str) -> tuple[_SingleAgentCallback, _SingleAgentCallback]:
-    """Create before/after agent callbacks that log agent lifecycle."""
-    start_time: dict[str, float] = {}
-
-    def before(callback_context: CallbackContext) -> None:  # noqa: ARG001
-        start_time["t"] = time.monotonic()
-        if not _is_workflow_node(name):
-            _log.info("Agent started | name={}", name)
-
-    def after(callback_context: CallbackContext) -> None:  # noqa: ARG001
-        t0 = start_time.pop("t", None)
-        if t0 is None:
-            _log.warning("Agent done without start | name={}", name)
-            return
-        elapsed = time.monotonic() - t0
-        if not _is_workflow_node(name):
-            _log.info("Agent done | name={} elapsed={:.1f}s", name, elapsed)
-
-    return before, after
