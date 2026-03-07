@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+from pydantic import ValidationError
+
 from fedotmas._settings import ModelConfig
 from fedotmas.maw.builder import (
     _inject_exit_loop,
@@ -80,11 +83,11 @@ class TestNormalizeModelNameDefault:
 
 
 class TestNormalizeModelNamePrefix:
-    """Rule 5: bare model name gets openai/ prefix (via MAWAgentConfig)."""
+    """Rule 5: bare model name without provider prefix → ValueError."""
 
     def test_bare_name(self):
-        cfg = MAWAgentConfig(name="t", instruction="x", output_key="k", model="gpt-4o")
-        assert cfg.model == "openai/gpt-4o"
+        with pytest.raises(ValidationError, match="must include a provider prefix"):
+            MAWAgentConfig(name="t", instruction="x", output_key="k", model="gpt-4o")
 
     def test_already_prefixed(self):
         cfg = MAWAgentConfig(

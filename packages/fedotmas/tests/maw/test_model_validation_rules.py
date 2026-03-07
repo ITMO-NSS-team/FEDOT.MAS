@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from fedotmas.maw.models import (
     AgentPoolConfig,
+    MAWAgentConfig,
     MAWConfig,
     MAWStepConfig,
 )
@@ -116,4 +117,35 @@ class TestNonLeafWithoutChildren:
                     {"name": "a", "instruction": "x", "output_key": "k1"},
                 ],
                 pipeline={"type": step_type, "children": []},
+            )
+
+
+class TestModelValidation:
+    """Rule 9: Bare model name without provider prefix → ValueError."""
+
+    def test_bare_model_rejected(self):
+        with pytest.raises(ValidationError, match="must include a provider prefix"):
+            MAWAgentConfig(
+                name="a", instruction="x", output_key="k1", model="gpt-4o"
+            )
+
+    def test_prefixed_model_accepted(self):
+        cfg = MAWAgentConfig(
+            name="a", instruction="x", output_key="k1", model="openai/gpt-4o"
+        )
+        assert cfg.model == "openai/gpt-4o"
+
+    def test_none_model_accepted(self):
+        cfg = MAWAgentConfig(name="a", instruction="x", output_key="k1", model=None)
+        assert cfg.model is None
+
+
+class TestAgentNameChildrenConflict:
+    """Rule 10: agent_name + children together → ValueError."""
+
+    def test_agent_name_and_children_rejected(self):
+        with pytest.raises(ValidationError, match="Cannot specify both"):
+            MAWStepConfig(
+                agent_name="a",
+                children=[MAWStepConfig(type="agent", agent_name="b")],
             )

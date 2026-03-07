@@ -67,28 +67,21 @@ class FakeEvent:
 
 
 class TestAutoAddLoggingPlugin:
-    """MAW() auto-injects LoggingPlugin."""
+    """MAW() auto-injects LoggingPlugin when plugins=None (default)."""
 
     def test_default_has_logging_plugin(self):
         mas = MAW()
         assert any(isinstance(p, LoggingPlugin) for p in mas._plugins)
 
-    def test_no_duplicate(self):
+    def test_explicit_plugins_respected(self):
         lp = LoggingPlugin()
         mas = MAW(plugins=[lp])
-        logging_plugins = [p for p in mas._plugins if isinstance(p, LoggingPlugin)]
-        assert len(logging_plugins) == 1
-        assert logging_plugins[0] is lp
+        assert len(mas._plugins) == 1
+        assert mas._plugins[0] is lp
 
-    def test_ordering_logging_first(self):
-        class MockPlugin(BasePlugin):
-            def __init__(self):
-                super().__init__(name="mock")
-
-        mp = MockPlugin()
-        mas = MAW(plugins=[mp])
-        assert isinstance(mas._plugins[0], LoggingPlugin)
-        assert mas._plugins[1] is mp
+    def test_empty_list_disables_defaults(self):
+        mas = MAW(plugins=[])
+        assert mas._plugins == []
 
 
 # ---------------------------------------------------------------------------

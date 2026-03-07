@@ -71,11 +71,11 @@ class TestEmptyWorkersList:
 
 
 class TestModelNormalization:
-    """Rule 4: Bare model name gets openai/ prefix."""
+    """Rule 4: Bare model name without provider prefix → ValueError."""
 
-    def test_bare_model_gets_prefix(self):
-        cfg = MASAgentConfig(name="a", description="d", instruction="i", model="gpt-4o")
-        assert cfg.model == "openai/gpt-4o"
+    def test_bare_model_rejected(self):
+        with pytest.raises(ValidationError, match="must include a provider prefix"):
+            MASAgentConfig(name="a", description="d", instruction="i", model="gpt-4o")
 
     def test_prefixed_model_stays(self):
         cfg = MASAgentConfig(
