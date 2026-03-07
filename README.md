@@ -10,11 +10,11 @@ FEDOT.MAS automatically generates and executes multi-agent pipelines from a plai
 
 ## Repository map
 
-| Package | Path | Description |
-|---------|------|-------------|
-| **fedotmas** | [`packages/fedotmas`](packages/fedotmas) | Core library: meta-agent, pipeline builder & runner |
-| **fedotmas-synapse** | [`packages/fedotmas-synapse`](packages/fedotmas-synapse) | Synapse Platform integration plugin |
-| **mcp-servers** | [`mcp-servers/`](mcp-servers/) | Internal MCP-servers registry |
+| Path | Description |
+|------|-------------|
+| [`packages/fedotmas`](packages/fedotmas) | Core library: meta-agent, pipeline builder & runner |
+| [`packages/fedotmas-synapse`](packages/fedotmas-synapse) | Synapse Platform integration plugin |
+| [`mcp-servers`](mcp-servers/) | Internal MCP-servers registry |
 
 ## Quick start
 
