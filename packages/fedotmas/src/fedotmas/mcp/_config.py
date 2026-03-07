@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Union
 
 _UV_BIN = shutil.which("uv") or "uv"  # try to find a path to `uv` binary
+_DEFAULT_MCP_TIMEOUT = 60
 
 
 @dataclass(frozen=True)
@@ -13,7 +14,7 @@ class StdioMCPServer:
 
     command: str
     args: tuple[str, ...]
-    timeout: int = 60
+    timeout: int = _DEFAULT_MCP_TIMEOUT
     env: dict[str, str] = field(default_factory=dict)
     description: str = ""
     tags: tuple[str, ...] = ()
@@ -21,11 +22,11 @@ class StdioMCPServer:
 
 @dataclass(frozen=True)
 class HttpMCPServer:
-    """MCP server reachable over HTTP/SSE."""
+    """MCP server reachable over HTTP (Streamable HTTP transport)."""
 
     url: str
     headers: dict[str, str] = field(default_factory=dict)
-    timeout: int = 60
+    timeout: int = _DEFAULT_MCP_TIMEOUT
     description: str = ""
     tags: tuple[str, ...] = ()
 
@@ -37,7 +38,7 @@ def directory_server(
     directory: str,
     entry_point: str,
     *,
-    timeout: int = 60,
+    timeout: int = _DEFAULT_MCP_TIMEOUT,
     description: str = "",
     tags: tuple[str, ...] = (),
 ) -> StdioMCPServer:
@@ -55,7 +56,7 @@ def workspace_server(
     package: str,
     entry_point: str,
     *,
-    timeout: int = 60,
+    timeout: int = _DEFAULT_MCP_TIMEOUT,
     description: str = "",
     tags: tuple[str, ...] = (),
 ) -> StdioMCPServer:
@@ -72,7 +73,7 @@ def workspace_server(
 def npx_server(
     package: str,
     *,
-    timeout: int = 60,
+    timeout: int = _DEFAULT_MCP_TIMEOUT,
     extra_args: list[str] | None = None,
     description: str = "",
     tags: tuple[str, ...] = (),
@@ -92,7 +93,7 @@ def npx_server(
 def uvx_server(
     package: str,
     *,
-    timeout: int = 60,
+    timeout: int = _DEFAULT_MCP_TIMEOUT,
     extra_args: list[str] | None = None,
     description: str = "",
     tags: tuple[str, ...] = (),
@@ -111,11 +112,11 @@ def http_server(
     url: str,
     *,
     headers: dict[str, str] | None = None,
-    timeout: int = 60,
+    timeout: int = _DEFAULT_MCP_TIMEOUT,
     description: str = "",
     tags: tuple[str, ...] = (),
 ) -> HttpMCPServer:
-    """Config for a remote MCP server reachable over HTTP/SSE."""
+    """Config for a remote MCP server reachable over HTTP."""
     return HttpMCPServer(
         url=url,
         headers=headers or {},

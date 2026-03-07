@@ -55,9 +55,10 @@ class BaseMAS(ABC, Generic[ConfigT]):
         self._mcp_registry = resolve_mcp_registry(mcp_servers)
         self._session_service = session_service
         self._memory_service = memory_service
-        self._plugins = list(plugins or [])
-        if not any(isinstance(p, LoggingPlugin) for p in self._plugins):
-            self._plugins.insert(0, LoggingPlugin())
+        if plugins is not None:
+            self._plugins = list(plugins)
+        else:
+            self._plugins = [LoggingPlugin()]
         self._max_retries = max_retries
         self._last_result: PipelineResult | None = None
         self._last_meta_result: MetaAgentResult | None = None

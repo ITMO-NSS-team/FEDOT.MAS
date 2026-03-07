@@ -128,7 +128,8 @@ async def run_meta_agent_call(
                     max_retries + 1,
                     e,
                 )
-    assert last_error is not None  # guaranteed by loop executing at least once
+    if last_error is None:
+        raise RuntimeError(f"{agent_name}: retry loop exited without result or error")
     raise last_error
 
 

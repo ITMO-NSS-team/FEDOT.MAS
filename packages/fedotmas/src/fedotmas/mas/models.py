@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, model_validator
 
-from fedotmas.common.logging import get_logger
-
-_log = get_logger("fedotmas.mas.models")
+from fedotmas._settings import validate_model_name
 
 
 class MASAgentConfig(BaseModel):
@@ -23,13 +21,7 @@ class MASAgentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_model(self) -> MASAgentConfig:
-        if self.model is not None and "/" not in self.model:
-            _log.warning(
-                "Model '{}' has no provider prefix, assuming 'openai/{}'",
-                self.model,
-                self.model,
-            )
-            self.model = f"openai/{self.model}"
+        validate_model_name(self.model)
         return self
 
 

@@ -3,7 +3,7 @@ import asyncio
 from fedotmas import MAW
 from fedotmas.common.logging import get_logger
 
-_log = get_logger("fedotmas.examples.meta_generation")
+_log = get_logger("fedotmas.examples.maw.edge_cases.meta_generation")
 
 META_MODEL = "openai/gpt-oss-120b"
 

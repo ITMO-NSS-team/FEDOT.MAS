@@ -4,7 +4,7 @@ from fedotmas import MAW, MAWConfig
 from fedotmas.maw.models import MAWAgentConfig, MAWStepConfig
 from fedotmas.common.logging import get_logger
 
-_log = get_logger("fedotmas.examples.multi_model")
+_log = get_logger("fedotmas.examples.maw.edge_cases.multi_model")
 
 MODELS = [
     "openai/gpt-4o-mini",
@@ -52,13 +52,13 @@ async def cross_model_pipeline():
                 MAWAgentConfig(
                     name="researcher",
                     instruction="Research the topic: {user_query}. Provide key facts.",
-                    model="qwen/qwen3-235b-a22b-2507",
+                    model="openrouter/qwen/qwen3-235b-a22b-2507",
                     output_key="research",
                 ),
                 MAWAgentConfig(
                     name="writer",
                     instruction="Write a concise summary based on:\n{research}",
-                    model="meta-llama/llama-3.3-70b-instruct",
+                    model="openrouter/meta-llama/llama-3.3-70b-instruct",
                     output_key="draft",
                 ),
                 MAWAgentConfig(

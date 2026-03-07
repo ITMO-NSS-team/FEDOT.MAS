@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, model_validator
 
+from fedotmas._settings import validate_model_name
 from fedotmas.common.logging import get_logger
 from fedotmas.maw._validators import (
     auto_fill_agent_name,
@@ -58,15 +59,7 @@ class MAWAgentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_fields(self) -> MAWAgentConfig:
-        # Normalize model name
-        if self.model is not None:
-            if "/" not in self.model:
-                _log.warning(
-                    "Model '{}' has no provider prefix, assuming 'openai/{}'",
-                    self.model,
-                    self.model,
-                )
-                self.model = f"openai/{self.model}"
+        validate_model_name(self.model)
 
         # Normalize instruction: <var> → {var} → {var?}
         instr = _ANGLE_VAR_RE.sub(r"{\1}", self.instruction)
@@ -94,6 +87,8 @@ class MAWStepConfig(BaseModel):
         """Auto-fill missing ``type`` based on other fields present."""
         if not isinstance(data, dict):
             return data
+        if "agent_name" in data and data.get("children"):
+            raise ValueError("Cannot specify both 'agent_name' and 'children'")
         if "type" not in data:
             data = dict(data)  # avoid mutating the original
             if "agent_name" in data:

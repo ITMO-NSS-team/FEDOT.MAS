@@ -4,8 +4,8 @@ import functools
 
 from google.adk.tools.mcp_tool import (
     McpToolset,
-    SseConnectionParams,
     StdioConnectionParams,
+    StreamableHTTPConnectionParams,
 )
 from mcp import StdioServerParameters
 
@@ -45,7 +45,7 @@ def create_toolset(
                 timeout=cfg.timeout,
             )
         case HttpMCPServer():
-            params = SseConnectionParams(
+            params = StreamableHTTPConnectionParams(
                 url=cfg.url,
                 headers=cfg.headers or None,
                 timeout=cfg.timeout,

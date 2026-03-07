@@ -4,7 +4,7 @@ from fedotmas import MAW, MAWConfig
 from fedotmas.maw.models import MAWAgentConfig, MAWStepConfig
 from fedotmas.common.logging import get_logger
 
-_log = get_logger("fedotmas.examples.tool_integration")
+_log = get_logger("fedotmas.examples.maw.edge_cases.tool_integration")
 
 META_MODEL = "openai/gpt-oss-120b"
 MODEL = "openai/gpt-4o-mini"

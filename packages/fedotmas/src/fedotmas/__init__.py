@@ -5,6 +5,16 @@ from fedotmas.mas.mas import MAS
 from fedotmas.mas.models import MASConfig
 from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import MAWConfig
+from fedotmas.mcp._config import (
+    HttpMCPServer,
+    MCPServerConfig,
+    StdioMCPServer,
+    directory_server,
+    http_server,
+    npx_server,
+    uvx_server,
+    workspace_server,
+)
 
 
 # litellm's Message.__init__ deletes None-valued attributes from instances,
@@ -38,4 +48,12 @@ __all__ = [
     "MASConfig",
     "MAWConfig",
     "ModelConfig",
+    "HttpMCPServer",
+    "StdioMCPServer",
+    "MCPServerConfig",
+    "http_server",
+    "directory_server",
+    "workspace_server",
+    "npx_server",
+    "uvx_server",
 ]

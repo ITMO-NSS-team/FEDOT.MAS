@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 from typing import TypeAlias
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
@@ -134,13 +135,11 @@ def _inject_exit_loop(children: list[BaseAgent]) -> None:
 WORKFLOW_PREFIXES = ("seq_", "par_", "loop_")
 
 
-_node_counter = 0
+_node_counter = itertools.count(1)
 
 
 def _next_id() -> int:
-    global _node_counter  # noqa: PLW0603
-    _node_counter += 1
-    return _node_counter
+    return next(_node_counter)
 
 
 def _seq_name(_children: list[BaseAgent]) -> str:

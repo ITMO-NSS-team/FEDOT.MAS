@@ -63,6 +63,16 @@ def get_meta_temperature() -> float:
         ) from None
 
 
+def validate_model_name(model: str | None) -> str | None:
+    """Validate that a model name includes a provider prefix."""
+    if model is not None and "/" not in model:
+        raise ValueError(
+            f"Model '{model}' must include a provider prefix, "
+            f"e.g. 'openai/{model}' or 'openrouter/{model}'"
+        )
+    return model
+
+
 def get_max_loop_iterations() -> int:
     env = os.getenv("FEDOTMAS_DEFAULT_MAX_LOOP_ITERATIONS")
     if not env:
