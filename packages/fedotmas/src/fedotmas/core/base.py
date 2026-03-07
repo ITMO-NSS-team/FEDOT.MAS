@@ -11,7 +11,7 @@ from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger, setup_logging
-from fedotmas.config.settings import ModelConfig, resolve_model_config
+from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.core.runner import PipelineResult, run_pipeline
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
 from fedotmas.meta.agent import MetaAgentResult

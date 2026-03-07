@@ -5,7 +5,7 @@ from __future__ import annotations
 from google.adk.models.lite_llm import LiteLlm
 
 from fedotmas.common.llm import _ProxyClient, make_llm
-from fedotmas.config.settings import ModelConfig, resolve_model_config
+from fedotmas._settings import ModelConfig, resolve_model_config
 
 
 class TestMakeLlm:

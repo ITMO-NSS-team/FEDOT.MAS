@@ -8,7 +8,7 @@ from google.adk.models.base_llm import BaseLlm
 from google.adk.tools.exit_loop_tool import exit_loop
 
 from fedotmas.common.logging import get_logger
-from fedotmas.config.settings import (
+from fedotmas._settings import (
     DEFAULT_META_MODEL,
     ModelConfig,
     get_max_loop_iterations,

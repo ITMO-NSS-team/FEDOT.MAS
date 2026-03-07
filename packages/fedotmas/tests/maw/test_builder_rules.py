@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from fedotmas.config.settings import ModelConfig
+from fedotmas._settings import ModelConfig
 from fedotmas.maw.builder import (
     _inject_exit_loop,
     _resolve_llm,

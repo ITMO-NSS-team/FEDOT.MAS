@@ -9,7 +9,7 @@ from openai import AsyncOpenAI
 if TYPE_CHECKING:
     from google.adk.models.base_llm import BaseLlm
 
-    from fedotmas.config.settings import ModelConfig
+    from fedotmas._settings import ModelConfig
 
 __all__ = ["make_llm"]
 

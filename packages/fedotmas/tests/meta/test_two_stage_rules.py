@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from fedotmas.config.settings import ModelConfig
+from fedotmas._settings import ModelConfig
 from fedotmas.meta._adk_runner import LLMCallResult
 from fedotmas.maw.models import AgentPoolConfig, MAWConfig
 

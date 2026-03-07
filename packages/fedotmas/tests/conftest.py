@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fedotmas.config.settings import ModelConfig
+from fedotmas._settings import ModelConfig
 
 
 @pytest.fixture()

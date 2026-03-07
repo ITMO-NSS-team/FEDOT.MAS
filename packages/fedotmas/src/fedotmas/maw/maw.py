@@ -3,7 +3,7 @@ from __future__ import annotations
 from google.adk.agents.base_agent import BaseAgent
 
 from fedotmas.common.logging import get_logger
-from fedotmas.config.settings import resolve_model_config
+from fedotmas._settings import resolve_model_config
 from fedotmas.core.base import BaseMAS
 from fedotmas.maw._ppline_utils import print_tree
 from fedotmas.maw.builder import build
@@ -79,7 +79,7 @@ class MAW(BaseMAS[MAWConfig]):
 
     async def _generate_two_stage(self, task: str) -> MetaAgentResult:
         """Run pool generation then pipeline generation."""
-        from fedotmas.config.settings import get_worker_models
+        from fedotmas._settings import get_worker_models
 
         _log.info("Stage 1/2: generating agent pool")
         pool_gen = PoolGenerator(

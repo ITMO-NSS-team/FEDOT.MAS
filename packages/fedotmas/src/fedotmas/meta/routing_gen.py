@@ -3,7 +3,7 @@ from __future__ import annotations
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
-from fedotmas.config.settings import ModelConfig
+from fedotmas._settings import ModelConfig
 from fedotmas.mas.models import MASConfig
 from fedotmas.mcp import MCPServerConfig, get_server_descriptions
 from fedotmas.meta._adk_runner import run_meta_agent_call

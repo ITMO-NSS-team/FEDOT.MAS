@@ -1,6 +1,6 @@
 import warnings
 
-from fedotmas.config.settings import ModelConfig
+from fedotmas._settings import ModelConfig
 from fedotmas.mas.mas import MAS
 from fedotmas.mas.models import MASConfig
 from fedotmas.maw.maw import MAW

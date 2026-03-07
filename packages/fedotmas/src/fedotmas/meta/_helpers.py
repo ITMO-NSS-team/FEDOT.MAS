@@ -4,7 +4,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from fedotmas.config.settings import (
+from fedotmas._settings import (
     ModelConfig,
     get_meta_model,
     get_meta_temperature,
