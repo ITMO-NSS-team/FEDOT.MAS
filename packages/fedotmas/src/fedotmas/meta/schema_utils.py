@@ -34,14 +34,14 @@ def _patch_object(obj: dict) -> None:
 def inject_model_enum(schema: dict, allowed_models: list[str]) -> dict:
     """Add ``enum`` constraint to the ``model`` field in agent definitions.
 
-    Looks for ``AgentConfig`` and ``AgentPoolEntry`` in ``$defs`` and injects
+    Looks for ``MAWAgentConfig`` and ``AgentPoolEntry`` in ``$defs`` and injects
     ``enum: allowed_models`` into their ``model`` property, preserving nullable
     (``anyOf``) wrappers.
 
     Returns a patched copy; the original is not mutated.
     """
     schema = copy.deepcopy(schema)
-    target_defs = ("AgentConfig", "AgentPoolEntry")
+    target_defs = ("MAWAgentConfig", "AgentPoolEntry", "MASAgentConfig")
 
     for def_name, definition in schema.get("$defs", {}).items():
         if def_name not in target_defs:

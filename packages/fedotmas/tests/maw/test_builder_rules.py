@@ -5,22 +5,22 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from fedotmas.config.settings import ModelConfig
-from fedotmas.pipeline.builder import (
+from fedotmas.maw.builder import (
     _inject_exit_loop,
     _resolve_llm,
     build,
 )
-from fedotmas.pipeline.models import AgentConfig, PipelineConfig
+from fedotmas.maw.models import MAWAgentConfig, MAWConfig
 
 
-# ---- Rules 1-3: text normalization (via AgentConfig model_validator) ----
+# ---- Rules 1-3: text normalization (via MAWAgentConfig model_validator) ----
 
 
 class TestNormalizeAngleBrackets:
-    """Rule 1: <var> → {var} (via AgentConfig)."""
+    """Rule 1: <var> → {var} (via MAWAgentConfig)."""
 
-    def _make(self, instruction: str) -> AgentConfig:
-        return AgentConfig(name="t", instruction=instruction, output_key="k")
+    def _make(self, instruction: str) -> MAWAgentConfig:
+        return MAWAgentConfig(name="t", instruction=instruction, output_key="k")
 
     def test_single_var(self):
         assert self._make("<var>").instruction == "{var?}"
@@ -33,10 +33,10 @@ class TestNormalizeAngleBrackets:
 
 
 class TestMakeVarsOptional:
-    """Rule 2: {var} → {var?} (via AgentConfig)."""
+    """Rule 2: {var} → {var?} (via MAWAgentConfig)."""
 
-    def _make(self, instruction: str) -> AgentConfig:
-        return AgentConfig(name="t", instruction=instruction, output_key="k")
+    def _make(self, instruction: str) -> MAWAgentConfig:
+        return MAWAgentConfig(name="t", instruction=instruction, output_key="k")
 
     def test_single_var(self):
         assert self._make("{foo}").instruction == "{foo?}"
@@ -53,10 +53,10 @@ class TestMakeVarsOptional:
 
 
 class TestAngleThenOptionalCombo:
-    """Rule 3: <var> → {var} → {var?} chain (via AgentConfig)."""
+    """Rule 3: <var> → {var} → {var?} chain (via MAWAgentConfig)."""
 
     def test_chain(self):
-        cfg = AgentConfig(
+        cfg = MAWAgentConfig(
             name="t",
             instruction="Process <input> and <context>",
             output_key="k",
@@ -64,14 +64,14 @@ class TestAngleThenOptionalCombo:
         assert cfg.instruction == "Process {input?} and {context?}"
 
 
-# ---- Rules 4-5: model normalization (via AgentConfig) ----
+# ---- Rules 4-5: model normalization (via MAWAgentConfig) ----
 
 
 class TestNormalizeModelNameDefault:
     """Rule 4: None/empty model → stays None (resolved later by _resolve_llm)."""
 
     def test_none_model(self):
-        cfg = AgentConfig(name="t", instruction="x", output_key="k", model=None)
+        cfg = MAWAgentConfig(name="t", instruction="x", output_key="k", model=None)
         assert cfg.model is None
 
     def test_resolve_none_gives_default(self):
@@ -80,20 +80,20 @@ class TestNormalizeModelNameDefault:
 
 
 class TestNormalizeModelNamePrefix:
-    """Rule 5: bare model name gets openai/ prefix (via AgentConfig)."""
+    """Rule 5: bare model name gets openai/ prefix (via MAWAgentConfig)."""
 
     def test_bare_name(self):
-        cfg = AgentConfig(name="t", instruction="x", output_key="k", model="gpt-4o")
+        cfg = MAWAgentConfig(name="t", instruction="x", output_key="k", model="gpt-4o")
         assert cfg.model == "openai/gpt-4o"
 
     def test_already_prefixed(self):
-        cfg = AgentConfig(
+        cfg = MAWAgentConfig(
             name="t", instruction="x", output_key="k", model="openai/gpt-4o"
         )
         assert cfg.model == "openai/gpt-4o"
 
     def test_other_provider(self):
-        cfg = AgentConfig(
+        cfg = MAWAgentConfig(
             name="t", instruction="x", output_key="k", model="gemini/flash"
         )
         assert cfg.model == "gemini/flash"
@@ -105,13 +105,13 @@ class TestNormalizeModelNamePrefix:
 class TestResolveLlmCustomEndpoint:
     """Rule 6: model in worker_models → delegates to make_llm factory."""
 
-    @patch("fedotmas.pipeline.builder.make_llm")
+    @patch("fedotmas.maw.builder.make_llm")
     def test_custom_endpoint(self, mock_factory):
         cfg = ModelConfig(model="my-model", api_base="http://localhost:9090")
         _resolve_llm("my-model", {"my-model": cfg})
         mock_factory.assert_called_once_with(cfg)
 
-    @patch("fedotmas.pipeline.builder.make_llm")
+    @patch("fedotmas.maw.builder.make_llm")
     def test_custom_with_api_key(self, mock_factory):
         cfg = ModelConfig(model="m", api_base="http://x", api_key="sk-123")
         _resolve_llm("m", {"m": cfg})
@@ -195,9 +195,9 @@ class TestInjectExitLoop:
 
 
 class TestBuildSequentialTree:
-    """Rule 11: PipelineConfig → SequentialAgent with children."""
+    """Rule 11: MAWConfig → SequentialAgent with children."""
 
-    @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
+    @patch("fedotmas.maw.builder.create_toolset", return_value=[])
     def test_sequential(self, _mock_toolset, simple_pipeline_config):
         root = build(simple_pipeline_config)
         from google.adk.agents import SequentialAgent
@@ -211,9 +211,9 @@ class TestBuildSequentialTree:
 class TestBuildParallelTree:
     """Rule 12: parallel type → ParallelAgent."""
 
-    @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
+    @patch("fedotmas.maw.builder.create_toolset", return_value=[])
     def test_parallel(self, _mock_toolset):
-        config = PipelineConfig.model_validate(
+        config = MAWConfig.model_validate(
             {
                 "agents": [
                     {"name": "a", "instruction": "do a", "output_key": "oa"},
@@ -238,9 +238,9 @@ class TestBuildParallelTree:
 class TestBuildNestedSeqPar:
     """Rule 13: nested sequential → parallel."""
 
-    @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
+    @patch("fedotmas.maw.builder.create_toolset", return_value=[])
     def test_nested(self, _mock_toolset):
-        config = PipelineConfig.model_validate(
+        config = MAWConfig.model_validate(
             {
                 "agents": [
                     {"name": "a", "instruction": "do a", "output_key": "oa"},
@@ -273,9 +273,9 @@ class TestBuildNestedSeqPar:
 class TestBuildLoopMaxIterations:
     """Rule 14: loop with explicit max_iterations."""
 
-    @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
+    @patch("fedotmas.maw.builder.create_toolset", return_value=[])
     def test_loop_explicit(self, _mock_toolset):
-        config = PipelineConfig.model_validate(
+        config = MAWConfig.model_validate(
             {
                 "agents": [
                     {
@@ -303,10 +303,10 @@ class TestBuildLoopMaxIterations:
 class TestBuildLoopDefaultMaxIterations:
     """Rule 15: loop without max_iterations → settings default."""
 
-    @patch("fedotmas.pipeline.builder.create_toolset", return_value=[])
-    @patch("fedotmas.pipeline.builder.get_max_loop_iterations", return_value=10)
+    @patch("fedotmas.maw.builder.create_toolset", return_value=[])
+    @patch("fedotmas.maw.builder.get_max_loop_iterations", return_value=10)
     def test_loop_default(self, _mock_max, _mock_toolset):
-        config = PipelineConfig.model_validate(
+        config = MAWConfig.model_validate(
             {
                 "agents": [
                     {

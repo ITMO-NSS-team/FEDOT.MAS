@@ -1,36 +1,38 @@
 import asyncio
 import json
 
-from fedotmas import MAS, AgentConfig, PipelineConfig, StepConfig
+from fedotmas import MAW, MAWConfig
+from fedotmas.common.logging import get_logger
+from fedotmas.maw.models import MAWAgentConfig, MAWStepConfig
+
+_log = get_logger("fedotmas.examples.maw.basic_usage")
 
 
 async def full_auto():
-    mas = MAS(mcp_servers="all")
-    state = await mas.run("Explain the difference between TCP and UDP in 3 sentences")
-    print(json.dumps(state, indent=2, default=str))
+    maw = MAW(mcp_servers="all")
+    state = await maw.run("Explain the difference between TCP and UDP in 3 sentences")
+    _log.info("Result: {}", json.dumps(state, indent=2, default=str))
 
 
 async def two_step():
-    mas = MAS()
+    maw = MAW()
 
-    # meta-agent generates the pipeline config.
-    config = await mas.generate_config("Compare Python and Rust for CLI tools")
-    print(config.model_dump_json(indent=2))
+    config = await maw.generate_config("Compare Python and Rust for CLI tools")
+    _log.info("Config: {}", config.model_dump_json(indent=2))
 
-    # build the ADK agent tree and execute.
-    state = await mas.build_and_run(config, "Compare Python and Rust for CLI tools")
-    print(json.dumps(state, indent=2, default=str))
+    state = await maw.build_and_run(config, "Compare Python and Rust for CLI tools")
+    _log.info("Result: {}", json.dumps(state, indent=2, default=str))
 
 
 async def handcrafted():
-    config = PipelineConfig(
+    config = MAWConfig(
         agents=[
-            AgentConfig(
+            MAWAgentConfig(
                 name="researcher",
                 instruction="Research the topic: {user_query}. Provide key facts.",
                 output_key="research",
             ),
-            AgentConfig(
+            MAWAgentConfig(
                 name="writer",
                 instruction=(
                     "Write a concise summary based on the research:\n\n{research}"
@@ -38,34 +40,34 @@ async def handcrafted():
                 output_key="summary",
             ),
         ],
-        pipeline=StepConfig(
+        pipeline=MAWStepConfig(
             type="sequential",
             children=[
-                StepConfig(type="agent", agent_name="researcher"),
-                StepConfig(type="agent", agent_name="writer"),
+                MAWStepConfig(type="agent", agent_name="researcher"),
+                MAWStepConfig(type="agent", agent_name="writer"),
             ],
         ),
     )
 
-    mas = MAS()
-    state = await mas.build_and_run(config, "What is WebAssembly?")
-    print(state.get("summary", "(no summary produced)"))
+    maw = MAW()
+    state = await maw.build_and_run(config, "What is WebAssembly?")
+    _log.info("Summary: {}", state.get("summary", "(no summary produced)"))
 
 
 async def parallel_analysis():
-    config = PipelineConfig(
+    config = MAWConfig(
         agents=[
-            AgentConfig(
+            MAWAgentConfig(
                 name="pros_analyst",
                 instruction="List 3 key advantages of: {user_query}",
                 output_key="pros",
             ),
-            AgentConfig(
+            MAWAgentConfig(
                 name="cons_analyst",
                 instruction="List 3 key disadvantages of: {user_query}",
                 output_key="cons",
             ),
-            AgentConfig(
+            MAWAgentConfig(
                 name="synthesizer",
                 instruction=(
                     "Given these pros:\n{pros}\n\n"
@@ -75,30 +77,30 @@ async def parallel_analysis():
                 output_key="verdict",
             ),
         ],
-        pipeline=StepConfig(
+        pipeline=MAWStepConfig(
             type="sequential",
             children=[
-                StepConfig(
+                MAWStepConfig(
                     type="parallel",
                     children=[
-                        StepConfig(type="agent", agent_name="pros_analyst"),
-                        StepConfig(type="agent", agent_name="cons_analyst"),
+                        MAWStepConfig(type="agent", agent_name="pros_analyst"),
+                        MAWStepConfig(type="agent", agent_name="cons_analyst"),
                     ],
                 ),
-                StepConfig(type="agent", agent_name="synthesizer"),
+                MAWStepConfig(type="agent", agent_name="synthesizer"),
             ],
         ),
     )
 
-    mas = MAS()
-    state = await mas.build_and_run(config, "Microservices architecture")
-    print(state.get("verdict", "(no verdict produced)"))
+    maw = MAW()
+    state = await maw.build_and_run(config, "Microservices architecture")
+    _log.info("Verdict: {}", state.get("verdict", "(no verdict produced)"))
 
 
 async def loop_with_critic():
-    config = PipelineConfig(
+    config = MAWConfig(
         agents=[
-            AgentConfig(
+            MAWAgentConfig(
                 name="writer",
                 instruction=(
                     "Write a short poem about: {user_query}.\n"
@@ -106,7 +108,7 @@ async def loop_with_critic():
                 ),
                 output_key="draft",
             ),
-            AgentConfig(
+            MAWAgentConfig(
                 name="critic",
                 instruction=(
                     "Review this poem:\n{draft}\n\n"
@@ -116,19 +118,19 @@ async def loop_with_critic():
                 output_key="feedback",
             ),
         ],
-        pipeline=StepConfig(
+        pipeline=MAWStepConfig(
             type="loop",
             max_iterations=3,
             children=[
-                StepConfig(type="agent", agent_name="writer"),
-                StepConfig(type="agent", agent_name="critic"),
+                MAWStepConfig(type="agent", agent_name="writer"),
+                MAWStepConfig(type="agent", agent_name="critic"),
             ],
         ),
     )
 
-    mas = MAS()
-    state = await mas.build_and_run(config, "the ocean at sunset")
-    print(state.get("draft", "(no draft produced)"))
+    maw = MAW()
+    state = await maw.build_and_run(config, "the ocean at sunset")
+    _log.info("Draft: {}", state.get("draft", "(no draft produced)"))
 
 
 if __name__ == "__main__":

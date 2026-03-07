@@ -10,7 +10,7 @@ import pytest
 
 from google.adk.plugins import BasePlugin
 
-from fedotmas.main import MAS
+from fedotmas.maw.maw import MAW
 from fedotmas.plugins import LoggingPlugin
 
 
@@ -67,15 +67,15 @@ class FakeEvent:
 
 
 class TestAutoAddLoggingPlugin:
-    """MAS() auto-injects LoggingPlugin."""
+    """MAW() auto-injects LoggingPlugin."""
 
     def test_default_has_logging_plugin(self):
-        mas = MAS()
+        mas = MAW()
         assert any(isinstance(p, LoggingPlugin) for p in mas._plugins)
 
     def test_no_duplicate(self):
         lp = LoggingPlugin()
-        mas = MAS(plugins=[lp])
+        mas = MAW(plugins=[lp])
         logging_plugins = [p for p in mas._plugins if isinstance(p, LoggingPlugin)]
         assert len(logging_plugins) == 1
         assert logging_plugins[0] is lp
@@ -86,7 +86,7 @@ class TestAutoAddLoggingPlugin:
                 super().__init__(name="mock")
 
         mp = MockPlugin()
-        mas = MAS(plugins=[mp])
+        mas = MAW(plugins=[mp])
         assert isinstance(mas._plugins[0], LoggingPlugin)
         assert mas._plugins[1] is mp
 

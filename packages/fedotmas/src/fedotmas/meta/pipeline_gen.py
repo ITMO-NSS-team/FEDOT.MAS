@@ -6,15 +6,19 @@ from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import ModelConfig
 from fedotmas.mcp import MCPServerConfig, get_server_descriptions
 from fedotmas.meta._adk_runner import LLMCallResult, run_meta_agent_call
-from fedotmas.meta._helpers import format_server_descriptions, parse_llm_output, resolve_meta_and_workers
+from fedotmas.meta._helpers import (
+    format_server_descriptions,
+    parse_llm_output,
+    resolve_meta_and_workers,
+)
 from fedotmas.meta.prompts import PIPELINE_AGENT_SYSTEM_PROMPT
-from fedotmas.pipeline.models import AgentPoolConfig, PipelineConfig
+from fedotmas.maw.models import AgentPoolConfig, MAWConfig
 
 _log = get_logger("fedotmas.meta.pipeline_gen")
 
 
 class PipelineGenerator:
-    """Generate a PipelineConfig with wiring given an agent pool."""
+    """Generate a MAWConfig with wiring given an agent pool."""
 
     def __init__(
         self,
@@ -34,8 +38,8 @@ class PipelineGenerator:
         self._max_retries = max_retries
         self.result: LLMCallResult | None = None
 
-    async def generate(self, task: str, pool: AgentPoolConfig) -> PipelineConfig:
-        """Run LLM to produce ``PipelineConfig`` constrained to *pool* agents."""
+    async def generate(self, task: str, pool: AgentPoolConfig) -> MAWConfig:
+        """Run LLM to produce ``MAWConfig`` constrained to *pool* agents."""
         descriptions = get_server_descriptions(self._mcp_registry)
         desc_text = format_server_descriptions(descriptions)
         models_text = "\n".join(f"- `{m.model}`" for m in self._resolved_workers)
@@ -52,7 +56,7 @@ class PipelineGenerator:
             agent_name="pipeline_generator",
             instruction=instruction,
             user_message=user_msg,
-            output_schema=PipelineConfig,
+            output_schema=MAWConfig,
             output_key="pipeline_config",
             model=self._resolved_meta,
             temperature=self._temperature,
@@ -61,7 +65,7 @@ class PipelineGenerator:
             allowed_models=[m.model for m in self._resolved_workers],
         )
 
-        config = parse_llm_output(self.result.raw_output, PipelineConfig)
+        config = parse_llm_output(self.result.raw_output, MAWConfig)
 
         self._validate_against_pool(config, pool)
 
@@ -74,7 +78,7 @@ class PipelineGenerator:
         return config
 
     @staticmethod
-    def _validate_against_pool(config: PipelineConfig, pool: AgentPoolConfig) -> None:
+    def _validate_against_pool(config: MAWConfig, pool: AgentPoolConfig) -> None:
         """Raise ``ValueError`` if *config* references agents not in *pool*."""
         pool_names = {a.name for a in pool.agents}
         config_names = {a.name for a in config.agents}
@@ -98,4 +102,3 @@ class PipelineGenerator:
                 parts.append(f"  tools: {', '.join(a.tools)}")
             lines.append("\n".join(parts))
         return "\n\n".join(lines)
-

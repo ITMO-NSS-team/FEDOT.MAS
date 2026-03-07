@@ -6,7 +6,7 @@ import pytest
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.apps.app import App
 
-from fedotmas.serving import _AgentLoader, serve
+from fedotmas._serving import _AgentLoader, serve
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ class TestLoaderRegister:
 # serve
 # ---------------------------------------------------------------------------
 
-_PATCH_TARGET = "fedotmas.serving.get_fast_api_app"
+_PATCH_TARGET = "fedotmas._serving.get_fast_api_app"
 
 
 class TestCreateApiApp:

@@ -6,9 +6,13 @@ from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import ModelConfig
 from fedotmas.mcp import MCPServerConfig, get_server_descriptions
 from fedotmas.meta._adk_runner import LLMCallResult, run_meta_agent_call
-from fedotmas.meta._helpers import format_server_descriptions, parse_llm_output, resolve_meta_and_workers
+from fedotmas.meta._helpers import (
+    format_server_descriptions,
+    parse_llm_output,
+    resolve_meta_and_workers,
+)
 from fedotmas.meta.prompts import POOL_AGENT_SYSTEM_PROMPT
-from fedotmas.pipeline.models import AgentPoolConfig
+from fedotmas.maw.models import AgentPoolConfig
 
 _log = get_logger("fedotmas.meta.pool_gen")
 

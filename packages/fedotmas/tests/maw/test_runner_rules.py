@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fedotmas.pipeline.runner import PipelineResult, run_pipeline
+from fedotmas.core.runner import PipelineResult, run_pipeline
 
 from .conftest import FakeActions, FakeEvent, FakeSession, FakeUsageMetadata
 
@@ -49,8 +49,8 @@ def _patch_runner(events: list[FakeEvent]):
             self.root_agent = root_agent
             self.plugins = plugins or []
 
-    runner_patch = patch("fedotmas.pipeline.runner.Runner", side_effect=fake_runner_cm)
-    app_patch = patch("fedotmas.pipeline.runner.App", _FakeApp)
+    runner_patch = patch("fedotmas.core.runner.Runner", side_effect=fake_runner_cm)
+    app_patch = patch("fedotmas.core.runner.App", _FakeApp)
 
     from contextlib import ExitStack
 

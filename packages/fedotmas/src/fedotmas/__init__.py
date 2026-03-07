@@ -1,22 +1,11 @@
 import warnings
 
-from google.adk.apps.app import App
-
 from fedotmas.config.settings import ModelConfig
-from fedotmas.main import MAS
-from fedotmas.meta.pipeline_gen import PipelineGenerator
-from fedotmas.meta.pool_gen import PoolGenerator
-from fedotmas.pipeline.builder import AgentTree
-from fedotmas.pipeline.models import (
-    AgentConfig,
-    AgentPoolConfig,
-    AgentPoolEntry,
-    PipelineConfig,
-    StepConfig,
-)
-from fedotmas.pipeline.runner import PipelineResult
+from fedotmas.mas.mas import MAS
+from fedotmas.mas.models import MASConfig
+from fedotmas.maw.maw import MAW
+from fedotmas.maw.models import MAWConfig
 from fedotmas.plugins import LoggingPlugin
-from fedotmas.serving import serve
 
 # litellm's Message.__init__ deletes None-valued attributes from instances,
 # causing Pydantic to warn about missing fields during serialization.
@@ -45,17 +34,9 @@ warnings.filterwarnings(
 
 __all__ = [
     "MAS",
-    "App",
-    "AgentTree",
-    "LoggingPlugin",
+    "MAW",
+    "MASConfig",
+    "MAWConfig",
     "ModelConfig",
-    "AgentConfig",
-    "AgentPoolConfig",
-    "AgentPoolEntry",
-    "PipelineConfig",
-    "PipelineGenerator",
-    "PipelineResult",
-    "PoolGenerator",
-    "StepConfig",
-    "serve",
+    "LoggingPlugin",
 ]

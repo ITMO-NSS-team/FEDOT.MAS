@@ -7,14 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import BaseModel
 
-from fedotmas.config.settings import ModelConfig
 from fedotmas.meta._adk_runner import _make_schema_callback, run_meta_agent_call
-from fedotmas.meta.schema_utils import needs_strict_schema
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class _DummySchema(BaseModel):
     name: str
@@ -34,20 +33,30 @@ def _make_llm_request(*, model: str = "openai/gpt-4o", response_schema=None):
 # Callback rules
 # ---------------------------------------------------------------------------
 
+
 class TestCallbackInjectsEnum:
     """Rule 1: callback injects enum when allowed_models provided."""
 
     def test_enum_present(self, allowed_models):
         cb = _make_schema_callback(allowed_models)
-        req = _make_llm_request(response_schema={"$defs": {
-            "AgentConfig": {
+        req = _make_llm_request(
+            response_schema={
+                "$defs": {
+                    "MAWAgentConfig": {
+                        "type": "object",
+                        "properties": {"model": {"type": "string"}},
+                    },
+                },
                 "type": "object",
-                "properties": {"model": {"type": "string"}},
-            },
-        }, "type": "object", "properties": {}})
+                "properties": {},
+            }
+        )
         cb(callback_context=None, llm_request=req)
         schema = req.config.response_schema
-        assert schema["$defs"]["AgentConfig"]["properties"]["model"]["enum"] == allowed_models
+        assert (
+            schema["$defs"]["MAWAgentConfig"]["properties"]["model"]["enum"]
+            == allowed_models
+        )
 
 
 class TestCallbackNoEnumWhenNone:
@@ -55,14 +64,25 @@ class TestCallbackNoEnumWhenNone:
 
     def test_no_enum(self):
         cb = _make_schema_callback(None)
-        req = _make_llm_request(response_schema={"$defs": {
-            "AgentConfig": {
+        req = _make_llm_request(
+            response_schema={
+                "$defs": {
+                    "MAWAgentConfig": {
+                        "type": "object",
+                        "properties": {"model": {"type": "string"}},
+                    },
+                },
                 "type": "object",
-                "properties": {"model": {"type": "string"}},
-            },
-        }, "type": "object", "properties": {}})
+                "properties": {},
+            }
+        )
         cb(callback_context=None, llm_request=req)
-        assert "enum" not in req.config.response_schema["$defs"]["AgentConfig"]["properties"]["model"]
+        assert (
+            "enum"
+            not in req.config.response_schema["$defs"]["MAWAgentConfig"]["properties"][
+                "model"
+            ]
+        )
 
 
 class TestCallbackConvertsPydantic:
@@ -95,6 +115,7 @@ class TestCallbackSkipsStrictForGemini:
 # Retry rules
 # ---------------------------------------------------------------------------
 
+
 class TestRetryOnTransientError:
     """Rule 5: retry succeeds after transient error."""
 
@@ -107,6 +128,7 @@ class TestRetryOnTransientError:
             if call_count == 1:
                 raise RuntimeError("transient")
             from fedotmas.meta._adk_runner import LLMCallResult
+
             return LLMCallResult(
                 raw_output={"result": "ok"},
                 prompt_tokens=10,
@@ -115,7 +137,10 @@ class TestRetryOnTransientError:
             )
 
         with (
-            patch("fedotmas.meta._adk_runner._execute_meta_call", side_effect=_fake_execute),
+            patch(
+                "fedotmas.meta._adk_runner._execute_meta_call",
+                side_effect=_fake_execute,
+            ),
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):
             result = await run_meta_agent_call(
@@ -140,7 +165,9 @@ class TestRetriesExhausted:
             raise RuntimeError("permanent failure")
 
         with (
-            patch("fedotmas.meta._adk_runner._execute_meta_call", side_effect=_always_fail),
+            patch(
+                "fedotmas.meta._adk_runner._execute_meta_call", side_effect=_always_fail
+            ),
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):
             with pytest.raises(RuntimeError, match="permanent failure"):
@@ -159,6 +186,7 @@ class TestRetriesExhausted:
 # ---------------------------------------------------------------------------
 # Session error rules
 # ---------------------------------------------------------------------------
+
 
 class TestSessionLost:
     """Rule 7: get_session returning None raises RuntimeError."""
@@ -205,7 +233,6 @@ class TestOutputKeyMissing:
 
     async def test_output_key_missing(self, mock_session_service, model_config):
         # Session exists but state is empty → key missing
-        from fedotmas.meta._adk_runner import LLMCallResult
 
         fake_event = MagicMock()
         fake_event.partial = False

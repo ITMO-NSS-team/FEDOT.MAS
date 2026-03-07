@@ -14,7 +14,7 @@ from fedotmas.meta.schema_utils import (
 
 
 def _make_base_schema(*, nullable_model: bool = False) -> dict:
-    """Build a minimal JSON Schema with AgentConfig and AgentPoolEntry defs."""
+    """Build a minimal JSON Schema with MAWAgentConfig and AgentPoolEntry defs."""
     if nullable_model:
         model_prop = {"anyOf": [{"type": "string"}, {"type": "null"}]}
     else:
@@ -22,7 +22,7 @@ def _make_base_schema(*, nullable_model: bool = False) -> dict:
 
     return {
         "$defs": {
-            "AgentConfig": {
+            "MAWAgentConfig": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
@@ -44,7 +44,7 @@ def _make_base_schema(*, nullable_model: bool = False) -> dict:
         "properties": {
             "agents": {
                 "type": "array",
-                "items": {"$ref": "#/$defs/AgentConfig"},
+                "items": {"$ref": "#/$defs/MAWAgentConfig"},
             },
         },
     }
@@ -56,7 +56,7 @@ class TestInjectModelEnum:
     def test_enum_injected_into_agent_config(self, allowed_models):
         schema = _make_base_schema()
         result = inject_model_enum(schema, allowed_models)
-        model_prop = result["$defs"]["AgentConfig"]["properties"]["model"]
+        model_prop = result["$defs"]["MAWAgentConfig"]["properties"]["model"]
         assert model_prop["enum"] == allowed_models
 
     def test_enum_injected_into_agent_pool_entry(self, allowed_models):
@@ -74,7 +74,7 @@ class TestInjectModelEnum:
     def test_nullable_model_enum_on_string_variant(self, allowed_models):
         schema = _make_base_schema(nullable_model=True)
         result = inject_model_enum(schema, allowed_models)
-        any_of = result["$defs"]["AgentConfig"]["properties"]["model"]["anyOf"]
+        any_of = result["$defs"]["MAWAgentConfig"]["properties"]["model"]["anyOf"]
         string_variant = next(v for v in any_of if v.get("type") == "string")
         null_variant = next(v for v in any_of if v.get("type") == "null")
         assert string_variant["enum"] == allowed_models
@@ -87,7 +87,7 @@ class TestPatchSchemaStrict:
     def test_adds_additional_properties_and_required(self):
         schema = _make_base_schema()
         result = patch_schema_openai_strict(schema)
-        agent_def = result["$defs"]["AgentConfig"]
+        agent_def = result["$defs"]["MAWAgentConfig"]
         assert agent_def["additionalProperties"] is False
         assert set(agent_def["required"]) == set(agent_def["properties"].keys())
 
@@ -101,19 +101,25 @@ class TestPatchSchemaStrict:
 class TestNeedsStrictSchema:
     """Rule 7: Gemini whitelist."""
 
-    @pytest.mark.parametrize("model", [
-        "gemini/gemini-2.0-flash",
-        "gemini-2.0-flash",
-        "vertex_ai/gemini-2.0-flash",
-    ])
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gemini/gemini-2.0-flash",
+            "gemini-2.0-flash",
+            "vertex_ai/gemini-2.0-flash",
+        ],
+    )
     def test_gemini_no_strict(self, model):
         assert needs_strict_schema(model) is False
 
-    @pytest.mark.parametrize("model", [
-        "openai/gpt-4o",
-        "anthropic/claude-sonnet-4-20250514",
-        "deepseek/deepseek-chat",
-    ])
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "openai/gpt-4o",
+            "anthropic/claude-sonnet-4-20250514",
+            "deepseek/deepseek-chat",
+        ],
+    )
     def test_non_gemini_needs_strict(self, model):
         assert needs_strict_schema(model) is True
 
@@ -125,6 +131,6 @@ class TestEnumPlusStrictCombo:
         schema = _make_base_schema()
         schema = inject_model_enum(schema, allowed_models)
         result = patch_schema_openai_strict(schema)
-        model_prop = result["$defs"]["AgentConfig"]["properties"]["model"]
+        model_prop = result["$defs"]["MAWAgentConfig"]["properties"]["model"]
         assert model_prop["enum"] == allowed_models
-        assert result["$defs"]["AgentConfig"]["additionalProperties"] is False
+        assert result["$defs"]["MAWAgentConfig"]["additionalProperties"] is False

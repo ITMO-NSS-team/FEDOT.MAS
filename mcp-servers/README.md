@@ -13,10 +13,10 @@ If you leave `mcp_servers` at the default `None`, no discovery happens and no se
 If `fedotmas` is installed from PyPI (outside a workspace), discovery finds no root and returns an empty registry. You can still use servers by passing a config dict directly or by pointing `discover_servers()` at a directory with the same layout:
 
 ```python
-from fedotmas import MAS
+from fedotmas import MAW
 from fedotmas.mcp import discover_servers
 
-mas = MAS(mcp_servers=discover_servers("/path/to/my-servers"))
+maw = MAW(mcp_servers=discover_servers("/path/to/my-servers"))
 ```
 
 ### Adding a new MCP server
@@ -74,10 +74,10 @@ from fedotmas.mcp import (
 #### HTTP/SSE (remote server)
 
 ```python
-from fedotmas import MAS
+from fedotmas import MAW
 from fedotmas.mcp import http_server
 
-mas = MAS(mcp_servers={
+maw = MAW(mcp_servers={
     "my-remote-server": http_server(
         "https://mcp.example.com/sse",
         headers={"Authorization": "Bearer <token>"},
@@ -91,10 +91,10 @@ mas = MAS(mcp_servers={
 Any MCP server that speaks stdio works with `docker run -i`. Here is an example with the [MongoDB MCP server](https://hub.docker.com/mcp/server/mongodb/overview):
 
 ```python
-from fedotmas import MAS
+from fedotmas import MAW
 from fedotmas.mcp import StdioMCPServer
 
-mas = MAS(mcp_servers={
+maw = MAW(mcp_servers={
     "mongodb": StdioMCPServer(
         command="docker",
         args=(
@@ -116,7 +116,7 @@ mas = MAS(mcp_servers={
 You can combine auto-discovered, remote, and Docker servers in one registry:
 
 ```python
-from fedotmas import MAS
+from fedotmas import MAW
 from fedotmas.mcp import StdioMCPServer, http_server, discover_servers
 
 # Start with auto-discovered workspace servers
@@ -136,5 +136,5 @@ servers["mongodb"] = StdioMCPServer(
     description="MongoDB access",
 )
 
-mas = MAS(mcp_servers=servers)
+maw = MAW(mcp_servers=servers)
 ```

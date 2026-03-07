@@ -203,7 +203,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 
 ## OUTPUT FORMAT
 
-Respond with ONLY valid JSON matching the PipelineConfig schema. No markdown fencing, no explanations — just the JSON object.
+Respond with ONLY valid JSON matching the MAWConfig schema. No markdown fencing, no explanations — just the JSON object.
 """)
 
 # ---------------------------------------------------------------------------
@@ -325,7 +325,7 @@ You are given:
 1. A user task.
 2. A pre-defined **agent pool** — the set of agents available to you.
 
-Your job is to produce a complete PipelineConfig JSON that wires these agents into an executable pipeline tree.
+Your job is to produce a complete MAWConfig JSON that wires these agents into an executable pipeline tree.
 
 ---
 
@@ -503,5 +503,5 @@ Use single curly braces around the state key name. In the examples below, angle 
 
 ## OUTPUT FORMAT
 
-Respond with ONLY valid JSON matching the PipelineConfig schema. No markdown fencing, no explanations — just the JSON object.
+Respond with ONLY valid JSON matching the MAWConfig schema. No markdown fencing, no explanations — just the JSON object.
 """)

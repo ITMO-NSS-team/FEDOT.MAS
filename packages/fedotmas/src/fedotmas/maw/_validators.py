@@ -5,12 +5,12 @@ from typing import TYPE_CHECKING
 from fedotmas.common.logging import get_logger
 
 if TYPE_CHECKING:
-    from fedotmas.pipeline.models import StepConfig
+    from fedotmas.maw.models import MAWStepConfig
 
-_log = get_logger("fedotmas.pipeline.validators")
+_log = get_logger("fedotmas.maw.validators")
 
 
-def auto_fill_agent_name(node: StepConfig, name: str) -> None:
+def auto_fill_agent_name(node: MAWStepConfig, name: str) -> None:
     """Fill missing agent_name when there is exactly one agent."""
     if node.type == "agent" and node.agent_name is None:
         node.agent_name = name
@@ -18,14 +18,14 @@ def auto_fill_agent_name(node: StepConfig, name: str) -> None:
         auto_fill_agent_name(child, name)
 
 
-def collect_agent_refs(node: StepConfig, refs: set[str]) -> None:
+def collect_agent_refs(node: MAWStepConfig, refs: set[str]) -> None:
     if node.type == "agent" and node.agent_name:
         refs.add(node.agent_name)
     for child in node.children:
         collect_agent_refs(child, refs)
 
 
-def validate_node_refs(node: StepConfig, agent_names: set[str]) -> None:
+def validate_node_refs(node: MAWStepConfig, agent_names: set[str]) -> None:
     if node.type == "agent":
         if node.agent_name is None:
             raise ValueError("Node of type 'agent' must have an agent_name")
@@ -41,9 +41,7 @@ def validate_node_refs(node: StepConfig, agent_names: set[str]) -> None:
             validate_node_refs(child, agent_names)
 
 
-def warn_unused_agents(
-    pipeline: StepConfig, agent_names: set[str]
-) -> None:
+def warn_unused_agents(pipeline: MAWStepConfig, agent_names: set[str]) -> None:
     referenced: set[str] = set()
     collect_agent_refs(pipeline, referenced)
     unused = agent_names - referenced
@@ -51,7 +49,7 @@ def warn_unused_agents(
         _log.warning("Unused agents: {}", sorted(unused))
 
 
-def _find_terminal_node(node: StepConfig) -> StepConfig:
+def _find_terminal_node(node: MAWStepConfig) -> MAWStepConfig:
     """Return the terminal (last-executing) node in the pipeline tree."""
     if node.type in ("agent", "parallel"):
         return node
@@ -60,8 +58,7 @@ def _find_terminal_node(node: StepConfig) -> StepConfig:
     return node
 
 
-
-def warn_terminal_parallel(pipeline: StepConfig) -> None:
+def warn_terminal_parallel(pipeline: MAWStepConfig) -> None:
     """Warn if the pipeline ends with a parallel node (no synthesizer)."""
     terminal = _find_terminal_node(pipeline)
     if terminal.type == "parallel":

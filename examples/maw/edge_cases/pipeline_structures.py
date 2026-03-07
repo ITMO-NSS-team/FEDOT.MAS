@@ -1,6 +1,7 @@
 import asyncio
 
-from fedotmas import MAS, AgentConfig, PipelineConfig, StepConfig
+from fedotmas import MAW, MAWConfig
+from fedotmas.maw.models import MAWAgentConfig, MAWStepConfig
 from fedotmas.common.logging import get_logger
 
 _log = get_logger("fedotmas.examples.pipeline_structures")
@@ -11,26 +12,26 @@ MODEL = "openai/gpt-4o-mini"
 async def single_agent():
     _log.info("------ Scenario: single_agent ------")
     try:
-        config = PipelineConfig(
+        config = MAWConfig(
             agents=[
-                AgentConfig(
+                MAWAgentConfig(
                     name="answerer",
                     instruction="Answer briefly: {user_query}",
                     model=MODEL,
                     output_key="answer",
                 ),
             ],
-            pipeline=StepConfig(type="agent", agent_name="answerer"),
+            pipeline=MAWStepConfig(type="agent", agent_name="answerer"),
         )
-        mas = MAS()
-        state = await mas.build_and_run(config, "What is the capital of France?")
+        maw = MAW()
+        state = await maw.build_and_run(config, "What is the capital of France?")
         _log.info("Result state keys: {}", list(state.keys()))
         _log.info("Output: {}", state.get("answer", "")[:200])
         _log.info(
             "Tokens: prompt={} completion={} elapsed={:.1f}s",
-            mas.total_prompt_tokens,
-            mas.total_completion_tokens,
-            mas.elapsed,
+            maw.total_prompt_tokens,
+            maw.total_completion_tokens,
+            maw.elapsed,
         )
     except Exception as e:
         _log.error("Scenario failed: {}", e)
@@ -39,45 +40,45 @@ async def single_agent():
 async def sequential_three():
     _log.info("------ Scenario: sequential_three ------")
     try:
-        config = PipelineConfig(
+        config = MAWConfig(
             agents=[
-                AgentConfig(
+                MAWAgentConfig(
                     name="researcher",
                     instruction="Research the topic: {user_query}. Provide 3 key facts.",
                     model=MODEL,
                     output_key="research",
                 ),
-                AgentConfig(
+                MAWAgentConfig(
                     name="analyst",
                     instruction="Analyze these facts and find patterns:\n{research}",
                     model=MODEL,
                     output_key="analysis",
                 ),
-                AgentConfig(
+                MAWAgentConfig(
                     name="writer",
                     instruction="Write a concise summary combining:\n{research}\n\nAnalysis:\n{analysis}",
                     model=MODEL,
                     output_key="summary",
                 ),
             ],
-            pipeline=StepConfig(
+            pipeline=MAWStepConfig(
                 type="sequential",
                 children=[
-                    StepConfig(type="agent", agent_name="researcher"),
-                    StepConfig(type="agent", agent_name="analyst"),
-                    StepConfig(type="agent", agent_name="writer"),
+                    MAWStepConfig(type="agent", agent_name="researcher"),
+                    MAWStepConfig(type="agent", agent_name="analyst"),
+                    MAWStepConfig(type="agent", agent_name="writer"),
                 ],
             ),
         )
-        mas = MAS()
-        state = await mas.build_and_run(config, "Benefits of renewable energy")
+        maw = MAW()
+        state = await maw.build_and_run(config, "Benefits of renewable energy")
         _log.info("Result state keys: {}", list(state.keys()))
         _log.info("Output: {}", state.get("summary", "")[:200])
         _log.info(
             "Tokens: prompt={} completion={} elapsed={:.1f}s",
-            mas.total_prompt_tokens,
-            mas.total_completion_tokens,
-            mas.elapsed,
+            maw.total_prompt_tokens,
+            maw.total_completion_tokens,
+            maw.elapsed,
         )
     except Exception as e:
         _log.error("Scenario failed: {}", e)
@@ -86,50 +87,50 @@ async def sequential_three():
 async def parallel_two():
     _log.info("------ Scenario: parallel_two ------")
     try:
-        config = PipelineConfig(
+        config = MAWConfig(
             agents=[
-                AgentConfig(
+                MAWAgentConfig(
                     name="pros_analyst",
                     instruction="List 3 advantages of: {user_query}",
                     model=MODEL,
                     output_key="pros",
                 ),
-                AgentConfig(
+                MAWAgentConfig(
                     name="cons_analyst",
                     instruction="List 3 disadvantages of: {user_query}",
                     model=MODEL,
                     output_key="cons",
                 ),
-                AgentConfig(
+                MAWAgentConfig(
                     name="synthesizer",
                     instruction="Given pros:\n{pros}\n\nAnd cons:\n{cons}\n\nWrite a balanced verdict.",
                     model=MODEL,
                     output_key="verdict",
                 ),
             ],
-            pipeline=StepConfig(
+            pipeline=MAWStepConfig(
                 type="sequential",
                 children=[
-                    StepConfig(
+                    MAWStepConfig(
                         type="parallel",
                         children=[
-                            StepConfig(type="agent", agent_name="pros_analyst"),
-                            StepConfig(type="agent", agent_name="cons_analyst"),
+                            MAWStepConfig(type="agent", agent_name="pros_analyst"),
+                            MAWStepConfig(type="agent", agent_name="cons_analyst"),
                         ],
                     ),
-                    StepConfig(type="agent", agent_name="synthesizer"),
+                    MAWStepConfig(type="agent", agent_name="synthesizer"),
                 ],
             ),
         )
-        mas = MAS()
-        state = await mas.build_and_run(config, "Remote work")
+        maw = MAW()
+        state = await maw.build_and_run(config, "Remote work")
         _log.info("Result state keys: {}", list(state.keys()))
         _log.info("Output: {}", state.get("verdict", "")[:200])
         _log.info(
             "Tokens: prompt={} completion={} elapsed={:.1f}s",
-            mas.total_prompt_tokens,
-            mas.total_completion_tokens,
-            mas.elapsed,
+            maw.total_prompt_tokens,
+            maw.total_completion_tokens,
+            maw.elapsed,
         )
     except Exception as e:
         _log.error("Scenario failed: {}", e)
@@ -138,9 +139,9 @@ async def parallel_two():
 async def loop_critic():
     _log.info("------ Scenario: loop_critic ------")
     try:
-        config = PipelineConfig(
+        config = MAWConfig(
             agents=[
-                AgentConfig(
+                MAWAgentConfig(
                     name="writer",
                     instruction=(
                         "Write a haiku about: {user_query}.\n"
@@ -149,7 +150,7 @@ async def loop_critic():
                     model=MODEL,
                     output_key="draft",
                 ),
-                AgentConfig(
+                MAWAgentConfig(
                     name="critic",
                     instruction=(
                         "Review this haiku:\n{draft}\n\n"
@@ -160,24 +161,24 @@ async def loop_critic():
                     output_key="feedback",
                 ),
             ],
-            pipeline=StepConfig(
+            pipeline=MAWStepConfig(
                 type="loop",
                 max_iterations=3,
                 children=[
-                    StepConfig(type="agent", agent_name="writer"),
-                    StepConfig(type="agent", agent_name="critic"),
+                    MAWStepConfig(type="agent", agent_name="writer"),
+                    MAWStepConfig(type="agent", agent_name="critic"),
                 ],
             ),
         )
-        mas = MAS()
-        state = await mas.build_and_run(config, "autumn leaves falling")
+        maw = MAW()
+        state = await maw.build_and_run(config, "autumn leaves falling")
         _log.info("Result state keys: {}", list(state.keys()))
         _log.info("Output: {}", state.get("draft", "")[:200])
         _log.info(
             "Tokens: prompt={} completion={} elapsed={:.1f}s",
-            mas.total_prompt_tokens,
-            mas.total_completion_tokens,
-            mas.elapsed,
+            maw.total_prompt_tokens,
+            maw.total_completion_tokens,
+            maw.elapsed,
         )
     except Exception as e:
         _log.error("Scenario failed: {}", e)
@@ -186,50 +187,50 @@ async def loop_critic():
 async def nested_seq_par_seq():
     _log.info("------ Scenario: nested_seq_par_seq ------")
     try:
-        config = PipelineConfig(
+        config = MAWConfig(
             agents=[
-                AgentConfig(
+                MAWAgentConfig(
                     name="fact_finder",
                     instruction="Find 3 interesting facts about: {user_query}",
                     model=MODEL,
                     output_key="facts",
                 ),
-                AgentConfig(
+                MAWAgentConfig(
                     name="opinion_maker",
                     instruction="Give a strong opinion about: {user_query}",
                     model=MODEL,
                     output_key="opinion",
                 ),
-                AgentConfig(
+                MAWAgentConfig(
                     name="editor",
                     instruction="Combine these into a polished paragraph:\nFacts: {facts}\nOpinion: {opinion}",
                     model=MODEL,
                     output_key="final",
                 ),
             ],
-            pipeline=StepConfig(
+            pipeline=MAWStepConfig(
                 type="sequential",
                 children=[
-                    StepConfig(
+                    MAWStepConfig(
                         type="parallel",
                         children=[
-                            StepConfig(type="agent", agent_name="fact_finder"),
-                            StepConfig(type="agent", agent_name="opinion_maker"),
+                            MAWStepConfig(type="agent", agent_name="fact_finder"),
+                            MAWStepConfig(type="agent", agent_name="opinion_maker"),
                         ],
                     ),
-                    StepConfig(type="agent", agent_name="editor"),
+                    MAWStepConfig(type="agent", agent_name="editor"),
                 ],
             ),
         )
-        mas = MAS()
-        state = await mas.build_and_run(config, "Electric vehicles")
+        maw = MAW()
+        state = await maw.build_and_run(config, "Electric vehicles")
         _log.info("Result state keys: {}", list(state.keys()))
         _log.info("Output: {}", state.get("final", "")[:200])
         _log.info(
             "Tokens: prompt={} completion={} elapsed={:.1f}s",
-            mas.total_prompt_tokens,
-            mas.total_completion_tokens,
-            mas.elapsed,
+            maw.total_prompt_tokens,
+            maw.total_completion_tokens,
+            maw.elapsed,
         )
     except Exception as e:
         _log.error("Scenario failed: {}", e)

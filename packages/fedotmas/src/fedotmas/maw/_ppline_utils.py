@@ -6,9 +6,9 @@ from rich.console import Console
 from rich.tree import Tree
 
 from fedotmas.common.logging import get_logger
-from fedotmas.pipeline.models import PipelineConfig, StepConfig
+from fedotmas.maw.models import MAWConfig, MAWStepConfig
 
-_log = get_logger("fedotmas.pipeline")
+_log = get_logger("fedotmas.maw")
 
 _WORKFLOW_ICONS: dict[str, str] = {
     "sequential": "→",
@@ -17,7 +17,7 @@ _WORKFLOW_ICONS: dict[str, str] = {
 }
 
 
-def _node_label(node: StepConfig, agents_by_name: dict[str, str]) -> str:
+def _node_label(node: MAWStepConfig, agents_by_name: dict[str, str]) -> str:
     if node.type == "agent":
         name = node.agent_name or "?"
         key = agents_by_name.get(name, "")
@@ -28,7 +28,7 @@ def _node_label(node: StepConfig, agents_by_name: dict[str, str]) -> str:
 
 
 def _build_tree(
-    node: StepConfig,
+    node: MAWStepConfig,
     parent: Tree,
     agents_by_name: dict[str, str],
 ) -> None:
@@ -38,7 +38,7 @@ def _build_tree(
         _build_tree(child, branch, agents_by_name)
 
 
-def print_tree(config: PipelineConfig) -> None:
+def print_tree(config: MAWConfig) -> None:
     """Log the pipeline tree structure."""
     agents_by_name = {a.name: a.output_key for a in config.agents}
     tree = Tree("[bold]pipeline[/bold]")

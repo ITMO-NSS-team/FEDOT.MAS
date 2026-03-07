@@ -29,6 +29,9 @@ sources.fedotmas-synapse = { workspace = true }
 package = false
 workspace.members = [ "packages/*" ]
 
+[tool.ruff]
+exclude = [ "**/tests/**" ]
+
 [tool.pytest]
 ini_options.asyncio_mode = "auto"
 ini_options.testpaths = [
@@ -39,3 +42,4 @@ ini_options.testpaths = [
 [tool.ty]
 rules.unresolved-import = "ignore"
 rules.possibly-missing-import = "ignore"
+src.exclude = [ "**/tests/" ]

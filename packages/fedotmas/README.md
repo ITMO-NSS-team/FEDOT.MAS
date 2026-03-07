@@ -37,11 +37,11 @@ just bifrost-stop
 
 ```python
 import asyncio
-from fedotmas import MAS
+from fedotmas import MAW
 
 async def main():
-    mas = MAS()
-    state = await mas.run("Compare Python and Rust for CLI tools")
+    maw = MAW()
+    state = await maw.run("Compare Python and Rust for CLI tools")
     print(state)
 
 asyncio.run(main())

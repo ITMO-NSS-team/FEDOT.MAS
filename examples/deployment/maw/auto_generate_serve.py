@@ -3,26 +3,27 @@ from __future__ import annotations
 import asyncio
 
 import uvicorn
-from fedotmas import MAS
+
+from fedotmas import MAW
 from fedotmas.common.logging import get_logger
 
-_log = get_logger("fedotmas.examples.deployment.auto_generate_serve")
+_log = get_logger("fedotmas.examples.deployment.maw.auto_generate_serve")
 
 TASK = "Sort the list [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]."
 
 
 async def generate():
-    mas = MAS(mcp_servers=["light-sandbox"])
+    maw = MAW(mcp_servers=["light-sandbox"])
 
-    _log.info("Generating pipeline config for task …")
-    config = await mas.generate_config(TASK)
+    _log.info("Generating pipeline config for task ...")
+    config = await maw.generate_config(TASK)
     _log.info(
         "Config generated in {:.1f}s ({} agents)",
-        mas.meta_elapsed,
+        maw.meta_elapsed,
         len(config.agents),
     )
 
-    return mas.serve(
+    return maw.serve(
         config,
         name="agent",
         web=True,

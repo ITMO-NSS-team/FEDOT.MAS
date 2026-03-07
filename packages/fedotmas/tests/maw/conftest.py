@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from fedotmas.pipeline.models import PipelineConfig
+from fedotmas.maw.models import MAWConfig
 
 
 # ---------------------------------------------------------------------------
@@ -56,31 +56,33 @@ class FakeSession:
 
 
 @pytest.fixture()
-def simple_pipeline_config() -> PipelineConfig:
+def simple_pipeline_config() -> MAWConfig:
     """Two-agent sequential pipeline config."""
-    return PipelineConfig.model_validate({
-        "agents": [
-            {
-                "name": "alpha",
-                "instruction": "Do alpha work on {topic}",
-                "model": "openai/gpt-4o",
-                "output_key": "alpha_out",
-            },
-            {
-                "name": "beta",
-                "instruction": "Do beta work",
-                "model": "openai/gpt-4o-mini",
-                "output_key": "beta_out",
-            },
-        ],
-        "pipeline": {
-            "type": "sequential",
-            "children": [
-                {"type": "agent", "agent_name": "alpha"},
-                {"type": "agent", "agent_name": "beta"},
+    return MAWConfig.model_validate(
+        {
+            "agents": [
+                {
+                    "name": "alpha",
+                    "instruction": "Do alpha work on {topic}",
+                    "model": "openai/gpt-4o",
+                    "output_key": "alpha_out",
+                },
+                {
+                    "name": "beta",
+                    "instruction": "Do beta work",
+                    "model": "openai/gpt-4o-mini",
+                    "output_key": "beta_out",
+                },
             ],
-        },
-    })
+            "pipeline": {
+                "type": "sequential",
+                "children": [
+                    {"type": "agent", "agent_name": "alpha"},
+                    {"type": "agent", "agent_name": "beta"},
+                ],
+            },
+        }
+    )
 
 
 @pytest.fixture()

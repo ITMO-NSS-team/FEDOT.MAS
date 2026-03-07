@@ -15,21 +15,21 @@ from fedotmas.config.settings import (
 )
 from fedotmas.common.llm import make_llm
 from fedotmas.mcp import MCPServerConfig, create_toolset
-from fedotmas.pipeline.models import AgentConfig, PipelineConfig, StepConfig
+from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 
 AgentTree: TypeAlias = BaseAgent
 
-_log = get_logger("fedotmas.pipeline.builder")
+_log = get_logger("fedotmas.maw.builder")
 
 
 def build(
-    config: PipelineConfig,
+    config: MAWConfig,
     *,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
     worker_models: dict[str, ModelConfig] | None = None,
 ) -> BaseAgent:
-    """Convert a ``PipelineConfig`` into an executable ADK agent tree."""
-    agents_by_name: dict[str, AgentConfig] = {a.name: a for a in config.agents}
+    """Convert a ``MAWConfig`` into an executable ADK agent tree."""
+    agents_by_name: dict[str, MAWAgentConfig] = {a.name: a for a in config.agents}
     return _build_node(
         config.pipeline,
         agents_by_name,
@@ -39,8 +39,8 @@ def build(
 
 
 def _build_node(
-    node: StepConfig,
-    agents: dict[str, AgentConfig],
+    node: MAWStepConfig,
+    agents: dict[str, MAWAgentConfig],
     mcp_registry: dict[str, MCPServerConfig] | None,
     worker_models: dict[str, ModelConfig] | None,
 ) -> BaseAgent:
@@ -84,7 +84,7 @@ def _resolve_llm(
     """Return a ``BaseLlm`` for known worker configs, else a plain model string.
 
     Model name normalization (provider prefix) is handled by
-    ``AgentConfig`` model_validator, so *model_name* here is already
+    ``MAWAgentConfig`` model_validator, so *model_name* here is already
     normalized or ``None``.
     """
     if not model_name:
@@ -100,7 +100,7 @@ def _resolve_llm(
 
 
 def _build_llm_agent(
-    cfg: AgentConfig,
+    cfg: MAWAgentConfig,
     mcp_registry: dict[str, MCPServerConfig] | None,
     worker_models: dict[str, ModelConfig] | None,
 ) -> LlmAgent:

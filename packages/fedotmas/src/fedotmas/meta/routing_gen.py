@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
-
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
 from fedotmas.config.settings import ModelConfig
+from fedotmas.mas.models import MASConfig
 from fedotmas.mcp import MCPServerConfig, get_server_descriptions
 from fedotmas.meta._adk_runner import run_meta_agent_call
 from fedotmas.meta._helpers import (
@@ -14,22 +12,13 @@ from fedotmas.meta._helpers import (
     parse_llm_output,
     resolve_meta_and_workers,
 )
-from fedotmas.meta.prompts import META_AGENT_SYSTEM_PROMPT
-from fedotmas.maw.models import MAWConfig
+from fedotmas.meta.agent import MetaAgentResult
+from fedotmas.meta.routing_prompts import ROUTING_SYSTEM_PROMPT
 
-_log = get_logger("fedotmas.meta.agent")
-
-
-@dataclass
-class MetaAgentResult:
-    config: MAWConfig | Any
-    worker_models: list[ModelConfig] = field(default_factory=list)
-    total_prompt_tokens: int = 0
-    total_completion_tokens: int = 0
-    elapsed: float = 0.0
+_log = get_logger("fedotmas.meta.routing_gen")
 
 
-async def generate_pipeline_config(
+async def generate_routing_config(
     task: str,
     *,
     meta_model: str | ModelConfig | None = None,
@@ -39,9 +28,10 @@ async def generate_pipeline_config(
     session_service: BaseSessionService | None = None,
     max_retries: int = 2,
 ) -> MetaAgentResult:
-    """Run the meta-agent and return a validated ``MetaAgentResult``.
+    """Run the meta-agent to generate an ``MASConfig`` for routing mode.
 
-    This is the **single-stage** generation path (``two_stage=False``).
+    Single-stage generation: produces a coordinator + workers configuration
+    in one LLM call.
     """
     resolved_meta, resolved_workers, resolved_temp = resolve_meta_and_workers(
         meta_model,
@@ -53,17 +43,17 @@ async def generate_pipeline_config(
     desc_text = format_server_descriptions(descriptions)
     models_text = "\n".join(f"- `{m.model}`" for m in resolved_workers)
 
-    instruction = META_AGENT_SYSTEM_PROMPT.substitute(
+    instruction = ROUTING_SYSTEM_PROMPT.substitute(
         mcp_servers_desc=desc_text,
         available_models=models_text,
     )
 
     result = await run_meta_agent_call(
-        agent_name="meta_agent",
+        agent_name="routing_meta_agent",
         instruction=instruction,
         user_message=f"TASK: {task}",
-        output_schema=MAWConfig,
-        output_key="pipeline_config",
+        output_schema=MASConfig,
+        output_key="agent_system_config",
         model=resolved_meta,
         temperature=resolved_temp,
         session_service=session_service,
@@ -71,9 +61,13 @@ async def generate_pipeline_config(
         allowed_models=[m.model for m in resolved_workers],
     )
 
-    config = parse_llm_output(result.raw_output, MAWConfig)
+    config = parse_llm_output(result.raw_output, MASConfig)
 
-    _log.info("Config extracted | agents={}", len(config.agents))
+    _log.info(
+        "Routing config generated | coordinator={} workers={}",
+        config.coordinator.name,
+        len(config.workers),
+    )
     return MetaAgentResult(
         config=config,
         worker_models=resolved_workers,

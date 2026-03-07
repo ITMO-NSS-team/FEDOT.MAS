@@ -1,6 +1,7 @@
 import asyncio
 
-from fedotmas import MAS, AgentConfig, PipelineConfig, StepConfig
+from fedotmas import MAW, MAWConfig
+from fedotmas.maw.models import MAWAgentConfig, MAWStepConfig
 from fedotmas.common.logging import get_logger
 
 _log = get_logger("fedotmas.examples.tool_integration")
@@ -13,8 +14,8 @@ async def mcp_all_servers():
     """MAS(mcp_servers="all") — meta-agent sees every registered MCP tool."""
     _log.info("------ Scenario: mcp_all_servers ------")
     try:
-        mas = MAS(mcp_servers="all", meta_model=META_MODEL)
-        config = await mas.generate_config(
+        maw = MAW(mcp_servers="all", meta_model=META_MODEL)
+        config = await maw.generate_config(
             "Download the Python zen (import this) and summarize its key principles"
         )
         _log.info(
@@ -24,16 +25,18 @@ async def mcp_all_servers():
         )
         for agent in config.agents:
             _log.info("  Agent '{}' tools={}", agent.name, agent.tools)
-        state = await mas.build_and_run(config, "Download the Python zen and summarize its key principles")
+        state = await maw.build_and_run(
+            config, "Download the Python zen and summarize its key principles"
+        )
         _log.info("Result state keys: {}", list(state.keys()))
         for key in state:
             if key != "user_query":
                 _log.info("Output [{}]: {}", key, str(state[key])[:200])
         _log.info(
             "Tokens: prompt={} completion={} elapsed={:.1f}s",
-            mas.total_prompt_tokens,
-            mas.total_completion_tokens,
-            mas.elapsed,
+            maw.total_prompt_tokens,
+            maw.total_completion_tokens,
+            maw.elapsed,
         )
     except Exception as e:
         _log.error("Scenario failed: {}", e)
@@ -43,8 +46,8 @@ async def mcp_filtered_servers():
     """MAS(mcp_servers=["light-sandbox"]) — only sandbox tool available."""
     _log.info("------ Scenario: mcp_filtered_servers ------")
     try:
-        mas = MAS(mcp_servers=["light-sandbox"], meta_model=META_MODEL)
-        config = await mas.generate_config(
+        maw = MAW(mcp_servers=["light-sandbox"], meta_model=META_MODEL)
+        config = await maw.generate_config(
             "Calculate the first 10 Fibonacci numbers using Python code"
         )
         _log.info(
@@ -54,7 +57,7 @@ async def mcp_filtered_servers():
         )
         for agent in config.agents:
             _log.info("  Agent '{}' tools={}", agent.name, agent.tools)
-        state = await mas.build_and_run(
+        state = await maw.build_and_run(
             config, "Calculate the first 10 Fibonacci numbers using Python code"
         )
         _log.info("Result state keys: {}", list(state.keys()))
@@ -63,9 +66,9 @@ async def mcp_filtered_servers():
                 _log.info("Output [{}]: {}", key, str(state[key])[:200])
         _log.info(
             "Tokens: prompt={} completion={} elapsed={:.1f}s",
-            mas.total_prompt_tokens,
-            mas.total_completion_tokens,
-            mas.elapsed,
+            maw.total_prompt_tokens,
+            maw.total_completion_tokens,
+            maw.elapsed,
         )
     except Exception as e:
         _log.error("Scenario failed: {}", e)
@@ -75,9 +78,9 @@ async def mcp_handcrafted_with_tools():
     """Hand-crafted config with tools=["light-sandbox"] on an agent."""
     _log.info("------ Scenario: mcp_handcrafted_with_tools ------")
     try:
-        config = PipelineConfig(
+        config = MAWConfig(
             agents=[
-                AgentConfig(
+                MAWAgentConfig(
                     name="coder",
                     instruction=(
                         "Write and execute Python code to solve: {user_query}\n"
@@ -88,19 +91,19 @@ async def mcp_handcrafted_with_tools():
                     tools=["light-sandbox"],
                 ),
             ],
-            pipeline=StepConfig(type="agent", agent_name="coder"),
+            pipeline=MAWStepConfig(type="agent", agent_name="coder"),
         )
-        mas = MAS(mcp_servers=["light-sandbox"])
-        state = await mas.build_and_run(
+        maw = MAW(mcp_servers=["light-sandbox"])
+        state = await maw.build_and_run(
             config, "Sort the list [5, 2, 8, 1, 9] and return the result"
         )
         _log.info("Result state keys: {}", list(state.keys()))
         _log.info("Output: {}", str(state.get("result", ""))[:200])
         _log.info(
             "Tokens: prompt={} completion={} elapsed={:.1f}s",
-            mas.total_prompt_tokens,
-            mas.total_completion_tokens,
-            mas.elapsed,
+            maw.total_prompt_tokens,
+            maw.total_completion_tokens,
+            maw.elapsed,
         )
     except Exception as e:
         _log.error("Scenario failed: {}", e)
@@ -110,9 +113,9 @@ async def mcp_agent_decides_tool_use():
     """Agent receives a task it *can* solve with tools but doesn't have to."""
     _log.info("------ Scenario: mcp_agent_decides_tool_use ------")
     try:
-        config = PipelineConfig(
+        config = MAWConfig(
             agents=[
-                AgentConfig(
+                MAWAgentConfig(
                     name="assistant",
                     instruction=(
                         "Answer the user's question: {user_query}\n"
@@ -125,19 +128,17 @@ async def mcp_agent_decides_tool_use():
                     tools=["light-sandbox"],
                 ),
             ],
-            pipeline=StepConfig(type="agent", agent_name="assistant"),
+            pipeline=MAWStepConfig(type="agent", agent_name="assistant"),
         )
-        mas = MAS(mcp_servers=["light-sandbox"])
-        state = await mas.build_and_run(
-            config, "What is the capital of Japan?"
-        )
+        maw = MAW(mcp_servers=["light-sandbox"])
+        state = await maw.build_and_run(config, "What is the capital of Japan?")
         _log.info("Result state keys: {}", list(state.keys()))
         _log.info("Output: {}", str(state.get("answer", ""))[:200])
         _log.info(
             "Tokens: prompt={} completion={} elapsed={:.1f}s",
-            mas.total_prompt_tokens,
-            mas.total_completion_tokens,
-            mas.elapsed,
+            maw.total_prompt_tokens,
+            maw.total_completion_tokens,
+            maw.elapsed,
         )
     except Exception as e:
         _log.error("Scenario failed: {}", e)
@@ -147,9 +148,9 @@ async def mcp_sequential_tool_chain():
     """Sequential pipeline: first agent downloads data, second processes it in sandbox."""
     _log.info("------ Scenario: mcp_sequential_tool_chain ------")
     try:
-        config = PipelineConfig(
+        config = MAWConfig(
             agents=[
-                AgentConfig(
+                MAWAgentConfig(
                     name="downloader",
                     instruction=(
                         "Download the content from this URL: "
@@ -160,7 +161,7 @@ async def mcp_sequential_tool_chain():
                     output_key="raw_data",
                     tools=["download-url-content"],
                 ),
-                AgentConfig(
+                MAWAgentConfig(
                     name="analyzer",
                     instruction=(
                         "You have the following CSV data:\n{raw_data}\n\n"
@@ -175,23 +176,23 @@ async def mcp_sequential_tool_chain():
                     tools=["light-sandbox"],
                 ),
             ],
-            pipeline=StepConfig(
+            pipeline=MAWStepConfig(
                 type="sequential",
                 children=[
-                    StepConfig(type="agent", agent_name="downloader"),
-                    StepConfig(type="agent", agent_name="analyzer"),
+                    MAWStepConfig(type="agent", agent_name="downloader"),
+                    MAWStepConfig(type="agent", agent_name="analyzer"),
                 ],
             ),
         )
-        mas = MAS(mcp_servers=["download-url-content", "light-sandbox"])
-        state = await mas.build_and_run(config, "Analyze the Iris dataset")
+        maw = MAW(mcp_servers=["download-url-content", "light-sandbox"])
+        state = await maw.build_and_run(config, "Analyze the Iris dataset")
         _log.info("Result state keys: {}", list(state.keys()))
         _log.info("Output: {}", str(state.get("analysis", ""))[:200])
         _log.info(
             "Tokens: prompt={} completion={} elapsed={:.1f}s",
-            mas.total_prompt_tokens,
-            mas.total_completion_tokens,
-            mas.elapsed,
+            maw.total_prompt_tokens,
+            maw.total_completion_tokens,
+            maw.elapsed,
         )
     except Exception as e:
         _log.error("Scenario failed: {}", e)
@@ -201,7 +202,7 @@ async def mcp_unknown_server_error():
     """MAS(mcp_servers=["nonexistent"]) — should raise ValueError."""
     _log.info("------ Scenario: mcp_unknown_server_error ------")
     try:
-        MAS(mcp_servers=["nonexistent"])
+        MAW(mcp_servers=["nonexistent"])
         _log.error("Expected ValueError was not raised!")
     except ValueError as e:
         _log.info("Correctly raised ValueError: {}", e)

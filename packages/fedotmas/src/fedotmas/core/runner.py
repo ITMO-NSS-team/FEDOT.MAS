@@ -15,7 +15,7 @@ from google.genai import types
 
 from fedotmas.common.logging import get_logger
 
-_log = get_logger("fedotmas.pipeline.runner")
+_log = get_logger("fedotmas.core.runner")
 
 
 @dataclass
