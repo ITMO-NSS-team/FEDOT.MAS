@@ -11,7 +11,7 @@ from mcp import StdioServerParameters
 
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp._config import HttpMCPServer, MCPServerConfig, StdioMCPServer
-from fedotmas.mcp.discovery import discover_servers
+from fedotmas.mcp.discovery import discover_local_servers
 
 _log = get_logger("fedotmas.mcp.registry")
 
@@ -19,7 +19,7 @@ _log = get_logger("fedotmas.mcp.registry")
 @functools.cache
 def get_mcp_servers() -> dict[str, MCPServerConfig]:
     """Cached registry of MCP servers discovered from ``<workspace_root>/mcp-servers``."""
-    return discover_servers()
+    return discover_local_servers()
 
 
 def create_toolset(

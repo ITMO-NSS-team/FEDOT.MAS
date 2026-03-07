@@ -4,9 +4,38 @@ import tomllib
 from pathlib import Path
 
 from fedotmas.common.logging import get_logger
-from fedotmas.mcp._config import MCPServerConfig, directory_server
+from fedotmas.mcp._config import MCPServerConfig, StdioMCPServer
 
 _log = get_logger("fedotmas.mcp.discovery")
+
+_UV_BIN: str | None = None
+
+
+def _get_uv_bin() -> str:
+    global _UV_BIN
+    if _UV_BIN is None:
+        import shutil
+
+        _UV_BIN = shutil.which("uv") or "uv"
+    return _UV_BIN
+
+
+def _directory_server(
+    directory: str,
+    entry_point: str,
+    *,
+    timeout: int = 60,
+    description: str = "",
+    tags: tuple[str, ...] = (),
+) -> StdioMCPServer:
+    """Local MCP server launched via ``uv run --directory``."""
+    return StdioMCPServer(
+        command=_get_uv_bin(),
+        args=("run", "--directory", directory, entry_point),
+        timeout=timeout,
+        description=description,
+        tags=tags,
+    )
 
 
 def _find_repo_root() -> Path:
@@ -26,7 +55,7 @@ def _find_repo_root() -> Path:
     raise RuntimeError(msg)
 
 
-def discover_servers(
+def discover_local_servers(
     servers_dir: str | Path | None = None,
 ) -> dict[str, MCPServerConfig]:
     """Scan a directory of MCP server packages and return a registry.
@@ -104,7 +133,7 @@ def discover_servers(
         if timeout is not None:
             kwargs["timeout"] = int(timeout)
 
-        result[name] = directory_server(**kwargs)  # type: ignore[arg-type]
+        result[name] = _directory_server(**kwargs)  # type: ignore[arg-type]
         _log.debug("Discovered MCP server: {} -> {}", name, server_dir)
 
     return result

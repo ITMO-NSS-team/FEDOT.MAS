@@ -1,8 +1,11 @@
 from typing import Literal
 
 from fedotmas.mcp._config import HttpMCPServer, MCPServerConfig, StdioMCPServer
-from fedotmas.mcp.discovery import discover_servers
-from fedotmas.mcp.registry import create_toolset, get_mcp_servers, get_server_descriptions
+from fedotmas.mcp.discovery import discover_local_servers
+from fedotmas.mcp.registry import (
+    get_mcp_servers,
+    get_server_descriptions,
+)
 
 
 def resolve_mcp_registry(
@@ -19,8 +22,7 @@ def resolve_mcp_registry(
     unknown = set(mcp_servers) - registry.keys()
     if unknown:
         raise ValueError(
-            f"Unknown MCP servers: {sorted(unknown)}. "
-            f"Available: {sorted(registry)}"
+            f"Unknown MCP servers: {sorted(unknown)}. Available: {sorted(registry)}"
         )
     return {k: registry[k] for k in mcp_servers}
 
@@ -29,9 +31,6 @@ __all__ = [
     "HttpMCPServer",
     "MCPServerConfig",
     "StdioMCPServer",
-    "create_toolset",
-    "discover_servers",
-    "get_mcp_servers",
+    "discover_local_servers",
     "get_server_descriptions",
-    "resolve_mcp_registry",
 ]

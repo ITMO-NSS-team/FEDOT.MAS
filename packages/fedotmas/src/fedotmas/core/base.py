@@ -65,6 +65,11 @@ class BaseMAS(ABC, Generic[ConfigT]):
         self._resolved_workers: list[ModelConfig] | None = None
 
     @property
+    def mcp_servers(self) -> dict[str, MCPServerConfig]:
+        """Registry of MCP servers available to this instance."""
+        return dict(self._mcp_registry)
+
+    @property
     def last_result(self) -> PipelineResult | None:
         """The result of the most recent pipeline execution, or ``None``."""
         return self._last_result

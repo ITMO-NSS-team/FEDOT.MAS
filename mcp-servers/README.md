@@ -2,7 +2,7 @@
 
 FEDOT.MAS uses [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) to give agents access to external tools like file downloads, web scraping, and code execution.
 
-When a user describes a task, the **meta-agent** reads the descriptions of all registered MCP servers and decides which tools each pipeline agent needs. At runtime the pipeline builder wraps each server in an ADK `McpToolset`. The ADK then either launches a subprocess (for stdio servers) or opens an HTTP/SSE connection (for remote ones).
+When a user describes a task, the **meta-agent** reads the descriptions of all registered MCP servers and decides which tools each pipeline agent needs. At runtime the pipeline builder wraps each server in an ADK `McpToolset`. The ADK then either launches a subprocess (for stdio servers) or opens an HTTP connection (for remote ones).
 
 ### Auto-discovery
 
@@ -10,13 +10,18 @@ Discovery runs when you pass `mcp_servers="all"` or a list of server names (e.g.
 
 If you leave `mcp_servers` at the default `None`, no discovery happens and no servers are registered.
 
-If `fedotmas` is installed from PyPI (outside a workspace), discovery finds no root and returns an empty registry. You can still use servers by passing a config dict directly or by pointing `discover_servers()` at a directory with the same layout:
+If `fedotmas` is installed from PyPI (outside a workspace), discovery finds no root and returns an empty registry. You can still use servers by passing a config dict directly or by pointing `discover_local_servers()` at a directory with the same layout:
 
 ```python
-from fedotmas import MAW
-from fedotmas.mcp import discover_servers
+from fedotmas import MAW, discover_local_servers
 
-maw = MAW(mcp_servers=discover_servers("/path/to/my-servers"))
+maw = MAW(mcp_servers=discover_local_servers("/path/to/my-servers"))
+```
+
+After construction you can inspect the resolved registry:
+
+```python
+print(maw.mcp_servers)  # {'light-sandbox': StdioMCPServer(...), ...}
 ```
 
 ### Adding a new MCP server
@@ -55,31 +60,19 @@ The `name` field is the key used in pipeline configs (e.g. `"tools": ["my-server
 
 ### Transports
 
-Auto-discovered servers always use **stdio** via `uv run`. When you pass `mcp_servers` as a dict, you can pick any supported transport.
+Auto-discovered servers always use **stdio** via `uv run`. When you pass `mcp_servers` as a dict, you can use either transport directly:
 
-Config helpers live in `fedotmas.mcp`:
+- `StdioMCPServer` is any command + args over stdio
+- `HttpMCPServer` is remote server over HTTP (Streamable HTTP transport)
 
-```python
-from fedotmas.mcp import (
-    StdioMCPServer,   # any command + args over stdio
-    HttpMCPServer,    # remote server over HTTP/SSE
-    directory_server,  # uv run --directory
-    workspace_server,  # uv run --package
-    npx_server,        # npx -y <package>
-    uvx_server,        # uvx --from <package>
-    http_server,       # HTTP/SSE endpoint
-)
-```
-
-#### HTTP/SSE (remote server)
+#### HTTP (remote server)
 
 ```python
-from fedotmas import MAW
-from fedotmas.mcp import http_server
+from fedotmas import MAW, HttpMCPServer
 
 maw = MAW(mcp_servers={
-    "my-remote-server": http_server(
-        "https://mcp.example.com/sse",
+    "my-remote-server": HttpMCPServer(
+        url="https://mcp.example.com",
         headers={"Authorization": "Bearer <token>"},
         description="Remote analytics server",
     ),
@@ -91,8 +84,7 @@ maw = MAW(mcp_servers={
 Any MCP server that speaks stdio works with `docker run -i`. Here is an example with the [MongoDB MCP server](https://hub.docker.com/mcp/server/mongodb/overview):
 
 ```python
-from fedotmas import MAW
-from fedotmas.mcp import StdioMCPServer
+from fedotmas import MAW, StdioMCPServer
 
 maw = MAW(mcp_servers={
     "mongodb": StdioMCPServer(
@@ -116,15 +108,14 @@ maw = MAW(mcp_servers={
 You can combine auto-discovered, remote, and Docker servers in one registry:
 
 ```python
-from fedotmas import MAW
-from fedotmas.mcp import StdioMCPServer, http_server, discover_servers
+from fedotmas import MAW, StdioMCPServer, HttpMCPServer, discover_local_servers
 
 # Start with auto-discovered workspace servers
-servers = discover_servers()
+servers = discover_local_servers()
 
 # Add a remote server
-servers["analytics"] = http_server(
-    "https://mcp.example.com/sse",
+servers["analytics"] = HttpMCPServer(
+    url="https://mcp.example.com",
     description="Remote analytics",
 )
 
