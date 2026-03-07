@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import uvicorn
+import os
 
-from fedotmas import MAS, AgentConfig, PipelineConfig, StepConfig, serve
+import uvicorn
+from fedotmas import MAS, AgentConfig, PipelineConfig, StepConfig
 from fedotmas.common.logging import get_logger
 
 _log = get_logger("fedotmas.examples.deployment.handcrafted_serve")
@@ -17,6 +18,7 @@ config = PipelineConfig(
                 "Store your findings in {research}."
             ),
             output_key="research",
+            model=os.getenv("FEDOTMAS_DEFAULT_MODEL", "default_model"),
         ),
         AgentConfig(
             name="writer",
@@ -25,6 +27,7 @@ config = PipelineConfig(
                 "article. Store the final article in {article}."
             ),
             output_key="article",
+            model=os.getenv("FEDOTMAS_DEFAULT_MODEL", "default_model"),
         ),
     ],
     pipeline=StepConfig(
@@ -39,14 +42,15 @@ config = PipelineConfig(
 
 def main() -> None:
     mas = MAS()
-    agent = mas.build(config)
 
-    app = serve(
-        {"research_writer": agent},
+    app = mas.serve(
+        config,
+        name="research_writer",
         session_service_uri="sqlite:///sessions.db",
         web=True,
         host="0.0.0.0",
         port=8000,
+        auto_create_session=True,
     )
 
     _log.info("Starting API server on http://0.0.0.0:8000")

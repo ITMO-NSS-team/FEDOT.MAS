@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from fastapi import FastAPI
+from google.adk.apps.app import App
 from google.adk.memory import BaseMemoryService
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService
@@ -272,6 +274,16 @@ class MAS:
         print_tree(config)
         return agent
 
+    def build_app(self, config: PipelineConfig, *, name: str = "fedotmas") -> App:
+        """Build an ADK ``App`` (agent tree + plugins) from *config*.
+
+        The returned ``App`` bundles the agent tree with the plugins
+        configured on this ``MAS`` instance, making it suitable for
+        deployment via ``serve()`` or direct use with ``Runner(app=...)``.
+        """
+        agent = self.build(config)
+        return App(name=name, root_agent=agent, plugins=list(self._plugins))
+
     async def build_and_run(
         self,
         config: PipelineConfig,
@@ -283,17 +295,48 @@ class MAS:
 
         Returns the final ``session.state`` dict.
         """
-        agent = self.build(config)
+        app = self.build_app(config)
         _log.info("Running pipeline")
         self._last_result = await run_pipeline(
-            agent,
+            app,
             user_query,
             session_service=self._session_service,
             memory_service=self._memory_service,
-            plugins=self._plugins,
             initial_state=initial_state,
         )
         return self._last_result.state
+
+    def serve(
+        self,
+        config: PipelineConfig,
+        *,
+        name: str = "fedotmas",
+        session_service_uri: str | None = None,
+        web: bool = False,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        allow_origins: list[str] | None = None,
+        auto_create_session: bool = False,
+    ) -> FastAPI:
+        """Build an ``App`` from *config* and create a FastAPI server.
+
+        Convenience method combining ``build_app()`` with ``serve()``.
+        Plugins configured on this ``MAS`` instance are preserved in the
+        deployed application.
+        """
+        from fedotmas.serving import serve as _serve
+
+        app = self.build_app(config, name=name)
+        return _serve(
+            {name: app},
+            session_service=self._session_service,
+            session_service_uri=session_service_uri,
+            web=web,
+            host=host,
+            port=port,
+            allow_origins=allow_origins,
+            auto_create_session=auto_create_session,
+        )
 
     async def run(
         self,

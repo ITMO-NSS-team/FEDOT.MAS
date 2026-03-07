@@ -93,13 +93,18 @@ def discover_servers(
 
         description = mcp_meta.get("description", "")
         tags = tuple(mcp_meta.get("tags", ()))
+        timeout = mcp_meta.get("timeout")
 
-        result[name] = directory_server(
+        kwargs: dict[str, object] = dict(
             directory=str(server_dir),
             entry_point=entry_point,
             description=description,
             tags=tags,
         )
+        if timeout is not None:
+            kwargs["timeout"] = int(timeout)
+
+        result[name] = directory_server(**kwargs)  # type: ignore[arg-type]
         _log.debug("Discovered MCP server: {} -> {}", name, server_dir)
 
     return result

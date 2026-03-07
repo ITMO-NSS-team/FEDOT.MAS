@@ -24,7 +24,11 @@ def _fake_agent(name: str = "root") -> MagicMock:
 
 
 def _patch_runner(events: list[FakeEvent]):
-    """Return patches for Runner as async context manager yielding events."""
+    """Return patches for Runner as async context manager yielding events.
+
+    Also patches ``App`` so that ``MagicMock`` agents pass Pydantic
+    validation when ``run_pipeline`` wraps them in an ``App``.
+    """
 
     async def fake_run_async(**_kwargs):
         for e in events:
@@ -37,7 +41,27 @@ def _patch_runner(events: list[FakeEvent]):
     async def fake_runner_cm(*_args, **_kwargs):
         yield runner_instance
 
-    return patch("fedotmas.pipeline.runner.Runner", side_effect=fake_runner_cm)
+    class _FakeApp:
+        """Lightweight stand-in for App that accepts MagicMock agents."""
+
+        def __init__(self, *, name: str = "fedotmas", root_agent, plugins=None):
+            self.name = name
+            self.root_agent = root_agent
+            self.plugins = plugins or []
+
+    runner_patch = patch("fedotmas.pipeline.runner.Runner", side_effect=fake_runner_cm)
+    app_patch = patch("fedotmas.pipeline.runner.App", _FakeApp)
+
+    from contextlib import ExitStack
+
+    @asynccontextmanager
+    async def combined():
+        with ExitStack() as stack:
+            stack.enter_context(app_patch)
+            mock = stack.enter_context(runner_patch)
+            yield mock
+
+    return combined()
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +78,7 @@ class TestPartialEventsSkipped:
             FakeEvent(partial=True),
             FakeEvent(partial=True),
         ]
-        with _patch_runner(events):
+        async with _patch_runner(events):
             result = await run_pipeline(
                 _fake_agent(),
                 "hello",
@@ -82,7 +106,7 @@ class TestTokenAccumulation:
                 )
             ),
         ]
-        with _patch_runner(events):
+        async with _patch_runner(events):
             result = await run_pipeline(
                 _fake_agent(),
                 "hello",
@@ -100,7 +124,7 @@ class TestLlmErrorRaises:
         events = [
             FakeEvent(error_code="RATE_LIMIT", error_message="Too many requests"),
         ]
-        with _patch_runner(events):
+        async with _patch_runner(events):
             with pytest.raises(RuntimeError, match="RATE_LIMIT"):
                 await run_pipeline(
                     _fake_agent(),
@@ -116,7 +140,7 @@ class TestSessionLostAfterRun:
     async def test_session_lost(self, mock_session_service):
         mock_session_service.get_session = AsyncMock(return_value=None)
         events: list[FakeEvent] = []
-        with _patch_runner(events):
+        async with _patch_runner(events):
             with pytest.raises(RuntimeError, match="lost"):
                 await run_pipeline(
                     _fake_agent(),
@@ -131,7 +155,7 @@ class TestInitialStateMerged:
     @pytest.mark.asyncio
     async def test_initial_state(self, mock_session_service):
         events: list[FakeEvent] = []
-        with _patch_runner(events):
+        async with _patch_runner(events):
             await run_pipeline(
                 _fake_agent(),
                 "hello",
@@ -152,7 +176,7 @@ class TestStateInResult:
         final_session = FakeSession(state={"answer": "42", "user_query": "q"})
         mock_session_service.get_session = AsyncMock(return_value=final_session)
         events: list[FakeEvent] = []
-        with _patch_runner(events):
+        async with _patch_runner(events):
             result = await run_pipeline(
                 _fake_agent(),
                 "hello",
@@ -169,7 +193,7 @@ class TestEmptyOutputWarning:
         events = [
             FakeEvent(actions=FakeActions(state_delta={"key": None})),
         ]
-        with _patch_runner(events):
+        async with _patch_runner(events):
             result = await run_pipeline(
                 _fake_agent(),
                 "hello",
@@ -179,7 +203,7 @@ class TestEmptyOutputWarning:
 
 
 class TestPluginsPassed:
-    """Rule 8: plugins list is passed through to Runner."""
+    """Rule 8: plugins list is passed through to App (then to Runner)."""
 
     @pytest.mark.asyncio
     async def test_plugins_forwarded(self, mock_session_service):
@@ -191,13 +215,15 @@ class TestPluginsPassed:
 
         plugin = StubPlugin()
         events: list[FakeEvent] = []
-        with _patch_runner(events) as runner_patch:
+        async with _patch_runner(events) as runner_patch:
             await run_pipeline(
                 _fake_agent(),
                 "hello",
                 session_service=mock_session_service,
                 plugins=[plugin],
             )
-        # Runner was called; check plugins kwarg
+        # Runner receives the App wrapping the agent and plugins
         call_kwargs = runner_patch.call_args
-        assert plugin in call_kwargs.kwargs.get("plugins", [])
+        app = call_kwargs.kwargs.get("app")
+        assert app is not None
+        assert plugin in app.plugins

@@ -1,5 +1,7 @@
 import warnings
 
+from google.adk.apps.app import App
+
 from fedotmas.config.settings import ModelConfig
 from fedotmas.main import MAS
 from fedotmas.meta.pipeline_gen import PipelineGenerator
@@ -43,6 +45,7 @@ warnings.filterwarnings(
 
 __all__ = [
     "MAS",
+    "App",
     "AgentTree",
     "LoggingPlugin",
     "ModelConfig",

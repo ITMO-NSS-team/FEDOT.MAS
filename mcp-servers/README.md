@@ -46,11 +46,12 @@ my-mcp-server = "my_server.server:main"
 name = "my-server"
 description = "Short description of what the server does. The meta-agent reads this to decide when to use it."
 tags = ["relevant", "tags"]
+timeout = 120  # optional, seconds to wait for MCP session (default: 60)
 ```
 
 3. Next time you call `MAS(mcp_servers="all")`, the new server appears in the registry and the meta-agent can assign it to pipeline agents.
 
-The `name` field is the key used in pipeline configs (e.g. `"tools": ["my-server"]`). The entry point is taken from the first key in `[project.scripts]`. Each server gets its own `uv`-managed virtualenv on first run.
+The `name` field is the key used in pipeline configs (e.g. `"tools": ["my-server"]`). The entry point is taken from the first key in `[project.scripts]`. Each server gets its own `uv`-managed virtualenv on first run. The optional `timeout` field sets how long ADK waits for the server to become ready (default: 60s). On cold start `uv` installs dependencies into the server's virtualenv, which may take longer than usual.
 
 ### Transports
 

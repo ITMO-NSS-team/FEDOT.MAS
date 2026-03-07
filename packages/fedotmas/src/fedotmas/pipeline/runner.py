@@ -7,6 +7,7 @@ from typing import Any
 
 from google.adk import Runner
 from google.adk.agents.base_agent import BaseAgent
+from google.adk.apps.app import App
 from google.adk.memory import BaseMemoryService
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService, InMemorySessionService
@@ -28,7 +29,7 @@ class PipelineResult:
 
 
 async def run_pipeline(
-    agent: BaseAgent,
+    agent_or_app: BaseAgent | App,
     user_query: str,
     *,
     session_service: BaseSessionService | None = None,
@@ -42,10 +43,15 @@ async def run_pipeline(
     """Execute an ADK agent tree and return the final session state.
 
     Args:
-        agent: Root agent (output of ``builder.build``).
+        agent_or_app: Root agent or ``App`` (output of ``builder.build`` or
+            ``MAS.build_app``).  When an ``App`` is passed, its bundled
+            plugins are used and the ``plugins``/``app_name`` parameters
+            are ignored.
         user_query: The user's task.
-        plugins: ADK plugins registered on the Runner (logging, etc.).
-        app_name: Application name for the ADK runner.
+        plugins: ADK plugins registered on the Runner. Only used when
+            *agent_or_app* is a ``BaseAgent`` (legacy path).
+        app_name: Application name for the ADK runner. Only used when
+            *agent_or_app* is a ``BaseAgent`` (legacy path).
         user_id: User identifier for the session.
         session_id: Optional session id (auto-generated if omitted).
         initial_state: Extra keys to inject into ``session.state`` before
@@ -54,7 +60,18 @@ async def run_pipeline(
     Returns:
         The full ``session.state`` dict after pipeline execution.
     """
-    _log.debug("Creating session | app={} user={}", app_name, user_id)
+    if isinstance(agent_or_app, App):
+        app = agent_or_app
+        effective_name = app.name
+    else:
+        app = App(
+            name=app_name,
+            root_agent=agent_or_app,
+            plugins=list(plugins or []),
+        )
+        effective_name = app_name
+
+    _log.debug("Creating session | app={} user={}", effective_name, user_id)
     session_service = session_service or InMemorySessionService()
     session_id = session_id or uuid.uuid4().hex
 
@@ -64,7 +81,7 @@ async def run_pipeline(
         state.update(initial_state)
 
     session = await session_service.create_session(
-        app_name=app_name,
+        app_name=effective_name,
         user_id=user_id,
         session_id=session_id,
         state=state,
@@ -75,17 +92,15 @@ async def run_pipeline(
         parts=[types.Part.from_text(text=user_query)],
     )
 
-    _log.info("Pipeline run started | pipeline={}", agent.name)
+    _log.info("Pipeline run started | pipeline={}", app.root_agent.name)
     total_prompt = 0
     total_completion = 0
     pipeline_start = time.monotonic()
 
     async with Runner(
-        app_name=app_name,
-        agent=agent,
+        app=app,
         session_service=session_service,
         memory_service=memory_service,
-        plugins=plugins or [],
     ) as runner:
         async for event in runner.run_async(
             user_id=user_id,
@@ -124,7 +139,7 @@ async def run_pipeline(
 
     # Re-fetch the session to get the fully-updated state.
     final_session = await session_service.get_session(
-        app_name=app_name,
+        app_name=effective_name,
         user_id=user_id,
         session_id=session.id,
     )

@@ -7,14 +7,13 @@ from typing import Union
 _UV_BIN = shutil.which("uv") or "uv"  # try to find a path to `uv` binary
 
 
-
 @dataclass(frozen=True)
 class StdioMCPServer:
     """MCP server launched as a local subprocess (stdio transport)."""
 
     command: str
     args: tuple[str, ...]
-    timeout: int = 10
+    timeout: int = 60
     env: dict[str, str] = field(default_factory=dict)
     description: str = ""
     tags: tuple[str, ...] = ()
@@ -26,7 +25,7 @@ class HttpMCPServer:
 
     url: str
     headers: dict[str, str] = field(default_factory=dict)
-    timeout: int = 10
+    timeout: int = 60
     description: str = ""
     tags: tuple[str, ...] = ()
 
@@ -34,12 +33,11 @@ class HttpMCPServer:
 MCPServerConfig = Union[StdioMCPServer, HttpMCPServer]
 
 
-
 def directory_server(
     directory: str,
     entry_point: str,
     *,
-    timeout: int = 10,
+    timeout: int = 60,
     description: str = "",
     tags: tuple[str, ...] = (),
 ) -> StdioMCPServer:
@@ -57,7 +55,7 @@ def workspace_server(
     package: str,
     entry_point: str,
     *,
-    timeout: int = 10,
+    timeout: int = 60,
     description: str = "",
     tags: tuple[str, ...] = (),
 ) -> StdioMCPServer:
@@ -74,7 +72,7 @@ def workspace_server(
 def npx_server(
     package: str,
     *,
-    timeout: int = 10,
+    timeout: int = 60,
     extra_args: list[str] | None = None,
     description: str = "",
     tags: tuple[str, ...] = (),
@@ -94,7 +92,7 @@ def npx_server(
 def uvx_server(
     package: str,
     *,
-    timeout: int = 10,
+    timeout: int = 60,
     extra_args: list[str] | None = None,
     description: str = "",
     tags: tuple[str, ...] = (),
@@ -113,7 +111,7 @@ def http_server(
     url: str,
     *,
     headers: dict[str, str] | None = None,
-    timeout: int = 10,
+    timeout: int = 60,
     description: str = "",
     tags: tuple[str, ...] = (),
 ) -> HttpMCPServer:
