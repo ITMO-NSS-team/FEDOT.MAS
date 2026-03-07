@@ -5,7 +5,7 @@ from fedotmas.mas.mas import MAS
 from fedotmas.mas.models import MASConfig
 from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import MAWConfig
-from fedotmas.plugins import LoggingPlugin
+
 
 # litellm's Message.__init__ deletes None-valued attributes from instances,
 # causing Pydantic to warn about missing fields during serialization.
@@ -38,5 +38,4 @@ __all__ = [
     "MASConfig",
     "MAWConfig",
     "ModelConfig",
-    "LoggingPlugin",
 ]
