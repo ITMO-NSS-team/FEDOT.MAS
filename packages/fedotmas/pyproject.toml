@@ -15,7 +15,7 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-  "google-adk>=1.25",
+  "google-adk>=1.26",
   "litellm>=1.80.16",
   "loguru>=0.7.3",
   "platformdirs>=4.9.2",
