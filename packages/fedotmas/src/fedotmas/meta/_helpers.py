@@ -49,3 +49,27 @@ def parse_llm_output(raw: Any, schema: type[T]) -> T:
     if isinstance(raw, str):
         return schema.model_validate_json(raw)
     raise TypeError(f"Unexpected LLM output type: {type(raw)}")
+
+
+def validate_allowed_models(raw_output: Any, allowed_models: list[str]) -> None:
+    """Raise ValueError if any agent.model is not in allowed_models."""
+    if not allowed_models or not isinstance(raw_output, dict):
+        return
+    allowed = set(allowed_models)
+    # MAW: raw_output["agents"] — list of agent dicts
+    # MAS: raw_output["coordinator"] + raw_output["workers"]
+    agents: list[dict] = []
+    if "agents" in raw_output:
+        agents = raw_output["agents"]
+    else:
+        if "coordinator" in raw_output:
+            agents.append(raw_output["coordinator"])
+        agents.extend(raw_output.get("workers", []))
+
+    for agent in agents:
+        model = agent.get("model")
+        if model and model not in allowed:
+            raise ValueError(
+                f"Agent '{agent.get('name', '?')}' uses model '{model}' "
+                f"not in allowed_models: {sorted(allowed)}"
+            )

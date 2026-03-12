@@ -15,11 +15,7 @@ from pydantic import BaseModel
 from fedotmas.common.logging import get_logger
 from fedotmas._settings import ModelConfig
 from fedotmas.common.llm import make_llm
-from fedotmas.meta.schema_utils import (
-    inject_model_enum,
-    needs_strict_schema,
-    patch_schema_openai_strict,
-)
+from fedotmas.meta._helpers import validate_allowed_models
 
 _log = get_logger("fedotmas.meta._adk_runner")
 
@@ -32,43 +28,6 @@ class LLMCallResult:
     prompt_tokens: int
     completion_tokens: int
     elapsed: float
-
-
-def _make_schema_callback(
-    allowed_models: list[str] | None = None,
-) -> Any:
-    """Create a ``before_model_callback`` that patches the response schema.
-
-    If *allowed_models* is provided, injects ``enum`` into the ``model``
-    field of agent definitions so the LLM is constrained at schema level.
-    """
-
-    def _callback(*, callback_context: Any, llm_request: Any) -> None:  # noqa: ARG001
-        try:
-            model = llm_request.model or ""
-            schema = llm_request.config and llm_request.config.response_schema
-            if not schema:
-                return None
-
-            if isinstance(schema, type) and issubclass(schema, BaseModel):
-                schema = schema.model_json_schema()
-            elif isinstance(schema, BaseModel):
-                schema = schema.__class__.model_json_schema()
-            elif not isinstance(schema, dict):
-                return None
-
-            if allowed_models:
-                schema = inject_model_enum(schema, allowed_models)
-
-            if needs_strict_schema(model):
-                schema = patch_schema_openai_strict(schema)
-
-            llm_request.config.response_schema = schema
-        except (KeyError, TypeError, ValueError) as e:
-            _log.warning("Schema patching failed, proceeding without patch: {}", e)
-        return None
-
-    return _callback
 
 
 async def run_meta_agent_call(
@@ -95,12 +54,13 @@ async def run_meta_agent_call(
     if max_retries < 0:
         raise ValueError(f"max_retries must be >= 0, got {max_retries}")
     last_error: Exception | None = None
+    effective_message = user_message
     for attempt in range(max_retries + 1):
         try:
             return await _execute_meta_call(
                 agent_name=agent_name,
                 instruction=instruction,
-                user_message=user_message,
+                user_message=effective_message,
                 output_schema=output_schema,
                 output_key=output_key,
                 model=model,
@@ -121,6 +81,11 @@ async def run_meta_agent_call(
                     delay,
                 )
                 await asyncio.sleep(delay)
+                effective_message = (
+                    f"{user_message}\n\n"
+                    f"PREVIOUS ATTEMPT FAILED: {e}\n"
+                    f"Please fix this error in your response."
+                )
             else:
                 _log.error(
                     "{} failed after {} attempts: {}",
@@ -164,7 +129,6 @@ async def _execute_meta_call(
         generate_content_config=types.GenerateContentConfig(
             temperature=temperature,
         ),
-        before_model_callback=_make_schema_callback(allowed_models),
     )
 
     session_service = session_service or InMemorySessionService()
@@ -256,6 +220,9 @@ async def _execute_meta_call(
         raise RuntimeError(
             f"{agent_name} did not produce '{output_key}' in session state"
         )
+
+    if allowed_models:
+        validate_allowed_models(raw_output, allowed_models)
 
     return LLMCallResult(
         raw_output=raw_output,

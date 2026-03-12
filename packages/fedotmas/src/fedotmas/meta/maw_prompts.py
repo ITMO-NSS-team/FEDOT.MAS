@@ -90,7 +90,7 @@ Use single curly braces around the state key name. In the examples below, angle 
       "name": "solver",
       "instruction": "Answer the user's question: <user_query>. Provide a clear, well-reasoned response.",
       "output_key": "answer",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     }
   ],
   "pipeline": {"type": "agent", "agent_name": "solver"}
@@ -105,14 +105,14 @@ Use single curly braces around the state key name. In the examples below, angle 
       "name": "researcher",
       "instruction": "Research the topic: <user_query>. Gather key facts and findings.",
       "output_key": "research_result",
-      "model": "openai/gpt-4o",
+      "model": "<model>",
       "tools": ["download-url-content"]
     },
     {
       "name": "writer",
       "instruction": "Write a comprehensive report based on the research: <research_result>",
       "output_key": "report",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     }
   ],
   "pipeline": {
@@ -133,25 +133,25 @@ Use single curly braces around the state key name. In the examples below, angle 
       "name": "researcher",
       "instruction": "Research: <user_query>",
       "output_key": "research_data",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     },
     {
       "name": "technical_analyst",
       "instruction": "Analyze the technical aspects of: <research_data>",
       "output_key": "technical_analysis",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     },
     {
       "name": "business_analyst",
       "instruction": "Analyze the business implications of: <research_data>",
       "output_key": "business_analysis",
-      "model": "openai/gpt-4o-mini"
+      "model": "<model>"
     },
     {
       "name": "synthesizer",
       "instruction": "Combine the technical analysis: <technical_analysis> and business analysis: <business_analysis> into a final report.",
       "output_key": "final_report",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     }
   ],
   "pipeline": {
@@ -179,13 +179,13 @@ Use single curly braces around the state key name. In the examples below, angle 
       "name": "writer",
       "instruction": "Write a draft on: <user_query>. If feedback exists, improve based on: <feedback>",
       "output_key": "draft",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     },
     {
       "name": "critic",
       "instruction": "Review the draft: <draft>. If the quality is satisfactory, call exit_loop. Otherwise, provide specific feedback for improvement.",
       "output_key": "feedback",
-      "model": "openai/gpt-4o-mini"
+      "model": "<model>"
     }
   ],
   "pipeline": {
@@ -259,7 +259,7 @@ Choose models based on task complexity: use stronger models for critical/complex
     {
       "name": "solver",
       "instruction": "Answer the user's question clearly and concisely with well-reasoned arguments.",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     }
   ]
 }
@@ -272,13 +272,13 @@ Choose models based on task complexity: use stronger models for critical/complex
     {
       "name": "researcher",
       "instruction": "Research the given topic thoroughly. Gather key facts, data points, and findings from available sources.",
-      "model": "openai/gpt-4o",
+      "model": "<model>",
       "tools": ["download-url-content"]
     },
     {
       "name": "analyst",
       "instruction": "Analyze research findings and produce a comprehensive, well-structured report with clear conclusions.",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     }
   ]
 }
@@ -291,12 +291,12 @@ Choose models based on task complexity: use stronger models for critical/complex
     {
       "name": "writer",
       "instruction": "Write high-quality content on the given topic. Incorporate any feedback to improve the output.",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     },
     {
       "name": "critic",
       "instruction": "Review the written content for accuracy, clarity, and completeness. Provide specific, actionable feedback for improvement. If the quality is satisfactory, indicate approval.",
-      "model": "openai/gpt-4o-mini"
+      "model": "<model>"
     }
   ]
 }
@@ -412,14 +412,14 @@ Use single curly braces around the state key name. In the examples below, angle 
       "name": "researcher",
       "instruction": "Research the topic: <user_query>. Gather key facts and findings.",
       "output_key": "research_result",
-      "model": "openai/gpt-4o",
+      "model": "<model>",
       "tools": ["download-url-content"]
     },
     {
       "name": "writer",
       "instruction": "Write a comprehensive report based on the research: <research_result>",
       "output_key": "report",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     }
   ],
   "pipeline": {
@@ -440,13 +440,13 @@ Use single curly braces around the state key name. In the examples below, angle 
       "name": "writer",
       "instruction": "Write a draft on: <user_query>. If feedback exists, improve based on: <feedback>",
       "output_key": "draft",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     },
     {
       "name": "critic",
       "instruction": "Review the draft: <draft>. If the quality is satisfactory, call exit_loop. Otherwise, provide specific feedback for improvement.",
       "output_key": "feedback",
-      "model": "openai/gpt-4o-mini"
+      "model": "<model>"
     }
   ],
   "pipeline": {
@@ -468,19 +468,19 @@ Use single curly braces around the state key name. In the examples below, angle 
       "name": "technical_analyst",
       "instruction": "Analyze the technical aspects of: <user_query>",
       "output_key": "technical_analysis",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     },
     {
       "name": "business_analyst",
       "instruction": "Analyze the business implications of: <user_query>",
       "output_key": "business_analysis",
-      "model": "openai/gpt-4o-mini"
+      "model": "<model>"
     },
     {
       "name": "synthesizer",
       "instruction": "Combine the technical analysis: <technical_analysis> and business analysis: <business_analysis> into a final report.",
       "output_key": "final_report",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     }
   ],
   "pipeline": {

@@ -14,7 +14,7 @@ from fedotmas.common.logging import get_logger, setup_logging
 from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.core.runner import PipelineResult, run_pipeline
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
-from fedotmas.meta.agent import MetaAgentResult
+from fedotmas.meta._result import MetaAgentResult
 from fedotmas.plugins import LoggingPlugin
 
 _log = get_logger("fedotmas.core.base")

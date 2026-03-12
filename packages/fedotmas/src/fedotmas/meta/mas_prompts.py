@@ -69,13 +69,13 @@ The coordinator agent has workers as sub-agents. When a user request arrives:
       "name": "technical_support",
       "description": "Handles technical issues, troubleshooting, and product functionality questions",
       "instruction": "You are a technical support specialist. Help users resolve technical issues with clear, step-by-step troubleshooting instructions.",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     },
     {
       "name": "billing_agent",
       "description": "Handles billing inquiries, payment issues, and subscription management",
       "instruction": "You are a billing specialist. Help users with payment questions, subscription changes, and billing disputes.",
-      "model": "openai/gpt-4o-mini"
+      "model": "<model>"
     }
   ]
 }
@@ -95,14 +95,14 @@ The coordinator agent has workers as sub-agents. When a user request arrives:
       "name": "data_researcher",
       "description": "Gathers information, finds sources, and collects data on topics",
       "instruction": "You are a data researcher. Gather comprehensive information on the given topic using available tools. Present findings in a structured format.",
-      "model": "openai/gpt-4o",
+      "model": "<model>",
       "tools": ["download-url-content"]
     },
     {
       "name": "analyst",
       "description": "Analyzes data, identifies patterns, and produces comprehensive reports",
       "instruction": "You are a research analyst. Analyze the provided data, identify key patterns and insights, and produce a clear, well-structured report.",
-      "model": "openai/gpt-4o"
+      "model": "<model>"
     }
   ]
 }

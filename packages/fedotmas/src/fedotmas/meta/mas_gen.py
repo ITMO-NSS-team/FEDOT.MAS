@@ -12,10 +12,10 @@ from fedotmas.meta._helpers import (
     parse_llm_output,
     resolve_meta_and_workers,
 )
-from fedotmas.meta.agent import MetaAgentResult
-from fedotmas.meta.routing_prompts import ROUTING_SYSTEM_PROMPT
+from fedotmas.meta._result import MetaAgentResult
+from fedotmas.meta.mas_prompts import ROUTING_SYSTEM_PROMPT
 
-_log = get_logger("fedotmas.meta.routing_gen")
+_log = get_logger("fedotmas.meta.mas_gen")
 
 
 async def generate_routing_config(

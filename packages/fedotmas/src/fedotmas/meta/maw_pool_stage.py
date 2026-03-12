@@ -11,10 +11,10 @@ from fedotmas.meta._helpers import (
     parse_llm_output,
     resolve_meta_and_workers,
 )
-from fedotmas.meta.prompts import POOL_AGENT_SYSTEM_PROMPT
+from fedotmas.meta.maw_prompts import POOL_AGENT_SYSTEM_PROMPT
 from fedotmas.maw.models import AgentPoolConfig
 
-_log = get_logger("fedotmas.meta.pool_gen")
+_log = get_logger("fedotmas.meta.maw_pool_stage")
 
 
 class PoolGenerator:

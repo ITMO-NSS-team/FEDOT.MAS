@@ -6,7 +6,7 @@ from fedotmas.common.logging import get_logger
 from fedotmas.core.base import BaseMAS
 from fedotmas.mas.builder import build_routing_system
 from fedotmas.mas.models import MASConfig
-from fedotmas.meta.routing_gen import generate_routing_config
+from fedotmas.meta.mas_gen import generate_routing_config
 
 _log = get_logger("fedotmas.mas")
 

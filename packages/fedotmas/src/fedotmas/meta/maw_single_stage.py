@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
-
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
@@ -14,19 +11,11 @@ from fedotmas.meta._helpers import (
     parse_llm_output,
     resolve_meta_and_workers,
 )
-from fedotmas.meta.prompts import META_AGENT_SYSTEM_PROMPT
+from fedotmas.meta._result import MetaAgentResult
+from fedotmas.meta.maw_prompts import META_AGENT_SYSTEM_PROMPT
 from fedotmas.maw.models import MAWConfig
 
-_log = get_logger("fedotmas.meta.agent")
-
-
-@dataclass
-class MetaAgentResult:
-    config: MAWConfig | Any
-    worker_models: list[ModelConfig] = field(default_factory=list)
-    total_prompt_tokens: int = 0
-    total_completion_tokens: int = 0
-    elapsed: float = 0.0
+_log = get_logger("fedotmas.meta.maw_single_stage")
 
 
 async def generate_pipeline_config(

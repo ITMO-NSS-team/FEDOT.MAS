@@ -8,9 +8,10 @@ from fedotmas.core.base import BaseMAS
 from fedotmas.maw._ppline_utils import print_tree
 from fedotmas.maw.builder import build
 from fedotmas.maw.models import MAWConfig
-from fedotmas.meta.agent import MetaAgentResult, generate_pipeline_config
-from fedotmas.meta.pipeline_gen import PipelineGenerator
-from fedotmas.meta.pool_gen import PoolGenerator
+from fedotmas.meta._result import MetaAgentResult
+from fedotmas.meta.maw_single_stage import generate_pipeline_config
+from fedotmas.meta.maw_pipeline_stage import PipelineGenerator
+from fedotmas.meta.maw_pool_stage import PoolGenerator
 
 _log = get_logger("fedotmas.maw")
 
