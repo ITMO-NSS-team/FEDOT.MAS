@@ -23,9 +23,11 @@ def build_routing_system(
     The coordinator agent gets workers as ``sub_agents``, which enables
     ADK AutoFlow's ``transfer_to_agent`` mechanism for dynamic routing.
     """
-    workers = [
-        _build_routing_agent(w, mcp_registry, worker_models) for w in config.workers
-    ]
+    workers = []
+    for w in config.workers:
+        if not w.output_key:
+            w = w.model_copy(update={"output_key": f"{w.name}_output"})
+        workers.append(_build_routing_agent(w, mcp_registry, worker_models))
     coord = _build_routing_agent(config.coordinator, mcp_registry, worker_models)
     coord.sub_agents = workers  # ADK AutoFlow activates automatically
     _log.info(
