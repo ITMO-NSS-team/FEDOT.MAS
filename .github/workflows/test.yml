@@ -1,0 +1,59 @@
+name: Test
+
+on:
+  pull_request:
+    paths:
+      - "packages/**"
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      fedotmas: ${{ steps.filter.outputs.fedotmas }}
+      synapse: ${{ steps.filter.outputs.synapse }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            fedotmas:
+              - "packages/fedotmas/**"
+            synapse:
+              - "packages/fedotmas-synapse/**"
+
+  test-fedotmas:
+    needs: detect
+    if: needs.detect.outputs.fedotmas == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --package fedotmas --dev
+        working-directory: packages/fedotmas
+      - run: uv run pytest tests/
+        working-directory: packages/fedotmas
+
+  test-synapse:
+    needs: detect
+    if: needs.detect.outputs.synapse == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --package fedotmas-synapse --dev
+        working-directory: packages/fedotmas-synapse
+      - run: uv run pytest tests/
+        working-directory: packages/fedotmas-synapse
+
+  ci:
+    # Gate job — add this single check as required in branch protection
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [test-fedotmas, test-synapse]
+    steps:
+      - run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "One or more test jobs failed"
+            exit 1
+          fi
