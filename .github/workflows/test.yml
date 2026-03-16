@@ -32,10 +32,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: uv sync --package fedotmas --dev
-        working-directory: packages/fedotmas
-      - run: uv run pytest tests/
-        working-directory: packages/fedotmas
+      - run: uv sync --dev
+      - run: uv run pytest packages/fedotmas/tests/
 
   test-synapse:
     needs: detect
@@ -44,10 +42,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: uv sync --package fedotmas-synapse --dev
-        working-directory: packages/fedotmas-synapse
-      - run: uv run pytest tests/
-        working-directory: packages/fedotmas-synapse
+      - run: uv sync --dev
+      - run: uv run pytest packages/fedotmas-synapse/tests/
 
   ci:
     runs-on: ubuntu-latest
