@@ -3,9 +3,9 @@ build-backend = "uv_build"
 requires = [ "uv-build>=0.10.3,<0.11" ]
 
 [project]
-name = "mcp-download"
+name = "mcp-websearch-searxng"
 version = "0.1.0"
-description = "MCP server for downloading files from URLs"
+description = "MCP server for web search via self-hosted SearXNG metasearch engine"
 requires-python = ">=3.12"
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
@@ -17,10 +17,14 @@ dependencies = [
   "fastmcp>=2.14.5",
   "httpx>=0.27",
   "pydantic>=2.12.5",
+  "python-dotenv>=1.2.1",
 ]
-scripts.mcp-download = "mcp_download.server:main"
+scripts.mcp-websearch = "mcp_websearch_searxng.server:main"
 
 [tool.fedotmas]
-mcp.name = "download"
-mcp.description = "Download files from URLs to the local filesystem. Supports single and batch downloads with size validation."
-mcp.tags = [ "web", "files" ]
+mcp.name = "websearch-searxng"
+mcp.description = """
+MCP server for web search via self-hosted SearXNG. Supports filtering by category
+(general, news, science, etc.) and language.
+"""
+mcp.tags = [ "web", "search", "research" ]

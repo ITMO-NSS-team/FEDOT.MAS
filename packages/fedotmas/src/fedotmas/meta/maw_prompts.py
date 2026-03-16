@@ -106,7 +106,7 @@ Use single curly braces around the state key name. In the examples below, angle 
       "instruction": "Research the topic: <user_query>. Gather key facts and findings.",
       "output_key": "research_result",
       "model": "<model>",
-      "tools": ["download-url-content"]
+      "tools": ["download"]
     },
     {
       "name": "writer",
@@ -273,7 +273,7 @@ Choose models based on task complexity: use stronger models for critical/complex
       "name": "researcher",
       "instruction": "Research the given topic thoroughly. Gather key facts, data points, and findings from available sources.",
       "model": "<model>",
-      "tools": ["download-url-content"]
+      "tools": ["download"]
     },
     {
       "name": "analyst",
@@ -413,7 +413,7 @@ Use single curly braces around the state key name. In the examples below, angle 
       "instruction": "Research the topic: <user_query>. Gather key facts and findings.",
       "output_key": "research_result",
       "model": "<model>",
-      "tools": ["download-url-content"]
+      "tools": ["download"]
     },
     {
       "name": "writer",

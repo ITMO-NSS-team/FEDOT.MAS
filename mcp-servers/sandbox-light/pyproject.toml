@@ -1,0 +1,28 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-sandbox-light"
+version = "0.1.0"
+description = "Python sandbox — safe code execution using only builtins, no third-party libraries, no imports, no file access."
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [ "fastmcp>=2.14.5", "pydantic-monty" ]
+scripts.mcp-sandbox = "mcp_sandbox_light.server:main"
+
+[dependency-groups]
+dev = [ "pytest", "pytest-asyncio" ]
+
+[tool.pytest]
+ini_options.asyncio_mode = "auto"
+
+[tool.fedotmas]
+mcp.name = "sandbox-light"
+mcp.description = "Python sandbox — safe code execution using only builtins, no third-party libraries, no imports, no file access."
+mcp.tags = [ "code" ]

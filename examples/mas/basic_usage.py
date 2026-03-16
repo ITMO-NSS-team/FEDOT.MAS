@@ -77,7 +77,7 @@ async def with_tools():
                 name="coder",
                 description="Writes and executes code",
                 instruction="Write and run code to solve the user's problem.",
-                tools=["light-sandbox"],
+                tools=["sandbox-light"],
                 output_key="code_result",
             ),
             MASAgentConfig(

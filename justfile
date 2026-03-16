@@ -1,5 +1,7 @@
 bifrost_port := "9090"
 bifrost_url := "http://localhost:" + bifrost_port
+searxng_port := "18888"
+searxng_dir := "~/.local/share/fedotmas/searxng"
 
 # User section:
 
@@ -18,6 +20,20 @@ upd-hooks:
     prek uninstall
     prek install
 
+lint:
+    uv run ruff check . --fix
+    uv run ruff format .
+
+typecheck:
+    uv run ty check packages/
+
+check: lint typecheck
+
+test-unit:
+    uv run pytest packages/fedotmas/tests/ -v
+
+# bifrost
+
 bifrost:
     docker run -d --name bifrost \
       -p {{ bifrost_port }}:8080 \
@@ -30,30 +46,57 @@ bifrost:
 bifrost-stop:
     docker stop bifrost && docker rm bifrost
 
-lint:
-    uv run ruff check . --fix
-    uv run ruff format .
+# SearXNG
 
-typecheck:
-    uv run ty check packages/
+searxng-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{ searxng_dir }}"
+    dir="${dir/#\~/$HOME}"
+    if [ -d "$dir" ]; then
+        echo "SearXNG already installed at $dir"
+        exit 0
+    fi
+    mkdir -p "$dir"
+    git clone https://github.com/searxng/searxng-docker.git "$dir"
+    cd "$dir"
+    # Enable JSON output format
+    mkdir -p searxng
+    cat > searxng/settings.yml <<'SETTINGS'
+    use_default_settings: true
+    server:
+      secret_key: "$(openssl rand -hex 32)"
+    search:
+      formats:
+        - html
+        - json
+    SETTINGS
+    # Set port in .env
+    sed -i "s|^SEARXNG_HOSTNAME=.*|SEARXNG_HOSTNAME=localhost|" .env 2>/dev/null || true
+    sed -i "s|127.0.0.1:8080|127.0.0.1:{{ searxng_port }}|" docker-compose.yaml 2>/dev/null || true
+    echo "SearXNG installed at $dir — run: just searxng-start"
 
-check: lint typecheck
+searxng-start:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{ searxng_dir }}"
+    dir="${dir/#\~/$HOME}"
+    cd "$dir"
+    docker compose up -d
+    echo "SearXNG running at http://localhost:{{ searxng_port }}"
 
-edge-structures:
-    uv run python examples/edge_cases/pipeline_structures.py
+searxng-stop:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{ searxng_dir }}"
+    dir="${dir/#\~/$HOME}"
+    cd "$dir"
+    docker compose down
 
-edge-state:
-    uv run python examples/edge_cases/state_passing.py
-
-edge-models:
-    uv run python examples/edge_cases/multi_model.py
-
-edge-meta:
-    uv run python examples/edge_cases/meta_generation.py
-
-edge-all: edge-structures edge-state edge-models edge-meta
-
-test-unit:
-    uv run pytest packages/fedotmas/tests/ -v
-
-test-all: test-unit edge-all
+searxng-status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{ searxng_dir }}"
+    dir="${dir/#\~/$HOME}"
+    cd "$dir"
+    docker compose ps
