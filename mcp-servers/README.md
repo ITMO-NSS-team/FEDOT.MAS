@@ -1,12 +1,12 @@
-# MCP servers
+## MCP servers
 
 FEDOT.MAS uses [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) to give agents access to external tools like file downloads, web scraping, and code execution.
 
 When a user describes a task, the **meta-agent** reads the descriptions of all registered MCP servers and decides which tools each pipeline agent needs. At runtime the pipeline builder wraps each server in an ADK `McpToolset`. The ADK then either launches a subprocess (for stdio servers) or opens an HTTP connection (for remote ones).
 
-### Set up SearXNG
+### Auto-discovery
 
-Discovery runs when you pass `mcp_servers="all"` or a list of server names (e.g. `["download"]`). The registry walks up from the `fedotmas` package to find the workspace root (a `pyproject.toml` with `[tool.uv.workspace]`), then scans every `mcp-servers/*/pyproject.toml` for `[tool.fedotmas.mcp]` sections.
+Discovery runs when you pass `mcp_servers="all"` or a list of server names (e.g. `["download-url-content"]`). The registry walks up from the `fedotmas` package to find the workspace root (a `pyproject.toml` with `[tool.uv.workspace]`), then scans every `mcp-servers/*/pyproject.toml` for `[tool.fedotmas.mcp]` sections.
 
 If you leave `mcp_servers` at the default `None`, no discovery happens and no servers are registered.
 
@@ -21,46 +21,31 @@ maw = MAW(mcp_servers=discover_local_servers("/path/to/my-servers"))
 After construction you can inspect the resolved registry:
 
 ```python
-print(maw.mcp_servers)  # {'sandbox-light': StdioMCPServer(...), ...}
+print(maw.mcp_servers)  # {'light-sandbox': StdioMCPServer(...), ...}
 ```
 
-**Prerequisites:** Docker and Docker Compose installed
+### Adding a new MCP server
 
-**Manual setup (without just):**
+1. Create a directory under `mcp-servers/`:
 
-```bash
-# Clone SearXNG Docker repository
-cd ~
-git clone https://github.com/searxng/searxng-docker.git
-cd searxng-docker
-
-# Generate secret key
-sed -i "s|ultrasecretkey|$(openssl rand -hex 32)|g" searxng/settings.yml
-
-# Configure search formats
-cat >> searxng/settings.yml << EOF
-search:
-  formats:
-    - html
-    - json
-    - csv
-    - rss
-EOF
-
-# Update port in docker-compose.yaml
-sed -i "s/127.0.0.1:8080:8080/127.0.0.1:8888:8080/" docker-compose.yaml
-
-# Start services
-docker compose up -d
-
-# Verify running
-curl http://localhost:8888
+```
+mcp-servers/my-server/
+  pyproject.toml
+  src/
+    my_server/
+      server.py
 ```
 
 2. Add the standard project metadata **and** a `[tool.fedotmas.mcp]` section to `pyproject.toml`:
 
-SearXNG will be available at `http://localhost:8888`
+```toml
+[project]
+name = "my-mcp-server"
+version = "0.1.0"
+dependencies = ["fastmcp>=2.14.5"]
 
+[project.scripts]
+my-mcp-server = "my_server.server:main"
 
 [tool.fedotmas.mcp]
 name = "my-server"
@@ -79,37 +64,6 @@ Auto-discovered servers always use **stdio** via `uv run`. When you pass `mcp_se
 
 - `StdioMCPServer` is any command + args over stdio
 - `HttpMCPServer` is remote server over HTTP (Streamable HTTP transport)
-
-#### Running over HTTP (standalone)
-
-By default all MCP servers use stdio. To run a server as an HTTP endpoint, set `FASTMCP_TRANSPORT=http` and optionally `FASTMCP_HOST` / `FASTMCP_PORT`:
-
-```bash
-# sandbox-light on HTTP:
-FASTMCP_TRANSPORT=http FASTMCP_PORT=9001 \
-  uv run --directory mcp-servers/sandbox-light mcp-sandbox
-
-# download on HTTP:
-FASTMCP_TRANSPORT=http FASTMCP_PORT=9002 \
-  uv run --directory mcp-servers/download mcp-download
-
-# websearch-searxng on HTTP:
-FASTMCP_TRANSPORT=http FASTMCP_PORT=9003 \
-  uv run --directory mcp-servers/websearch-searxng mcp-websearch
-```
-
-Then connect from code:
-
-```python
-from fedotmas import MAW, HttpMCPServer
-
-maw = MAW(mcp_servers={
-    "sandbox-light": HttpMCPServer(
-        url="http://127.0.0.1:9001/mcp",
-        description="Python sandbox — safe code execution",
-    ),
-})
-```
 
 #### HTTP (remote server)
 
