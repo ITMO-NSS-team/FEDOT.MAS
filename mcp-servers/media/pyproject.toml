@@ -1,0 +1,26 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-media"
+version = "0.1.0"
+description = "MCP server for media analysis (audio, image, video)"
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+  "fastmcp>=2.14.5",
+  "pydantic>=2.12.5",
+  "pydantic-ai>=0.2",
+]
+scripts.mcp-media = "mcp_media.server:main"
+
+[tool.fedotmas]
+mcp.name = "media"
+mcp.description = "Analyze media files: transcribe audio, describe images, analyze video. Supports local files and URLs."
+mcp.tags = [ "media", "audio", "image", "video" ]
