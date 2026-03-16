@@ -1,38 +1,38 @@
 from typing import Literal
 
 from fedotmas.mcp._config import HttpMCPServer, MCPServerConfig, StdioMCPServer
-from fedotmas.mcp._discovery import discover_servers
-from fedotmas.mcp.registry import MCP_SERVERS, create_toolset, get_server_descriptions
-
-ALL_SERVERS: list[str] = list(MCP_SERVERS.keys())
+from fedotmas.mcp.discovery import discover_local_servers
+from fedotmas.mcp.registry import (
+    create_toolset,
+    get_mcp_servers,
+    get_server_descriptions,
+)
 
 
 def resolve_mcp_registry(
-    mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"],
+    mcp_servers: list[str] | dict[str, MCPServerConfig] | Literal["all"] | None,
 ) -> dict[str, MCPServerConfig]:
     """Resolve the user-facing *mcp_servers* argument into a registry dict."""
-    if mcp_servers == "all":
-        return MCP_SERVERS
+    if not mcp_servers:
+        return {}
     if isinstance(mcp_servers, dict):
         return mcp_servers
-    # list[str] — filter from the bank (empty list = no tools)
-    unknown = set(mcp_servers) - MCP_SERVERS.keys()
+    registry = get_mcp_servers()
+    if mcp_servers == "all":
+        return registry
+    unknown = set(mcp_servers) - registry.keys()
     if unknown:
         raise ValueError(
-            f"Unknown MCP servers: {sorted(unknown)}. "
-            f"Available: {sorted(MCP_SERVERS)}"
+            f"Unknown MCP servers: {sorted(unknown)}. Available: {sorted(registry)}"
         )
-    return {k: MCP_SERVERS[k] for k in mcp_servers}
+    return {k: registry[k] for k in mcp_servers}
 
 
 __all__ = [
-    "ALL_SERVERS",
     "HttpMCPServer",
     "MCPServerConfig",
-    "MCP_SERVERS",
     "StdioMCPServer",
-    "create_toolset",
-    "discover_servers",
+    "discover_local_servers",
     "get_server_descriptions",
-    "resolve_mcp_registry",
+    "create_toolset",
 ]

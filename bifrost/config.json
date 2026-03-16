@@ -1,0 +1,24 @@
+{
+  "providers": {
+    "openrouter": {
+      "keys": [
+        {
+          "name": "default-key",
+          "value": "env.OPENAI_API_KEY",
+          "models": [],
+          "weight": 1.0
+        }
+      ]
+    }
+  },
+  "config_store": {
+    "enabled": true,
+    "type": "sqlite",
+    "config": { "path": "./data/config.db" }
+  },
+  "logs_store": {
+    "enabled": true,
+    "type": "sqlite",
+    "config": { "path": "./data/logs.db" }
+  }
+}

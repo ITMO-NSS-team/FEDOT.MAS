@@ -10,66 +10,64 @@ FEDOT.MAS automatically generates and executes multi-agent pipelines from a plai
 
 ## Repository map
 
-| Package | Path | Description |
-|---------|------|-------------|
-| **fedot-mas** | [`packages/fedotmas`](packages/fedotmas) | Core library: meta-agent, pipeline builder & runner |
-| **fedotmas-synapse** | [`packages/fedotmas-synapse`](packages/fedotmas-synapse) | Synapse Platform integration plugin |
-| **mcp-servers** | [`mcp-servers/`](mcp-servers/) | Internal MCP-servers registry |
+| Path | Description |
+|------|-------------|
+| [`packages/fedotmas`](packages/fedotmas) | Core library: meta-agent, pipeline builder & runner |
+| [`packages/fedotmas-synapse`](packages/fedotmas-synapse) | Synapse Platform integration plugin |
+| [`mcp-servers`](mcp-servers/) | Internal MCP-servers registry |
 
 ## Quick start
 
-**Prerequisites**: Python 3.12+, [uv](https://docs.astral.sh/uv/)
+Managed with [uv](https://github.com/astral-sh/uv).
 
-1. Clone and install
+**With [just](https://github.com/casey/just):**
 
-```
-uv sync --all-packages
-source .venv/bin/activate
-```
+Create a virtual environment and install both packages:
 
-2. Configure environment
-
-```
-cp .env.example .env
+```sh
+just venv
 ```
 
-Open `.env` and set your model provider.
+**Or manual:**
 
-Default model and agent settings live in environment variables (see `.env.example` for the full list).
-
-3. Run the basic example
-
-```
-uv run python examples/basic_usage.py
+```sh
+uv sync
+cp -n .env.example .env 2>/dev/null || true
 ```
 
 ## Development
 
-Install dev dependencies (ruff, ty, prek):
+**With just:**
 
+```sh
+just venv-dev
 ```
+
+**Or manual:**
+
+```sh
 uv sync --group dev
+uv run prek install
 ```
 
-### Pre-commit hooks
-
-The project uses [pre-commit](https://pre-commit.com/) hooks that run on every commit:
-
-- **ruff** linting with auto-fix + formatting
-- **ty** type checking
-
-Install the hooks into your local repo:
+### Linting & type checking
 
 ```
-prek install
+just lint        # ruff check + format
+just typecheck   # ty check
+just check       # both
 ```
 
-After that, `ruff` and `ty` will run automatically before each commit.
+Or manually:
 
-### Running checks manually
-
-```
-uv run ruff check . --fix
+```sh
+uv run ruff check --fix .
 uv run ruff format .
-uv run ty check packages/fedotmas/src/
+uv run ty check
+```
+
+### Tests
+
+```sh
+just test-unit
 ```

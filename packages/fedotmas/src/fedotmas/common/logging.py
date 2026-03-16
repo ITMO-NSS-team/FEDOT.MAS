@@ -60,6 +60,3 @@ def setup_logging(level: str | None = None) -> None:
 def get_logger(name: str) -> Logger:
     """Return a logger bound to *name*."""
     return logger.bind(name=name)
-
-
-setup_logging()
