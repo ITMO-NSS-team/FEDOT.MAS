@@ -36,7 +36,17 @@ mcp-servers/my-server/
       server.py
 ```
 
-2. Add the standard project metadata **and** a `[tool.fedotmas.mcp]` section to `pyproject.toml`:
+2. Add a `[tool.fedotmas.mcp]` section to `pyproject.toml`:
+
+```toml
+[tool.fedotmas.mcp]
+name = "my-server"
+description = "Short description of what the server does. The meta-agent reads this to decide when to use it."
+tags = ["relevant", "tags"]
+timeout = 120
+```
+
+For Python servers, also add `[project]` + `[project.scripts]` so the discovery knows which entry point to launch via `uv run`:
 
 ```toml
 [project]
@@ -46,17 +56,31 @@ dependencies = ["fastmcp>=2.14.5"]
 
 [project.scripts]
 my-mcp-server = "my_server.server:main"
+```
 
+For external binaries that already speak MCP stdio, use `command` + `args` instead of `[project.scripts]`:
+
+```toml
 [tool.fedotmas.mcp]
-name = "my-server"
-description = "Short description of what the server does. The meta-agent reads this to decide when to use it."
-tags = ["relevant", "tags"]
-timeout = 120  # optional, seconds to wait for MCP session (default: 60)
+name = "browser"
+command = "lightpanda"
+args = ["mcp"]
 ```
 
 3. Next time you call `MAS(mcp_servers="all")`, the new server appears in the registry and the meta-agent can assign it to pipeline agents.
 
-The `name` field is the key used in pipeline configs (e.g. `"tools": ["my-server"]`). The entry point is taken from the first key in `[project.scripts]`. Each server gets its own `uv`-managed virtualenv on first run. The optional `timeout` field sets how long ADK waits for the server to become ready (default: 60s). On cold start `uv` installs dependencies into the server's virtualenv, which may take longer than usual.
+### `[tool.fedotmas.mcp]` fields
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `name` | yes | — | Registry key used in pipeline configs (`"tools": ["my-server"]`) |
+| `description` | no | `""` | Human-readable description. The meta-agent reads this to decide when to assign the server. |
+| `tags` | no | `[]` | List of tags for categorization and filtering. |
+| `timeout` | no | `60` | Seconds to wait for MCP session to become ready. |
+| `command` | no | — | Path or name of an external binary that speaks MCP stdio. When set, `[project.scripts]` is not required. |
+| `args` | no | `[]` | Arguments passed to `command`. Only used when `command` is set. |
+
+**Resolution order:** if `command` is present, discovery creates a `StdioMCPServer` pointing directly at that binary. Otherwise it reads the first key from `[project.scripts]` and launches via `uv run --directory`. Python servers get their own `uv`-managed virtualenv on first run (cold start installs dependencies, which may take longer than usual).
 
 ### Transports
 

@@ -100,3 +100,11 @@ searxng-status:
     dir="${dir/#\~/$HOME}"
     cd "$dir"
     docker compose ps
+
+# Lightpanda browser
+
+lightpanda-install:
+    curl -fsSL https://pkg.lightpanda.io/install.sh | bash
+
+lightpanda-check:
+    @lightpanda --version || echo "Lightpanda not installed. Run: just lightpanda-install"
