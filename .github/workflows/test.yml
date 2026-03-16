@@ -2,6 +2,11 @@ name: Test
 
 on:
   pull_request:
+    types: [opened, reopened]
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   detect:
