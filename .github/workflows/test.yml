@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       fedotmas: ${{ steps.filter.outputs.fedotmas }}
-      synapse: ${{ steps.filter.outputs.synapse }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -22,8 +21,6 @@ jobs:
           filters: |
             fedotmas:
               - "packages/fedotmas/**"
-            synapse:
-              - "packages/fedotmas-synapse/**"
 
   test-fedotmas:
     needs: detect
@@ -35,20 +32,10 @@ jobs:
       - run: uv sync --dev
       - run: uv run pytest packages/fedotmas/tests/
 
-  test-synapse:
-    needs: detect
-    if: needs.detect.outputs.synapse == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-      - run: uv sync --dev
-      - run: uv run pytest packages/fedotmas-synapse/tests/
-
   ci:
     runs-on: ubuntu-latest
     if: always()
-    needs: [test-fedotmas, test-synapse]
+    needs: [test-fedotmas]
     steps:
       - run: |
           if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
