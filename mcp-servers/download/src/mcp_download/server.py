@@ -5,11 +5,12 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
+import platformdirs
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 MAX_FILE_SIZE_MB = 500
-DEFAULT_DOWNLOAD_DIR = Path.home() / "Downloads" / "mcp_downloads"
+DEFAULT_DOWNLOAD_DIR = Path(platformdirs.user_downloads_dir()) / "mcp_downloads"
 
 mcp = FastMCP("download")
 

@@ -11,7 +11,7 @@ just searxng-stop      # docker compose down
 just searxng-status    # docker compose ps
 ```
 
-Installs to `~/.local/share/fedotmas/searxng`. Default port: `18888`. Override via `SEARXNG_URL` in `.env`.
+Installs to platform data directory (`~/.local/share/fedotmas/searxng` on Linux, `~/Library/Application Support/fedotmas/searxng` on macOS). Override with `SEARXNG_DIR` env var. Default port: `18888`. Override via `SEARXNG_URL` in `.env`.
 
 ## Usage
 
