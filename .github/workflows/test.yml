@@ -47,7 +47,6 @@ jobs:
         working-directory: packages/fedotmas-synapse
 
   ci:
-    # Gate job — add this single check as required in branch protection
     runs-on: ubuntu-latest
     if: always()
     needs: [test-fedotmas, test-synapse]
