@@ -3,7 +3,7 @@ build-backend = "uv_build"
 requires = [ "uv-build>=0.10.3,<0.11" ]
 
 [project]
-name = "fedotmas-mcp-searxng"
+name = "mcp-websearch-searxng"
 version = "0.1.0"
 description = "MCP server for web search via self-hosted SearXNG metasearch engine"
 requires-python = ">=3.12"
@@ -16,23 +16,15 @@ classifiers = [
 dependencies = [
   "fastmcp>=2.14.5",
   "httpx>=0.27",
-  "beautifulsoup4>=4.12",
   "pydantic>=2.12.5",
   "python-dotenv>=1.2.1",
 ]
-
-[project.scripts]
-fedotmas-mcp-searxng = "fedotmas_mcp_searxng.server:main"
-
-[tool.uv]
-build-backend.module-name = "fedotmas_mcp_searxng"
+scripts.mcp-websearch = "mcp_websearch_searxng.server:main"
 
 [tool.fedotmas]
-mcp.name = "searxng-search"
-mcp.description = """\
-  Search the web via self-hosted SearXNG metasearch engine. Aggregates results from 244+ search \
-  engines (Google, Bing, DuckDuckGo, academic sources, etc.) \
-  Supports category filtering (general, news, science, etc.), language selection, engine selection, \
-  and optional raw page content extraction (full-text scraping).\
-  """
+mcp.name = "websearch-searxng"
+mcp.description = """
+MCP server for web search via self-hosted SearXNG. Supports filtering by category
+(general, news, science, etc.) and language.
+"""
 mcp.tags = [ "web", "search", "research" ]

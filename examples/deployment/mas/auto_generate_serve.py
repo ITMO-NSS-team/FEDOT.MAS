@@ -13,7 +13,7 @@ TASK = "Handle customer support for an e-commerce platform"
 
 
 async def generate():
-    mas = MAS(mcp_servers=["light-sandbox"])
+    mas = MAS(mcp_servers=["sandbox-light"])
 
     _log.info("Generating routing config for task ...")
     config = await mas.generate_config(TASK)

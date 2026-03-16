@@ -98,7 +98,7 @@ The coordinator agent has workers as sub-agents. When a user request arrives:
       "description": "Gathers information, finds sources, and collects data on topics",
       "instruction": "You are a data researcher. Gather comprehensive information on the given topic using available tools. Present findings in a structured format.",
       "model": "<model>",
-      "tools": ["download-url-content"],
+      "tools": ["download"],
       "output_key": "data_researcher_output"
     },
     {

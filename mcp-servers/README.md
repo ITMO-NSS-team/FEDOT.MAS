@@ -1,4 +1,4 @@
-# searxng-search MCP server
+# MCP servers
 
 FEDOT.MAS uses [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) to give agents access to external tools like file downloads, web scraping, and code execution.
 
@@ -6,7 +6,7 @@ When a user describes a task, the **meta-agent** reads the descriptions of all r
 
 ### Set up SearXNG
 
-Discovery runs when you pass `mcp_servers="all"` or a list of server names (e.g. `["download-url-content"]`). The registry walks up from the `fedotmas` package to find the workspace root (a `pyproject.toml` with `[tool.uv.workspace]`), then scans every `mcp-servers/*/pyproject.toml` for `[tool.fedotmas.mcp]` sections.
+Discovery runs when you pass `mcp_servers="all"` or a list of server names (e.g. `["download"]`). The registry walks up from the `fedotmas` package to find the workspace root (a `pyproject.toml` with `[tool.uv.workspace]`), then scans every `mcp-servers/*/pyproject.toml` for `[tool.fedotmas.mcp]` sections.
 
 If you leave `mcp_servers` at the default `None`, no discovery happens and no servers are registered.
 
@@ -21,7 +21,7 @@ maw = MAW(mcp_servers=discover_local_servers("/path/to/my-servers"))
 After construction you can inspect the resolved registry:
 
 ```python
-print(maw.mcp_servers)  # {'light-sandbox': StdioMCPServer(...), ...}
+print(maw.mcp_servers)  # {'sandbox-light': StdioMCPServer(...), ...}
 ```
 
 **Prerequisites:** Docker and Docker Compose installed
@@ -79,6 +79,37 @@ Auto-discovered servers always use **stdio** via `uv run`. When you pass `mcp_se
 
 - `StdioMCPServer` is any command + args over stdio
 - `HttpMCPServer` is remote server over HTTP (Streamable HTTP transport)
+
+#### Running over HTTP (standalone)
+
+By default all MCP servers use stdio. To run a server as an HTTP endpoint, set `FASTMCP_TRANSPORT=http` and optionally `FASTMCP_HOST` / `FASTMCP_PORT`:
+
+```bash
+# sandbox-light on HTTP:
+FASTMCP_TRANSPORT=http FASTMCP_PORT=9001 \
+  uv run --directory mcp-servers/sandbox-light mcp-sandbox
+
+# download on HTTP:
+FASTMCP_TRANSPORT=http FASTMCP_PORT=9002 \
+  uv run --directory mcp-servers/download mcp-download
+
+# websearch-searxng on HTTP:
+FASTMCP_TRANSPORT=http FASTMCP_PORT=9003 \
+  uv run --directory mcp-servers/websearch-searxng mcp-websearch
+```
+
+Then connect from code:
+
+```python
+from fedotmas import MAW, HttpMCPServer
+
+maw = MAW(mcp_servers={
+    "sandbox-light": HttpMCPServer(
+        url="http://127.0.0.1:9001/mcp",
+        description="Python sandbox — safe code execution",
+    ),
+})
+```
 
 #### HTTP (remote server)
 

@@ -13,7 +13,7 @@ TASK = "Sort the list [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]."
 
 
 async def generate():
-    maw = MAW(mcp_servers=["light-sandbox"])
+    maw = MAW(mcp_servers=["sandbox-light"])
 
     _log.info("Generating pipeline config for task ...")
     config = await maw.generate_config(TASK)

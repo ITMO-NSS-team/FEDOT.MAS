@@ -29,12 +29,12 @@ class SearchResponse(BaseModel):
 
 DESCRIPTION = """
 MCP server for web search via self-hosted SearXNG. Supports filtering by category
-(general, news, science, etc.) and language. Requires SEARXNG_URL env var.
+(general, news, science, etc.) and language.
 """
 
-ENGINES = "bing,duckduckgo,brave,mullvadleta,mullvadleta brave,yahoo,presearch"
+ENGINES = "bing,duckduckgo,brave,mullvadleta,yahoo,presearch"
 
-searxng_server = FastMCP("searxng-search", instructions=DESCRIPTION)
+searxng_server = FastMCP("websearch-searxng", instructions=DESCRIPTION)
 
 
 @searxng_server.tool
@@ -57,7 +57,11 @@ async def search(
     ] = "auto",
     safesearch: Annotated[
         int,
-        Field(description="SafeSearch level: 0 (off), 1 (moderate), 2 (strict)", ge=0, le=2),
+        Field(
+            description="SafeSearch level: 0 (off), 1 (moderate), 2 (strict)",
+            ge=0,
+            le=2,
+        ),
     ] = 1,
 ) -> SearchResponse | str:
     """
@@ -84,7 +88,7 @@ async def search(
     """
     try:
         # Get SearXNG instance URL from environment, default to localhost
-        instance_url = os.getenv("SEARXNG_URL", "http://localhost:8888")
+        instance_url = os.getenv("SEARXNG_URL", "http://localhost:18888")
 
         await ctx.info(f"Searching via SearXNG: {query[:50]}...")
 
@@ -111,8 +115,14 @@ async def search(
         suggestions = data.get("suggestions", [])
         infoboxes = data.get("infoboxes", [])
 
-        # Validate and construct SearchResult objects
-        results = [SearchResult(**result) for result in raw_results]
+        # Validate and construct SearchResult objects, skip malformed entries
+        results: list[SearchResult] = []
+        for raw in raw_results:
+            try:
+                results.append(SearchResult(**raw))
+            except Exception:
+                await ctx.warning(f"Skipping malformed result: {raw.get('url', '?')}")
+                continue
 
         await ctx.info(f"Found {len(results)} results from SearXNG")
 
@@ -125,7 +135,9 @@ async def search(
         )
 
     except httpx.HTTPStatusError as e:
-        error_msg = f"SearXNG HTTP error {e.response.status_code}: {e.response.text[:200]}"
+        error_msg = (
+            f"SearXNG HTTP error {e.response.status_code}: {e.response.text[:200]}"
+        )
         await ctx.error(error_msg)
         return error_msg
     except httpx.RequestError as e:
@@ -139,8 +151,4 @@ async def search(
 
 
 def main():
-    searxng_server.run(transport="stdio", show_banner=False)
-
-
-if __name__ == "__main__":
-    main()
+    searxng_server.run(show_banner=False)
