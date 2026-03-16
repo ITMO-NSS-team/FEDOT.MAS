@@ -146,5 +146,9 @@ def monty_resume_stepped(session_id: str, return_value: Any = None) -> Dict[str,
         return {"success": False, "error": str(exc)}
 
 
-if __name__ == "__main__":
+def main() -> None:
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

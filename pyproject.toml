@@ -9,7 +9,10 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
 ]
-dependencies = []
+dependencies = [
+  "fedotmas",
+  "fedotmas-synapse",
+]
 
 [dependency-groups]
 dev = [
@@ -21,13 +24,22 @@ dev = [
 ]
 
 [tool.uv]
-sources.fedot-mas = { workspace = true }
+sources.fedotmas = { workspace = true }
+sources.fedotmas-synapse = { workspace = true }
+package = false
 workspace.members = [ "packages/*" ]
+
+[tool.ruff]
+exclude = [ "**/tests/**" ]
 
 [tool.pytest]
 ini_options.asyncio_mode = "auto"
-ini_options.testpaths = [ "packages/fedotmas-synapse/tests" ]
+ini_options.testpaths = [
+  "packages/fedotmas/tests",
+  "packages/fedotmas-synapse/tests",
+]
 
 [tool.ty]
 rules.unresolved-import = "ignore"
 rules.possibly-missing-import = "ignore"
+src.exclude = [ "**/tests/" ]

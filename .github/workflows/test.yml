@@ -1,0 +1,44 @@
+name: Test
+
+on:
+  pull_request:
+    types: [opened, reopened]
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      fedotmas: ${{ steps.filter.outputs.fedotmas }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            fedotmas:
+              - "packages/fedotmas/**"
+
+  test-fedotmas:
+    needs: detect
+    if: needs.detect.outputs.fedotmas == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --dev
+      - run: uv run pytest packages/fedotmas/tests/
+
+  ci:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [test-fedotmas]
+    steps:
+      - run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more test jobs failed or were cancelled"
+            exit 1
+          fi

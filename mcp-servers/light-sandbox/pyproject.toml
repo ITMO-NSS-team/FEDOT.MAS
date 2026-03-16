@@ -14,10 +14,10 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [ "fastmcp>=2.14.5", "pydantic-monty" ]
-scripts.fedotmas-mcp-download = "lightsanbox.server:main"
+scripts.fedotmas-mcp-download = "lightsandbox.server:main"
 
 [tool.uv]
-build-backend.module-name = "lightsanbox"
+build-backend.module-name = "lightsandbox"
 
 [tool.fedotmas]
 mcp.name = "light-sandbox"

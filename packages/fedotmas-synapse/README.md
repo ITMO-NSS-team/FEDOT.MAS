@@ -11,5 +11,5 @@ This package is under development.
 From the workspace root:
 
 ```
-uv pip install packages/fedotmas-synapse
+uv pip install -e packages/fedotmas-synapse
 ```

@@ -3,7 +3,7 @@ build-backend = "uv_build"
 requires = [ "uv-build>=0.10.3,<0.11" ]
 
 [project]
-name = "fedot-mas"
+name = "fedotmas"
 version = "0.1.0"
 description = "Multi-Agent Systems Generation"
 readme = "README.md"
@@ -15,13 +15,13 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-  "google-adk>=1.25",
+  "google-adk>=1.26",
   "litellm>=1.80.16",
   "loguru>=0.7.3",
   "platformdirs>=4.9.2",
   "pydantic>=2.12.5",
   "python-dotenv>=1.2.1",
-  "rich>=14.3.2",
+  "rich>=14.3.2"
 ]
 
 [tool.uv]
