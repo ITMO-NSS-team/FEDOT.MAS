@@ -1,19 +1,11 @@
 # searxng-search MCP server
 
-<<<<<<< HEAD
-Web search via self-hosted SearXNG. Registered automatically in FEDOT.MAS.
-
-=======
 FEDOT.MAS uses [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) to give agents access to external tools like file downloads, web scraping, and code execution.
 
 When a user describes a task, the **meta-agent** reads the descriptions of all registered MCP servers and decides which tools each pipeline agent needs. At runtime the pipeline builder wraps each server in an ADK `McpToolset`. The ADK then either launches a subprocess (for stdio servers) or opens an HTTP connection (for remote ones).
->>>>>>> main
 
 ### Set up SearXNG
 
-<<<<<<< HEAD
-SearXNG provides a self-hosted metasearch engine for web searches without API rate limits.
-=======
 Discovery runs when you pass `mcp_servers="all"` or a list of server names (e.g. `["download-url-content"]`). The registry walks up from the `fedotmas` package to find the workspace root (a `pyproject.toml` with `[tool.uv.workspace]`), then scans every `mcp-servers/*/pyproject.toml` for `[tool.fedotmas.mcp]` sections.
 
 If you leave `mcp_servers` at the default `None`, no discovery happens and no servers are registered.
@@ -31,7 +23,6 @@ After construction you can inspect the resolved registry:
 ```python
 print(maw.mcp_servers)  # {'light-sandbox': StdioMCPServer(...), ...}
 ```
->>>>>>> main
 
 **Prerequisites:** Docker and Docker Compose installed
 
@@ -66,35 +57,11 @@ docker compose up -d
 curl http://localhost:8888
 ```
 
-<<<<<<< HEAD
-**Important:** The `search.formats` configuration is required for API access. Without it, JSON responses won't be available.
-=======
 2. Add the standard project metadata **and** a `[tool.fedotmas.mcp]` section to `pyproject.toml`:
->>>>>>> main
 
 SearXNG will be available at `http://localhost:8888`
 
 
-<<<<<<< HEAD
-## Usage in FEDOT.MAS
-
-In auto mode the meta-agent assigns the tool automatically when the task requires web search:
-
-```python
-mas = MAS()
-state = await mas.run("What are the latest AI research papers from 2025?")
-```
-
-To assign it explicitly to an agent:
-
-```python
-AgentConfig(
-    name="researcher",
-    instruction="Search the web and answer: {user_query}",
-    output_key="result",
-    tools=["searxng-search"],
-)
-=======
 [tool.fedotmas.mcp]
 name = "my-server"
 description = "Short description of what the server does. The meta-agent reads this to decide when to use it."
@@ -176,5 +143,4 @@ servers["mongodb"] = StdioMCPServer(
 )
 
 maw = MAW(mcp_servers=servers)
->>>>>>> main
 ```
