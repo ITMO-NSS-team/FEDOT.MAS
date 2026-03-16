@@ -2,8 +2,6 @@ name: Test
 
 on:
   pull_request:
-    paths:
-      - "packages/**"
 
 jobs:
   detect:
@@ -52,7 +50,7 @@ jobs:
     needs: [test-fedotmas, test-synapse]
     steps:
       - run: |
-          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
-            echo "One or more test jobs failed"
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more test jobs failed or were cancelled"
             exit 1
           fi
