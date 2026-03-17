@@ -109,7 +109,7 @@ lightpanda-install:
 lightpanda-check:
     @lightpanda --version || echo "Lightpanda not installed. Run: just lightpanda-install"
 
-# browser-use (completely browser automation)
+# browser-use (browser automation)
 
 browser-use-install:
     uvx browser-use install

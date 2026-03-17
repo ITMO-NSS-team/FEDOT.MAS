@@ -5,7 +5,7 @@ requires = [ "uv-build>=0.10.3,<0.11" ]
 [project]
 name = "mcp-sandbox-light"
 version = "0.1.0"
-description = "Python sandbox — safe code execution using only builtins, no third-party libraries, no imports, no file access."
+description = "Restricted Python sandbox. Only builtins, no imports, no pip, no file access."
 requires-python = ">=3.12"
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
@@ -24,5 +24,8 @@ ini_options.asyncio_mode = "auto"
 
 [tool.fedotmas]
 mcp.name = "sandbox-light"
-mcp.description = "Python sandbox — safe code execution using only builtins, no third-party libraries, no imports, no file access."
+mcp.description = """\
+  Restricted Python sandbox. Only builtins, no imports, no pip, no file access. Use for quick math, logic checks, and \
+  pure Python verification.\
+  """
 mcp.tags = [ "code" ]
