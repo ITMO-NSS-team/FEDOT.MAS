@@ -101,10 +101,18 @@ searxng-status:
     cd "$dir"
     docker compose ps
 
-# Lightpanda browser
+# Lightpanda browser (actually a scraper)
 
 lightpanda-install:
     curl -fsSL https://pkg.lightpanda.io/install.sh | bash
 
 lightpanda-check:
     @lightpanda --version || echo "Lightpanda not installed. Run: just lightpanda-install"
+
+# browser-use (completely browser automation)
+
+browser-use-install:
+    uvx browser-use install
+
+browser-use-check:
+    @uvx --from 'browser-use[cli]' browser-use --help > /dev/null 2>&1 && echo "browser-use OK" || echo "browser-use not installed. Run: just browser-use-install"

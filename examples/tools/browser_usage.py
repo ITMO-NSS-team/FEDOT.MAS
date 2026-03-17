@@ -4,7 +4,7 @@ from fedotmas import MAW, MAWConfig
 from fedotmas.common.logging import get_logger
 from fedotmas.maw.models import MAWAgentConfig, MAWStepConfig
 
-_log = get_logger("fedotmas.examples.tools.browser")
+_log = get_logger("fedotmas.examples.tools.browser_usage")
 
 MODEL = "openai/gpt-4o-mini"
 
@@ -15,21 +15,20 @@ async def main():
             MAWAgentConfig(
                 name="browser",
                 instruction=(
-                    "{user_query}\n"
-                    "Use the browser tools to navigate to the page, "
-                    "extract content as markdown, and summarize the findings."
+                    "Go to {user_query} and extract the main heading and "
+                    "first paragraph of content from the page."
                 ),
                 model=MODEL,
                 output_key="result",
-                tools=["browser"],
+                tools=["browser-usage"],
             ),
         ],
         pipeline=MAWStepConfig(type="agent", agent_name="browser"),
     )
 
-    maw = MAW(mcp_servers=["browser"])
+    maw = MAW(mcp_servers=["browser-usage"])
     state = await maw.build_and_run(
-        config, "Go to https://lightpanda.io and summarize what the product does"
+        config, "https://en.wikipedia.org/wiki/Multi-agent_system"
     )
 
     _log.info("Result: {}", str(state.get("result", ""))[:500])
