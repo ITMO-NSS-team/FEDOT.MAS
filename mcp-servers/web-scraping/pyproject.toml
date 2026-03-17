@@ -1,0 +1,25 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-web-scraping"
+version = "0.1.0"
+description = "MCP proxy server for Lightpanda (read-only web scraping)"
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [ "fastmcp>=2.14.5" ]
+scripts.mcp-web-scraping = "mcp_web_scraping.server:main"
+
+[dependency-groups]
+dev = [ "pytest" ]
+
+[tool.fedotmas]
+mcp.name = "web-scraping"
+mcp.description = "Read-only web scraping: navigate pages, extract markdown, links, structured data, and run JavaScript."
+mcp.tags = [ "browser", "web", "scraping", "extraction" ]

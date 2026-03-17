@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import os
 
 from google.adk.tools.mcp_tool import (
     McpToolset,
@@ -8,6 +9,7 @@ from google.adk.tools.mcp_tool import (
     StreamableHTTPConnectionParams,
 )
 from mcp import StdioServerParameters
+from mcp.client.stdio import get_default_environment
 
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp._config import HttpMCPServer, MCPServerConfig, StdioMCPServer
@@ -36,11 +38,12 @@ def create_toolset(
 
     match cfg:
         case StdioMCPServer():
+            env = {**get_default_environment(), **os.environ, **cfg.env}
             params = StdioConnectionParams(
                 server_params=StdioServerParameters(
                     command=cfg.command,
                     args=list(cfg.args),
-                    env=cfg.env or None,
+                    env=env,
                 ),
                 timeout=cfg.timeout,
             )

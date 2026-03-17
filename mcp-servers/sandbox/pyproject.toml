@@ -3,9 +3,9 @@ build-backend = "uv_build"
 requires = [ "uv-build>=0.10.3,<0.11" ]
 
 [project]
-name = "mcp-sandbox-light"
+name = "mcp-sandbox"
 version = "0.1.0"
-description = "Restricted Python sandbox. Only builtins, no imports, no pip, no file access."
+description = "Full Python sandbox (E2B) with pip, file I/O, shell, and persistent Jupyter-style sessions"
 requires-python = ">=3.12"
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
@@ -13,8 +13,8 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
 ]
-dependencies = [ "fastmcp>=2.14.5", "pydantic-monty" ]
-scripts.mcp-sandbox = "mcp_sandbox_light.server:main"
+dependencies = [ "e2b-code-interpreter>=1", "fastmcp>=2.14.5" ]
+scripts.mcp-sandbox = "mcp_sandbox.server:main"
 
 [dependency-groups]
 dev = [ "pytest", "pytest-asyncio" ]
@@ -23,9 +23,10 @@ dev = [ "pytest", "pytest-asyncio" ]
 ini_options.asyncio_mode = "auto"
 
 [tool.fedotmas]
-mcp.name = "sandbox-light"
+mcp.name = "sandbox"
 mcp.description = """\
-  Restricted Python sandbox. Only builtins, no imports, no pip, no file access. Use for quick math, logic checks, and \
-  pure Python verification.\
+  Full Python sandbox, pip install, file I/O, shell commands, persistent Jupyter-style sessions. Variables, imports, \
+  and packages are preserved across calls. Use when code requires third-party libraries, data processing, or system \
+  access.\
   """
 mcp.tags = [ "code", "sandbox" ]

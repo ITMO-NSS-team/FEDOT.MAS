@@ -1,0 +1,25 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-browser-usage"
+version = "0.1.0"
+description = "MCP proxy server for browser-use (interactive browser automation)"
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [ "fastmcp>=2.14.5" ]
+scripts.mcp-browser-usage = "mcp_browser_usage.server:main"
+
+[dependency-groups]
+dev = [ "pytest" ]
+
+[tool.fedotmas]
+mcp.name = "browser-usage"
+mcp.description = "Interactive browser automation: navigate, click, type, screenshot, extract content."
+mcp.tags = [ "browser", "automation", "interaction", "screenshot" ]

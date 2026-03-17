@@ -1,7 +1,7 @@
 bifrost_port := "9090"
 bifrost_url := "http://localhost:" + bifrost_port
 searxng_port := "18888"
-searxng_dir := "~/.local/share/fedotmas/searxng"
+searxng_dir := env("SEARXNG_DIR", if os() == "macos" { "~/Library/Application Support/fedotmas/searxng" } else if os() == "windows" { "~/AppData/Local/fedotmas/searxng" } else { "~/.local/share/fedotmas/searxng" })
 
 # User section:
 
@@ -100,3 +100,19 @@ searxng-status:
     dir="${dir/#\~/$HOME}"
     cd "$dir"
     docker compose ps
+
+# Lightpanda browser (actually a scraper)
+
+lightpanda-install:
+    curl -fsSL https://pkg.lightpanda.io/install.sh | bash
+
+lightpanda-check:
+    @lightpanda --version || echo "Lightpanda not installed. Run: just lightpanda-install"
+
+# browser-use (browser automation)
+
+browser-use-install:
+    uvx browser-use install
+
+browser-use-check:
+    @uvx --from 'browser-use[cli]' browser-use --help > /dev/null 2>&1 && echo "browser-use OK" || echo "browser-use not installed. Run: just browser-use-install"

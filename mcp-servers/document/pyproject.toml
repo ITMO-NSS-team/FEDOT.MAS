@@ -1,0 +1,31 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-document"
+version = "0.1.0"
+description = "MCP server for reading documents and archives"
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+  "fastmcp>=2.14.5",
+  "markitdown[docx,pdf,pptx,xlsx]>=0.1",
+  "openai>=1",
+  "platformdirs>=4",
+  "pydantic>=2.12.5",
+]
+scripts.mcp-document = "mcp_document.server:main"
+
+[dependency-groups]
+dev = [ "pytest", "pytest-asyncio" ]
+
+[tool.fedotmas]
+mcp.name = "document"
+mcp.description = "Read and extract text from documents (PDF, DOCX, PPTX, XLSX, CSV, HTML, code files, etc.) and manage ZIP archives."
+mcp.tags = [ "document", "pdf", "office", "archive", "text" ]

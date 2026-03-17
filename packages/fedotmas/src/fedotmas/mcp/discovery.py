@@ -75,11 +75,14 @@ def discover_local_servers(
             ├── pyproject.toml
             └── ...
 
-    Each ``pyproject.toml`` must declare:
+    Each ``pyproject.toml`` must declare ``[tool.fedotmas.mcp]`` with at least
+    ``name`` (str).  Optional: ``description``, ``tags``, ``timeout``.
 
-    - ``[tool.fedotmas.mcp]`` with at least ``name`` (str).
-      Optional: ``description`` (str), ``tags`` (list[str]).
-    - ``[project.scripts]`` — the first entry is used as the server entry point.
+    Server resolution order:
+
+    1. If ``mcp.command`` is present → use it directly as an external binary
+       (e.g. ``command = "lightpanda"``, ``args = ["mcp"]``).
+    2. Otherwise fall back to ``[project.scripts]`` + ``uv run --directory``.
 
     Returns:
         ``{name: MCPServerConfig}`` for every successfully discovered server.
@@ -113,27 +116,40 @@ def discover_local_servers(
             _log.warning("Missing 'name' in [tool.fedotmas.mcp] of {}", pyproject_path)
             continue
 
-        # Get entry point from [project.scripts]
+        description = mcp_meta.get("description", "")
+        tags = tuple(mcp_meta.get("tags", ()))
+        timeout = mcp_meta.get("timeout")
+
+        command = mcp_meta.get("command")
+        if command:
+            kwargs: dict[str, object] = dict(
+                command=command,
+                args=tuple(mcp_meta.get("args", ())),
+                description=description,
+                tags=tags,
+            )
+            if timeout is not None:
+                kwargs["timeout"] = int(timeout)
+            result[name] = StdioMCPServer(**kwargs)  # type: ignore[arg-type]
+            _log.debug("Discovered external MCP server: {} -> {}", name, command)
+            continue
+
         scripts = data.get("project", {}).get("scripts", {})
         if not scripts:
             _log.warning("No [project.scripts] in {}", pyproject_path)
             continue
         entry_point = next(iter(scripts))
 
-        description = mcp_meta.get("description", "")
-        tags = tuple(mcp_meta.get("tags", ()))
-        timeout = mcp_meta.get("timeout")
-
-        kwargs: dict[str, object] = dict(
+        dir_kwargs: dict[str, object] = dict(
             directory=str(server_dir),
             entry_point=entry_point,
             description=description,
             tags=tags,
         )
         if timeout is not None:
-            kwargs["timeout"] = int(timeout)
+            dir_kwargs["timeout"] = int(timeout)
 
-        result[name] = _directory_server(**kwargs)  # type: ignore[arg-type]
+        result[name] = _directory_server(**dir_kwargs)  # type: ignore[arg-type]
         _log.debug("Discovered MCP server: {} -> {}", name, server_dir)
 
     return result
