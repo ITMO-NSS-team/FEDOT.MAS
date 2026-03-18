@@ -263,4 +263,4 @@ async def explicit_strategy():
 
 
 if __name__ == "__main__":
-    asyncio.run(replace_agent())
+    asyncio.run(remove_agent())
