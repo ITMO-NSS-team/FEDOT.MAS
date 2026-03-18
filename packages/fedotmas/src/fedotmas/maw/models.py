@@ -20,6 +20,60 @@ _STATE_VAR_RE = re.compile(r"\{(\w+)\}")
 _ANGLE_VAR_RE = re.compile(r"<(\w+)>")
 
 
+def _replace_in_tree(
+    node: MAWStepConfig, name: str, replacement: MAWStepConfig
+) -> MAWStepConfig:
+    if node.type == "agent":
+        return replacement if node.agent_name == name else node
+    new_children = [_replace_in_tree(c, name, replacement) for c in node.children]
+    return node.model_copy(update={"children": new_children})
+
+
+def _rename_in_tree(node: MAWStepConfig, old: str, new: str) -> MAWStepConfig:
+    if node.type == "agent":
+        if node.agent_name == old:
+            return node.model_copy(update={"agent_name": new})
+        return node
+    new_children = [_rename_in_tree(c, old, new) for c in node.children]
+    return node.model_copy(update={"children": new_children})
+
+
+def _insert_after_in_tree(
+    node: MAWStepConfig, name: str, new_node: MAWStepConfig
+) -> MAWStepConfig:
+    if node.type == "agent":
+        return node
+    new_children: list[MAWStepConfig] = []
+    for child in node.children:
+        if child.type == "agent" and child.agent_name == name:
+            new_children.append(child)
+            new_children.append(new_node)
+        else:
+            new_children.append(_insert_after_in_tree(child, name, new_node))
+    return node.model_copy(update={"children": new_children})
+
+
+def _remove_from_tree(node: MAWStepConfig, name: str) -> MAWStepConfig | None:
+    if node.type == "agent":
+        return None if node.agent_name == name else node
+    new_children: list[MAWStepConfig] = []
+    for child in node.children:
+        result = _remove_from_tree(child, name)
+        if result is not None:
+            new_children.append(result)
+    if not new_children:
+        return None
+    if len(new_children) == 1 and node.type in ("sequential", "parallel"):
+        return new_children[0]
+    return node.model_copy(update={"children": new_children})
+
+
+def _has_agent_ref(node: MAWStepConfig, name: str) -> bool:
+    if node.type == "agent":
+        return node.agent_name == name
+    return any(_has_agent_ref(c, name) for c in node.children)
+
+
 class AgentPoolEntry(BaseModel):
     """A single agent definition for stage-1 pool generation.
 
@@ -70,7 +124,7 @@ class MAWAgentConfig(BaseModel):
 class MAWStepConfig(BaseModel):
     """A node in the pipeline tree."""
 
-    type: Literal["agent", "sequential", "parallel", "loop"]
+    type: Literal["agent", "sequential", "parallel", "loop"] = "agent"
 
     # For type="agent": reference to an agent config by name.
     agent_name: str | None = None
@@ -125,6 +179,51 @@ class MAWConfig(BaseModel):
             inner = " \u2192 ".join(parts)
             return f"\u21bb({inner}){suffix}"
         return " \u2192 ".join(parts)
+
+    def replace_agent(self, name: str, agent: MAWAgentConfig) -> MAWConfig:
+        if not _has_agent_ref(self.pipeline, name):
+            raise ValueError(f"Agent '{name}' not found in pipeline")
+        new_agents = [agent if a.name == name else a for a in self.agents]
+        if name != agent.name:
+            new_pipeline = _rename_in_tree(self.pipeline, name, agent.name)
+        else:
+            new_pipeline = self.pipeline
+        return MAWConfig(agents=new_agents, pipeline=new_pipeline)
+
+    def replace_step(
+        self,
+        name: str,
+        *,
+        step: MAWStepConfig,
+        agents: list[MAWAgentConfig],
+    ) -> MAWConfig:
+        if not _has_agent_ref(self.pipeline, name):
+            raise ValueError(f"Agent '{name}' not found in pipeline")
+        new_pipeline = _replace_in_tree(self.pipeline, name, step)
+        new_agents = [a for a in self.agents if a.name != name] + list(agents)
+        return MAWConfig(agents=new_agents, pipeline=new_pipeline)
+
+    def insert_after(self, name: str, agent: MAWAgentConfig) -> MAWConfig:
+        if not _has_agent_ref(self.pipeline, name):
+            raise ValueError(f"Agent '{name}' not found in pipeline")
+        new_node = MAWStepConfig(type="agent", agent_name=agent.name)
+        if self.pipeline.type == "agent" and self.pipeline.agent_name == name:
+            new_pipeline = MAWStepConfig(
+                type="sequential", children=[self.pipeline, new_node]
+            )
+        else:
+            new_pipeline = _insert_after_in_tree(self.pipeline, name, new_node)
+        new_agents = list(self.agents) + [agent]
+        return MAWConfig(agents=new_agents, pipeline=new_pipeline)
+
+    def remove_agent(self, name: str) -> MAWConfig:
+        if not _has_agent_ref(self.pipeline, name):
+            raise ValueError(f"Agent '{name}' not found in pipeline")
+        new_pipeline = _remove_from_tree(self.pipeline, name)
+        if new_pipeline is None:
+            raise ValueError("Cannot remove the only agent in the pipeline")
+        new_agents = [a for a in self.agents if a.name != name]
+        return MAWConfig(agents=new_agents, pipeline=new_pipeline)
 
     @model_validator(mode="after")
     def _validate_config(self) -> MAWConfig:
