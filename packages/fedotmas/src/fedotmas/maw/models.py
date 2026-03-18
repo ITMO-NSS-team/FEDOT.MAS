@@ -104,6 +104,28 @@ class MAWConfig(BaseModel):
     agents: list[MAWAgentConfig]
     pipeline: MAWStepConfig
 
+    def __str__(self) -> str:
+        agents_map = {a.name: a.output_key for a in self.agents}
+        pipeline_str = self._format_step(self.pipeline, agents_map)
+        lines = [f"Pipeline: {pipeline_str}", "Agents:"]
+        for a in self.agents:
+            tools = f"  tools: {a.tools}" if a.tools else ""
+            lines.append(f"  {a.name:<20} (output: {a.output_key}){tools}")
+        return "\n".join(lines)
+
+    def _format_step(self, step: MAWStepConfig, agents_map: dict[str, str]) -> str:
+        if step.type == "agent":
+            return step.agent_name or "?"
+        parts = [self._format_step(c, agents_map) for c in step.children]
+        if step.type == "parallel":
+            inner = ", ".join(parts)
+            return f"[{inner}]"
+        if step.type == "loop":
+            suffix = f" x{step.max_iterations}" if step.max_iterations else ""
+            inner = " \u2192 ".join(parts)
+            return f"\u21bb({inner}){suffix}"
+        return " \u2192 ".join(parts)
+
     @model_validator(mode="after")
     def _validate_config(self) -> MAWConfig:
         agent_names = {a.name for a in self.agents}
