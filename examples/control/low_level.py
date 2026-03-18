@@ -235,7 +235,7 @@ async def remove_agent():
     run = await ctrl.run("Подготовь презентацию", config=PRESENTATION_CONFIG)
 
     new_config = run.config.remove_agent("formatter")
-    run = await ctrl.resume(new_config)
+    run = await ctrl.resume(new_config, strategy=Strategy.RESTART_AFTER)
     print(run.result)
 
 
