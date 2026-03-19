@@ -34,7 +34,6 @@ SALES_CONFIG = MAWConfig(
 
 
 async def replace_agent():
-    """1:1 замена агента (топология не меняется)."""
     maw = MAW()
     ctrl = Controller(maw)
 
@@ -60,7 +59,6 @@ async def replace_agent():
 
 
 async def replace_with_parallel():
-    """Замена одного агента на параллельный бранч (replace_step)."""
     maw = MAW()
     ctrl = Controller(maw)
 
@@ -119,38 +117,36 @@ REPORT_CONFIG = MAWConfig(
 
 
 async def replace_with_loop():
-    """Замена одного агента на цикл (replace_step)."""
     maw = MAW()
     ctrl = Controller(maw)
 
     run = await ctrl.run("Напиши отчёт по рынку", config=REPORT_CONFIG)
 
-    if run.status == "error":
-        drafter = MAWAgentConfig(
-            name="drafter",
-            instruction="Напиши черновик на основе: {research}",
-            output_key="draft",
-        )
-        reviewer = MAWAgentConfig(
-            name="reviewer",
-            instruction="Оцени черновик: {draft}",
-            output_key="report",
-        )
+    drafter = MAWAgentConfig(
+        name="drafter",
+        instruction="Напиши черновик на основе: {research}",
+        output_key="draft",
+    )
+    reviewer = MAWAgentConfig(
+        name="reviewer",
+        instruction="Оцени черновик: {draft}",
+        output_key="report",
+    )
 
-        new_config = run.config.replace_step(
-            "writer",
-            step=MAWStepConfig(
-                type="loop",
-                children=[
-                    MAWStepConfig(agent_name="drafter"),
-                    MAWStepConfig(agent_name="reviewer"),
-                ],
-                max_iterations=3,
-            ),
-            agents=[drafter, reviewer],
-        )
+    new_config = run.config.replace_step(
+        "writer",
+        step=MAWStepConfig(
+            type="loop",
+            children=[
+                MAWStepConfig(agent_name="drafter"),
+                MAWStepConfig(agent_name="reviewer"),
+            ],
+            max_iterations=3,
+        ),
+        agents=[drafter, reviewer],
+    )
 
-        run = await ctrl.resume(new_config)
+    run = await ctrl.resume(new_config)
 
     print(run.result)
 
@@ -179,7 +175,6 @@ COMPETITORS_CONFIG = MAWConfig(
 
 
 async def insert_agent():
-    """Вставка агента после существующего."""
     maw = MAW()
     ctrl = Controller(maw)
 
@@ -228,7 +223,6 @@ PRESENTATION_CONFIG = MAWConfig(
 
 
 async def remove_agent():
-    """Удаление агента из pipeline."""
     maw = MAW()
     ctrl = Controller(maw)
 
@@ -240,7 +234,6 @@ async def remove_agent():
 
 
 async def explicit_strategy():
-    """Явный выбор стратегии при resume."""
     maw = MAW()
     ctrl = Controller(maw)
 

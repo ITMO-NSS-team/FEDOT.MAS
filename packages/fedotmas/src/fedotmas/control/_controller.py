@@ -86,12 +86,12 @@ class Controller:
         Args:
             new_config: The modified pipeline configuration.
             strategy: How to seed state from previous checkpoints.
-                Defaults to ``RETRY_FAILED``.
+                Defaults to ``RESTART_AFTER``.
         """
         if self._last_run is None or self._task is None:
-            raise RuntimeError("No previous run to resume from — call run() first")
+            raise RuntimeError("No previous run to resume from. Call run() first")
 
-        strategy = strategy or Strategy.RETRY_FAILED
+        strategy = strategy or Strategy.RESTART_AFTER
         old_config = self._last_run.config
         checkpoints = self._last_run.checkpoints
 
