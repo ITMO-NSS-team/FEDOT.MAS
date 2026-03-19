@@ -111,21 +111,16 @@ async def replace_agent():
 
     run = await ctrl.run("Проанализируй продажи за Q1", config=SALES_CONFIG)
 
-    if run.status == "error" and run.error:
-        print(f"Упал агент: {run.error.agent_name}")
-        print(f"Ошибка: {run.error.message}")
-        print(f"Успешные: {[cp.agent_name for cp in run.checkpoints]}")
+    new_config = run.config.replace_agent(
+        "forecaster",
+        MAWAgentConfig(
+            name="forecaster_v2",
+            instruction="Сделай прогноз на основе: {analysis}",
+            output_key="forecast",
+        ),
+    )
 
-        new_config = run.config.replace_agent(
-            "forecaster",
-            MAWAgentConfig(
-                name="forecaster_v2",
-                instruction="Сделай прогноз на основе: {analysis}",
-                output_key="forecast",
-            ),
-        )
-
-        run = await ctrl.resume(new_config)
+    run = await ctrl.resume(new_config)
 
     print(run.result)
 
