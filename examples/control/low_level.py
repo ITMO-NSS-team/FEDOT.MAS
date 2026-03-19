@@ -115,7 +115,7 @@ async def replace_agent():
         "forecaster",
         MAWAgentConfig(
             name="forecaster_v2",
-            instruction="Сделай прогноз на основе: {analysis}",
+            instruction="Сделай прогноз в шутливой форме на основе: {analysis}",
             output_key="forecast",
         ),
     )
@@ -163,7 +163,9 @@ async def replace_with_loop():
     maw = MAW()
     ctrl = Controller(maw)
 
-    run = await ctrl.run("Напиши отчёт по рынку", config=REPORT_CONFIG)
+    run = await ctrl.run(
+        "Напиши отчёт по рынку. Не задавай уточняющие вопросы", config=REPORT_CONFIG
+    )
 
     drafter = MAWAgentConfig(
         name="drafter",
@@ -228,7 +230,9 @@ async def explicit_strategy():
     maw = MAW()
     ctrl = Controller(maw)
 
-    run = await ctrl.run("Проанализируй продажи за Q1", config=SALES_CONFIG)
+    run = await ctrl.run(
+        "Проанализируй продажи за Q1. Данные придумай", config=SALES_CONFIG
+    )
 
     new_config = run.config.replace_agent(
         "forecaster",
@@ -247,4 +251,10 @@ async def explicit_strategy():
 
 
 if __name__ == "__main__":
-    asyncio.run(remove_agent())
+    # Pick one:
+    # asyncio.run(remove_agent())
+    asyncio.run(explicit_strategy())
+    # asyncio.run(insert_agent())
+    # asyncio.run(replace_agent())
+    # asyncio.run(replace_with_loop())
+    # asyncio.run(replace_with_parallel())
