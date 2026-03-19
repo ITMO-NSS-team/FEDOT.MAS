@@ -32,6 +32,78 @@ SALES_CONFIG = MAWConfig(
     ),
 )
 
+REPORT_CONFIG = MAWConfig(
+    agents=[
+        MAWAgentConfig(
+            name="researcher",
+            instruction="Исследуй тему: {user_query}",
+            output_key="research",
+        ),
+        MAWAgentConfig(
+            name="writer",
+            instruction="Напиши отчёт на основе: {research}",
+            output_key="report",
+        ),
+    ],
+    pipeline=MAWStepConfig(
+        type="sequential",
+        children=[
+            MAWStepConfig(agent_name="researcher"),
+            MAWStepConfig(agent_name="writer"),
+        ],
+    ),
+)
+
+COMPETITORS_CONFIG = MAWConfig(
+    agents=[
+        MAWAgentConfig(
+            name="researcher",
+            instruction="Исследуй конкурентов: {user_query}",
+            output_key="research",
+        ),
+        MAWAgentConfig(
+            name="summarizer",
+            instruction="Подведи итоги: {research}",
+            output_key="summary",
+        ),
+    ],
+    pipeline=MAWStepConfig(
+        type="sequential",
+        children=[
+            MAWStepConfig(agent_name="researcher"),
+            MAWStepConfig(agent_name="summarizer"),
+        ],
+    ),
+)
+
+PRESENTATION_CONFIG = MAWConfig(
+    agents=[
+        MAWAgentConfig(
+            name="researcher",
+            instruction="Исследуй тему: {user_query}",
+            output_key="research",
+        ),
+        MAWAgentConfig(
+            name="formatter",
+            instruction="Отформатируй: {research}",
+            output_key="formatted",
+        ),
+        MAWAgentConfig(
+            name="presenter",
+            instruction="Подготовь слайды: {formatted}",
+            output_key="presentation",
+        ),
+    ],
+    pipeline=MAWStepConfig(
+        type="sequential",
+        children=[
+            MAWStepConfig(agent_name="researcher"),
+            MAWStepConfig(agent_name="formatter"),
+            MAWStepConfig(agent_name="presenter"),
+        ],
+    ),
+)
+
 
 async def replace_agent():
     maw = MAW()
@@ -93,29 +165,6 @@ async def replace_with_parallel():
     print(run.result)
 
 
-REPORT_CONFIG = MAWConfig(
-    agents=[
-        MAWAgentConfig(
-            name="researcher",
-            instruction="Исследуй тему: {user_query}",
-            output_key="research",
-        ),
-        MAWAgentConfig(
-            name="writer",
-            instruction="Напиши отчёт на основе: {research}",
-            output_key="report",
-        ),
-    ],
-    pipeline=MAWStepConfig(
-        type="sequential",
-        children=[
-            MAWStepConfig(agent_name="researcher"),
-            MAWStepConfig(agent_name="writer"),
-        ],
-    ),
-)
-
-
 async def replace_with_loop():
     maw = MAW()
     ctrl = Controller(maw)
@@ -151,29 +200,6 @@ async def replace_with_loop():
     print(run.result)
 
 
-COMPETITORS_CONFIG = MAWConfig(
-    agents=[
-        MAWAgentConfig(
-            name="researcher",
-            instruction="Исследуй конкурентов: {user_query}",
-            output_key="research",
-        ),
-        MAWAgentConfig(
-            name="summarizer",
-            instruction="Подведи итоги: {research}",
-            output_key="summary",
-        ),
-    ],
-    pipeline=MAWStepConfig(
-        type="sequential",
-        children=[
-            MAWStepConfig(agent_name="researcher"),
-            MAWStepConfig(agent_name="summarizer"),
-        ],
-    ),
-)
-
-
 async def insert_agent():
     maw = MAW()
     ctrl = Controller(maw)
@@ -191,35 +217,6 @@ async def insert_agent():
 
     run = await ctrl.resume(new_config)
     print(run.result)
-
-
-PRESENTATION_CONFIG = MAWConfig(
-    agents=[
-        MAWAgentConfig(
-            name="researcher",
-            instruction="Исследуй тему: {user_query}",
-            output_key="research",
-        ),
-        MAWAgentConfig(
-            name="formatter",
-            instruction="Отформатируй: {research}",
-            output_key="formatted",
-        ),
-        MAWAgentConfig(
-            name="presenter",
-            instruction="Подготовь слайды: {formatted}",
-            output_key="presentation",
-        ),
-    ],
-    pipeline=MAWStepConfig(
-        type="sequential",
-        children=[
-            MAWStepConfig(agent_name="researcher"),
-            MAWStepConfig(agent_name="formatter"),
-            MAWStepConfig(agent_name="presenter"),
-        ],
-    ),
-)
 
 
 async def remove_agent():
