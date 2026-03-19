@@ -131,31 +131,30 @@ async def replace_with_parallel():
 
     run = await ctrl.run("Проанализируй продажи за Q1", config=SALES_CONFIG)
 
-    if run.status == "error":
-        forecaster_stat = MAWAgentConfig(
-            name="forecaster_stat",
-            instruction="Статистический прогноз: {analysis}",
-            output_key="forecast_stat",
-        )
-        forecaster_ml = MAWAgentConfig(
-            name="forecaster_ml",
-            instruction="ML прогноз: {analysis}",
-            output_key="forecast_ml",
-        )
+    forecaster_stat = MAWAgentConfig(
+        name="forecaster_stat",
+        instruction="Статистический прогноз: {analysis}",
+        output_key="forecast_stat",
+    )
+    forecaster_ml = MAWAgentConfig(
+        name="forecaster_ml",
+        instruction="ML прогноз: {analysis}",
+        output_key="forecast_ml",
+    )
 
-        new_config = run.config.replace_step(
-            "forecaster",
-            step=MAWStepConfig(
-                type="parallel",
-                children=[
-                    MAWStepConfig(agent_name="forecaster_stat"),
-                    MAWStepConfig(agent_name="forecaster_ml"),
-                ],
-            ),
-            agents=[forecaster_stat, forecaster_ml],
-        )
+    new_config = run.config.replace_step(
+        "forecaster",
+        step=MAWStepConfig(
+            type="parallel",
+            children=[
+                MAWStepConfig(agent_name="forecaster_stat"),
+                MAWStepConfig(agent_name="forecaster_ml"),
+            ],
+        ),
+        agents=[forecaster_stat, forecaster_ml],
+    )
 
-        run = await ctrl.resume(new_config)
+    run = await ctrl.resume(new_config)
 
     print(run.result)
 
