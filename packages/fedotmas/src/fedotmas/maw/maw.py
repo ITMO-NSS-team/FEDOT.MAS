@@ -5,7 +5,6 @@ from google.adk.agents.base_agent import BaseAgent
 from fedotmas.common.logging import get_logger
 from fedotmas._settings import resolve_model_config
 from fedotmas.core.base import BaseMAS
-from fedotmas.maw._ppline_utils import print_tree
 from fedotmas.maw.builder import build
 from fedotmas.maw.models import MAWConfig
 from fedotmas.meta._result import MetaAgentResult
@@ -131,5 +130,5 @@ class MAW(BaseMAS[MAWConfig]):
             mcp_registry=self._mcp_registry,
             worker_models=self._worker_map(),
         )
-        print_tree(config)
+        _log.info("Config:\n{}", config)
         return agent

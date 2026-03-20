@@ -35,6 +35,13 @@ class MASConfig(BaseModel):
     coordinator: MASAgentConfig
     workers: list[MASAgentConfig]
 
+    def __str__(self) -> str:
+        model = f"  model: {self.coordinator.model}" if self.coordinator.model else ""
+        lines = [f"Coordinator: {self.coordinator.name}{model}", "Workers:"]
+        for w in self.workers:
+            lines.append(f"  {w.name:<20} {w.description!r}")
+        return "\n".join(lines)
+
     @model_validator(mode="after")
     def _validate_config(self) -> MASConfig:
         if len(self.workers) < 1:
