@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.plugins import BasePlugin
 
 from fedotmas.common.logging import get_logger
+from fedotmas.control._interactive import InteractiveRun
 from fedotmas.control._run import ControlledRun, RunError
 from fedotmas.control._strategy import Strategy, resolve_initial_state
 from fedotmas.core.runner import run_pipeline
@@ -48,6 +51,40 @@ class Controller:
         agent = self._maw.build(config)
         self._last_run = await self._execute(agent, task, config, plugins=[])
         return self._last_run
+
+    @asynccontextmanager
+    async def run_interactive(
+        self, config: MAWConfig, task: str
+    ) -> AsyncIterator[InteractiveRun]:
+        """Interactive execution with pause/resume support.
+
+        Usage::
+
+            async with ctrl.run_interactive(config, task) as run:
+                await run.wait_until("writer")
+                print(run.state)
+                result = await run.continue_()
+        """
+        self._task = task
+        run = InteractiveRun(self._maw, config, task)
+        try:
+            yield run
+        finally:
+            await run._cleanup()
+            if run._result is not None:
+                self._last_run = run._result
+
+    async def run_with_recovery(
+        self,
+        task: str,
+        *,
+        max_retries: int = 2,
+        config: MAWConfig | None = None,
+    ) -> ControlledRun:
+        """Auto-recovery with meta-debugger. Not yet implemented."""
+        raise NotImplementedError(
+            "run_with_recovery requires meta-debugger (coming soon)"
+        )
 
     async def resume(
         self,

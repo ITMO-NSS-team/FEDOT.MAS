@@ -2,45 +2,68 @@ import asyncio
 
 from fedotmas import MAW
 from fedotmas.control import Controller
+from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
+
+RESEARCH_CONFIG = MAWConfig(
+    agents=[
+        MAWAgentConfig(
+            name="researcher",
+            instruction="Исследуй тему: {user_query}",
+            output_key="research",
+        ),
+        MAWAgentConfig(
+            name="writer",
+            instruction="Напиши отчёт на основе: {research}",
+            output_key="report",
+        ),
+        MAWAgentConfig(
+            name="reviewer",
+            instruction="Оцени и улучши отчёт: {report}",
+            output_key="review",
+        ),
+    ],
+    pipeline=MAWStepConfig(
+        type="sequential",
+        children=[
+            MAWStepConfig(agent_name="researcher"),
+            MAWStepConfig(agent_name="writer"),
+            MAWStepConfig(agent_name="reviewer"),
+        ],
+    ),
+)
 
 
-async def auto_recovery():
-    maw = MAW(mcp_servers="all")
-    ctrl = Controller(maw)
-    state = await ctrl.run_with_recovery(
-        "Проанализируй продажи за Q1",
-        max_retries=2,
-    )
-    print(state["result"])
-
-
-async def interactive_inspection():
+async def interactive_pause():
     maw = MAW()
     ctrl = Controller(maw)
 
-    config = await maw.generate_config("Сравни Python и Rust для CLI")
-    print(config)
-
-    async with ctrl.run_interactive(config, "Сравни Python и Rust для CLI") as run:
-        await run.wait_until("researcher")
+    async with ctrl.run_interactive(
+        RESEARCH_CONFIG, "Сравни Python и Rust для CLI"
+    ) as run:
+        await run.wait_until("writer")
         print(run.state)
 
-        await run.continue_()
+        result = await run.continue_()
+        print(result.state)
 
 
-async def interactive_with_restart():
+async def interactive_multi_pause():
     maw = MAW()
     ctrl = Controller(maw)
 
-    config = await maw.generate_config("Напиши отчёт по рынку")
-    print(config)
-
-    async with ctrl.run_interactive(config, "Напиши отчёт по рынку") as run:
-        await run.wait_until("data_prep")
+    async with ctrl.run_interactive(
+        RESEARCH_CONFIG, "Анализ рынка облачных сервисов"
+    ) as run:
+        await run.wait_until("writer")
         print(run.state)
 
-        await run.restart_from("data_prep")
+        await run.wait_until("reviewer")
+        print(run.state)
+
+        result = await run.continue_()
+        print(result.state)
 
 
 if __name__ == "__main__":
-    asyncio.run(auto_recovery())
+    # asyncio.run(interactive_multi_pause())
+    asyncio.run(interactive_pause())
