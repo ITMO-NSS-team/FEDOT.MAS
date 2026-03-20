@@ -15,9 +15,16 @@ def _make_agent(name: str) -> MagicMock:
     return agent
 
 
+class _FakeState(dict):
+    """Mimics ADK State with to_dict()."""
+
+    def to_dict(self) -> dict:
+        return dict(self)
+
+
 def _make_ctx(state: dict) -> MagicMock:
     ctx = MagicMock()
-    ctx.state = state
+    ctx.state = _FakeState(state)
     return ctx
 
 

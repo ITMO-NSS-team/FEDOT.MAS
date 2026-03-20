@@ -62,11 +62,7 @@ class CheckpointPlugin(BasePlugin):
 
         cp = Checkpoint(
             agent_name=agent.name,
-            state=dict(
-                callback_context.state.to_dict()
-                if hasattr(callback_context.state, "to_dict")
-                else callback_context.state
-            ),
+            state=dict(callback_context.state.to_dict()),
             index=len(self._checkpoints),
         )
         self._checkpoints.append(cp)

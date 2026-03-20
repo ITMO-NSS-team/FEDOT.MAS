@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import re
+from typing import Any
+
+from google.adk.agents.base_agent import BaseAgent
+from google.adk.plugins import BasePlugin
 
 from fedotmas.common.logging import get_logger
 from fedotmas.control._run import ControlledRun, RunError
@@ -41,38 +45,8 @@ class Controller:
         if config is None:
             config = await self._maw.generate_config(task)
 
-        checkpoint = CheckpointPlugin()
         agent = self._maw.build(config)
-
-        try:
-            result = await run_pipeline(
-                agent,
-                task,
-                plugins=[checkpoint],
-                session_service=self._maw._session_service,
-                memory_service=self._maw._memory_service,
-            )
-            self._last_run = ControlledRun(
-                config=config,
-                status="success",
-                state=result.state,
-                checkpoints=checkpoint.checkpoints,
-            )
-        except RuntimeError as exc:
-            msg = str(exc)
-            match = _AGENT_ERROR_RE.search(msg)
-            agent_name = match.group(1) if match else "unknown"
-            error_state = (
-                dict(checkpoint.checkpoints[-1].state) if checkpoint.checkpoints else {}
-            )
-            self._last_run = ControlledRun(
-                config=config,
-                status="error",
-                state=error_state,
-                checkpoints=checkpoint.checkpoints,
-                error=RunError(agent_name=agent_name, message=msg),
-            )
-
+        self._last_run = await self._execute(agent, task, config, plugins=[])
         return self._last_run
 
     async def resume(
@@ -92,34 +66,45 @@ class Controller:
             raise RuntimeError("No previous run to resume from. Call run() first")
 
         strategy = strategy or Strategy.RESTART_AFTER
-        old_config = self._last_run.config
-        checkpoints = self._last_run.checkpoints
 
         initial_state, completed = resolve_initial_state(
-            strategy, checkpoints, old_config, new_config
+            strategy, self._last_run.checkpoints, self._last_run.config, new_config
         )
 
-        checkpoint = CheckpointPlugin()
-        plugins = [checkpoint]
+        extra_plugins: list[BasePlugin] = []
         if completed:
-            plugins.append(SkipCompletedPlugin(completed))
+            extra_plugins.append(SkipCompletedPlugin(completed))
 
         agent = self._maw.build(new_config)
+        self._last_run = await self._execute(
+            agent,
+            self._task,
+            new_config,
+            plugins=extra_plugins,
+            initial_state=initial_state,
+        )
+        return self._last_run
+
+    async def _execute(
+        self,
+        agent: BaseAgent,
+        task: str,
+        config: MAWConfig,
+        *,
+        plugins: list[BasePlugin],
+        initial_state: dict[str, Any] | None = None,
+    ) -> ControlledRun:
+        checkpoint = CheckpointPlugin()
+        all_plugins = [checkpoint, *plugins]
 
         try:
             result = await run_pipeline(
                 agent,
-                self._task,
-                plugins=plugins,
+                task,
+                plugins=all_plugins,
                 session_service=self._maw._session_service,
                 memory_service=self._maw._memory_service,
                 initial_state=initial_state,
-            )
-            self._last_run = ControlledRun(
-                config=new_config,
-                status="success",
-                state=result.state,
-                checkpoints=checkpoint.checkpoints,
             )
         except RuntimeError as exc:
             msg = str(exc)
@@ -128,12 +113,17 @@ class Controller:
             error_state = (
                 dict(checkpoint.checkpoints[-1].state) if checkpoint.checkpoints else {}
             )
-            self._last_run = ControlledRun(
-                config=new_config,
+            return ControlledRun(
+                config=config,
                 status="error",
                 state=error_state,
                 checkpoints=checkpoint.checkpoints,
                 error=RunError(agent_name=agent_name, message=msg),
             )
 
-        return self._last_run
+        return ControlledRun(
+            config=config,
+            status="success",
+            state=result.state,
+            checkpoints=checkpoint.checkpoints,
+        )

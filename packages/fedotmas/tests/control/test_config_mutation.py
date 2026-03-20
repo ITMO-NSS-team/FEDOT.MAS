@@ -32,7 +32,6 @@ def _three_agent_config() -> MAWConfig:
 class TestReplaceAgent:
     def test_same_name_replaces_config(self):
         cfg = _three_agent_config()
-        new_a = _agent("b", output_key="b")
         new_a = MAWAgentConfig(
             name="b", instruction="New instruction", output_key="b"
         )

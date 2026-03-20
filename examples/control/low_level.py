@@ -253,8 +253,8 @@ async def explicit_strategy():
 if __name__ == "__main__":
     # Pick one:
     # asyncio.run(remove_agent())
-    asyncio.run(explicit_strategy())
+    # asyncio.run(explicit_strategy())
     # asyncio.run(insert_agent())
     # asyncio.run(replace_agent())
     # asyncio.run(replace_with_loop())
-    # asyncio.run(replace_with_parallel())
+    asyncio.run(replace_with_parallel())

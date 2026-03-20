@@ -23,11 +23,11 @@ def resolve_initial_state(
     Returns:
         (initial_state, completed_agent_names)
     """
+    if not checkpoints:
+        return None, set()
+
     match strategy:
         case Strategy.RESTART_ALL:
-            return None, set()
-
-        case _ if not checkpoints:
             return None, set()
 
         case Strategy.RETRY_FAILED:
@@ -36,6 +36,9 @@ def resolve_initial_state(
 
         case Strategy.RESTART_AFTER:
             return _resolve_restart_after(checkpoints, old_config, new_config)
+
+        case _:
+            raise ValueError(f"Unknown strategy: {strategy}")
 
 
 def _resolve_restart_after(
