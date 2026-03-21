@@ -9,7 +9,7 @@ from google.adk.agents.base_agent import BaseAgent
 from google.adk.plugins import BasePlugin
 
 from fedotmas.common.logging import get_logger
-from fedotmas.control._interactive import InteractiveRun
+from fedotmas.control._iterable import IterableRun
 from fedotmas.control._run import ControlledRun, RunError
 from fedotmas.control._strategy import Strategy, resolve_initial_state
 from fedotmas.core.runner import run_pipeline
@@ -53,20 +53,27 @@ class Controller:
         return self._last_run
 
     @asynccontextmanager
-    async def run_interactive(
-        self, config: MAWConfig, task: str
-    ) -> AsyncIterator[InteractiveRun]:
-        """Interactive execution with pause/resume support.
+    async def iter(
+        self, task: str, config: MAWConfig | None = None
+    ) -> AsyncIterator[IterableRun]:
+        """Iterate over pipeline steps with pause before each.
+
+        Args:
+            task: The user's task description.
+            config: Optional pre-built config. If ``None``, generates one
+                via ``maw.generate_config(task)``.
 
         Usage::
 
-            async with ctrl.run_interactive(config, task) as run:
-                await run.wait_until("writer")
-                print(run.state)
-                result = await run.continue_()
+            async with ctrl.iter("Analyse market") as run:
+                async for step in run:
+                    print(step.name, step.state)
+                result = run.result
         """
         self._task = task
-        run = InteractiveRun(self._maw, config, task)
+        if config is None:
+            config = await self._maw.generate_config(task)
+        run = IterableRun(self._maw, config, task)
         try:
             yield run
         finally:

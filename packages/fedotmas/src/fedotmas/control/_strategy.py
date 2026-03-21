@@ -37,9 +37,6 @@ def resolve_initial_state(
         case Strategy.RESTART_AFTER:
             return _resolve_restart_after(checkpoints, old_config, new_config)
 
-        case _:
-            raise ValueError(f"Unknown strategy: {strategy}")
-
 
 def _resolve_restart_after(
     checkpoints: list[Checkpoint],

@@ -33,37 +33,49 @@ RESEARCH_CONFIG = MAWConfig(
 )
 
 
-async def interactive_pause():
+async def interactive_break():
     maw = MAW()
     ctrl = Controller(maw)
 
-    async with ctrl.run_interactive(
-        RESEARCH_CONFIG, "Сравни Python и Rust для CLI"
-    ) as run:
-        await run.wait_until("writer")
-        print(run.state)
-
-        result = await run.continue_()
+    async with ctrl.iter("Сравни Python и Rust для CLI", RESEARCH_CONFIG) as pipeline:
+        async for step in pipeline:
+            print(f"Step: {step.name}, state: {step.state}")
+            if step.name == "writer":
+                break
+        result = await pipeline.finish()
         print(result.state)
 
 
-async def interactive_multi_pause():
+async def interactive_debug():
     maw = MAW()
     ctrl = Controller(maw)
 
-    async with ctrl.run_interactive(
-        RESEARCH_CONFIG, "Анализ рынка облачных сервисов"
-    ) as run:
-        await run.wait_until("writer")
-        print(run.state)
+    async with ctrl.iter("Анализ рынка облачных сервисов", RESEARCH_CONFIG) as pipeline:
+        async for step in pipeline:
+            print(f"Step: {step.name}, state: {step.state}")
+    print(pipeline.result)
 
-        await run.wait_until("reviewer")
-        print(run.state)
 
-        result = await run.continue_()
-        print(result.state)
+async def auto_generated():
+    """Config is generated automatically by MAW from the task description."""
+    maw = MAW()
+    ctrl = Controller(maw)
+
+    async with ctrl.iter("Сравни Python и Rust для CLI") as pipeline:
+        async for step in pipeline:
+            if step.agent:
+                print(f"Step {step.index}: {step.name}")
+                print(f"  model: {step.agent.model}")
+                print(f"  instruction: {step.agent.instruction}")
+                print(f"  output_key: {step.agent.output_key}")
+                print(f"  tools: {step.agent.tools}")
+            else:
+                # composite step (ParallelAgent, LoopAgent)
+                print(f"Step {step.index}: {step.name} (composite)")
+    print(pipeline.result)
 
 
 if __name__ == "__main__":
-    # asyncio.run(interactive_multi_pause())
-    asyncio.run(interactive_pause())
+    # asyncio.run(interactive_debug())
+    # asyncio.run(interactive_break())
+    asyncio.run(auto_generated())
