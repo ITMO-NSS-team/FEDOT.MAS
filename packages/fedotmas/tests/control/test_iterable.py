@@ -272,6 +272,26 @@ class TestIterableRun:
             assert run.result.status == "success"
 
 
+    @pytest.mark.asyncio
+    async def test_build_error_does_not_hang(self):
+        """If build() raises, iteration should not deadlock."""
+        maw = MagicMock()
+        maw._session_service = None
+        maw._memory_service = None
+        maw.build = MagicMock(side_effect=ValueError("bad config"))
+
+        config = _config("a")
+
+        async with Controller(maw).iter("task", config) as run:
+            steps = []
+            async for step in run:
+                steps.append(step.name)
+
+        assert steps == []
+        assert run.result.status == "error"
+        assert "bad config" in run.result.error.message
+
+
 class TestRunWithRecovery:
     @pytest.mark.asyncio
     async def test_raises_not_implemented(self):

@@ -99,7 +99,17 @@ class IterableRun:
 
         # Wait for _run() to create the plugin before using it
         await self._plugin_ready.wait()
-        assert self._plugin is not None
+        if self._plugin is None:
+            # _run() failed during setup (e.g. build() error)
+            self._done = True
+            exc = self._exec_task.exception()
+            self._result = ControlledRun(
+                config=self._config,
+                status="error",
+                state={},
+                error=RunError(agent_name="build", message=str(exc)),
+            )
+            raise StopAsyncIteration
 
         # Race: next step arrives vs pipeline completes
         queue_task = asyncio.ensure_future(self._plugin._step_queue.get())
@@ -126,7 +136,15 @@ class IterableRun:
         for t in pending:
             t.cancel()
         self._done = True
-        self._result = self._exec_task.result()
+        try:
+            self._result = self._exec_task.result()
+        except Exception as exc:
+            self._result = ControlledRun(
+                config=self._config,
+                status="error",
+                state=self.state,
+                error=RunError(agent_name="unknown", message=str(exc)),
+            )
         raise StopAsyncIteration
 
     async def finish(self) -> ControlledRun:
@@ -136,7 +154,16 @@ class IterableRun:
         if self._plugin is not None:
             self._plugin._pausing = False
             self._plugin._resume.set()
-        self._result = await self._exec_task
+        try:
+            self._result = await self._exec_task
+        except Exception as exc:
+            _log.warning("Pipeline failed during finish: {}", exc)
+            self._result = ControlledRun(
+                config=self._config,
+                status="error",
+                state=self.state,
+                error=RunError(agent_name="unknown", message=str(exc)),
+            )
         self._done = True
         return self._result
 
@@ -149,18 +176,26 @@ class IterableRun:
             self._plugin._resume.set()
         try:
             self._result = await self._exec_task
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.warning("Pipeline failed during cleanup: {}", exc)
+            self._result = ControlledRun(
+                config=self._config,
+                status="error",
+                state=self.state,
+                error=RunError(agent_name="unknown", message=str(exc)),
+            )
 
     async def _run(self) -> ControlledRun:
-        agent = self._maw.build(self._config)
-        if agent.sub_agents:
-            pause_names = {child.name for child in agent.sub_agents}
-        else:
-            # Single-agent pipeline: the root IS the only step
-            pause_names = {agent.name}
-        self._plugin = _StepPlugin(pause_names)
-        self._plugin_ready.set()
+        try:
+            agent = self._maw.build(self._config)
+            if agent.sub_agents:
+                pause_names = {child.name for child in agent.sub_agents}
+            else:
+                # Single-agent pipeline: the root IS the only step
+                pause_names = {agent.name}
+            self._plugin = _StepPlugin(pause_names)
+        finally:
+            self._plugin_ready.set()
         plugins = [self._checkpoint, self._plugin]
 
         try:
