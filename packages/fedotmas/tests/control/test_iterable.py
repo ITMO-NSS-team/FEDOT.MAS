@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -294,8 +294,21 @@ class TestIterableRun:
 
 class TestRunWithRecovery:
     @pytest.mark.asyncio
-    async def test_raises_not_implemented(self):
+    async def test_run_with_recovery_is_implemented(self):
+        """run_with_recovery is no longer a stub — see test_recovery.py."""
         maw = _mock_maw()
-        ctrl = Controller(maw)
-        with pytest.raises(NotImplementedError, match="meta-debugger"):
-            await ctrl.run_with_recovery("task")
+        maw.meta_model = None
+        maw.worker_models = None
+        maw.temperature = None
+        maw.mcp_registry = None
+        config = MAWConfig(
+            agents=[MAWAgentConfig(name="a", instruction="do a", output_key="a")],
+            pipeline=MAWStepConfig(agent_name="a"),
+        )
+        maw.generate_config = AsyncMock(return_value=config)
+
+        with patch("fedotmas.control._controller.run_pipeline") as mock_run:
+            mock_run.return_value = PipelineResult(state={"a": "ok"})
+            ctrl = Controller(maw)
+            run = await ctrl.run_with_recovery("task")
+        assert run.status == "success"

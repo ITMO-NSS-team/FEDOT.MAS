@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from typing import Any
 
 from google.adk.agents.base_agent import BaseAgent
@@ -10,15 +9,18 @@ from google.adk.plugins import BasePlugin
 from google.genai import types
 
 from fedotmas.common.logging import get_logger
-from fedotmas.control._run import ControlledRun, PipelineStep, RunError
+from fedotmas.control._run import (
+    ControlledRun,
+    PipelineStep,
+    RunError,
+    extract_failed_agent_name,
+)
 from fedotmas.core.runner import run_pipeline
 from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import MAWConfig
 from fedotmas.plugins._checkpoint import Checkpoint, CheckpointPlugin
 
 _log = get_logger("fedotmas.control.iterable")
-
-_AGENT_ERROR_RE = re.compile(r"Agent '(.+?)' failed")
 
 
 class _StepPlugin(BasePlugin):
@@ -208,8 +210,7 @@ class IterableRun:
             )
         except RuntimeError as exc:
             msg = str(exc)
-            match = _AGENT_ERROR_RE.search(msg)
-            agent_name = match.group(1) if match else "unknown"
+            agent_name = extract_failed_agent_name(msg)
             error_state = (
                 dict(self._checkpoint.checkpoints[-1].state)
                 if self._checkpoint.checkpoints

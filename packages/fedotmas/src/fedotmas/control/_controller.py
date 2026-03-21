@@ -10,7 +10,7 @@ from google.adk.plugins import BasePlugin
 
 from fedotmas.common.logging import get_logger
 from fedotmas.control._iterable import IterableRun
-from fedotmas.control._run import ControlledRun, RunError
+from fedotmas.control._run import ControlledRun, RunError, extract_failed_agent_name
 from fedotmas.control._strategy import Strategy, resolve_initial_state
 from fedotmas.core.runner import run_pipeline
 from fedotmas.maw.maw import MAW
@@ -19,8 +19,6 @@ from fedotmas.plugins._checkpoint import CheckpointPlugin
 from fedotmas.plugins._skip_completed import SkipCompletedPlugin
 
 _log = get_logger("fedotmas.control")
-
-_AGENT_ERROR_RE = re.compile(r"Agent '(.+?)' failed")
 
 
 class Controller:
@@ -87,11 +85,98 @@ class Controller:
         *,
         max_retries: int = 2,
         config: MAWConfig | None = None,
+        llm_error_detection: bool = False,
+        error_hint: str | None = None,
     ) -> ControlledRun:
-        """Auto-recovery with meta-debugger. Not yet implemented."""
-        raise NotImplementedError(
-            "run_with_recovery requires meta-debugger (coming soon)"
-        )
+        """Run a pipeline with automatic recovery on agent failures.
+
+        On error, diagnoses the failing agent via an LLM meta-call, patches
+        its config, and resumes the pipeline.  Repeats up to *max_retries*
+        times.
+
+        Args:
+            task: The user's task description.
+            max_retries: Maximum number of recovery attempts.
+            config: Optional pre-built config.
+            llm_error_detection: When ``True``, use an LLM call to classify
+                errors as retryable/fatal before attempting recovery.
+                When ``False`` (default), use regex-based heuristics.
+            error_hint: Free-text hint passed to the LLM error classifier
+                (only used when ``llm_error_detection=True``).
+        """
+        from fedotmas.meta.maw_debugger import classify_error, diagnose_and_fix
+
+        if max_retries < 0:
+            raise ValueError(f"max_retries must be >= 0, got {max_retries}")
+
+        if error_hint and not llm_error_detection:
+            _log.warning("error_hint is ignored when llm_error_detection=False")
+
+        run = await self.run(task, config=config)
+
+        for attempt in range(max_retries):
+            if run.status == "success":
+                return run
+
+            error = run.error
+            if error is None:
+                return run
+
+            # Cannot recover if we don't know which agent failed
+            if not _has_known_agent(error, run.config):
+                _log.warning(
+                    "Cannot identify failed agent from error, skipping recovery: {}",
+                    error.message,
+                )
+                return run
+
+            error_category: str | None = None
+
+            if llm_error_detection:
+                classification = await classify_error(
+                    error=error,
+                    error_hint=error_hint,
+                    meta_model=self._maw.meta_model,
+                    session_service=self._maw._session_service,
+                )
+                if not classification.retryable:
+                    _log.warning(
+                        "LLM classified as non-retryable: {} ({})",
+                        classification.category,
+                        classification.reasoning,
+                    )
+                    return run
+                error_category = classification.category
+            else:
+                if not _is_retryable(error):
+                    _log.warning("Non-retryable error: {}", error.message)
+                    return run
+
+            _log.info(
+                "Recovery attempt {}/{}: fixing '{}'",
+                attempt + 1,
+                max_retries,
+                error.agent_name,
+            )
+
+            temperature = self._maw.temperature
+            fixed_agent = await diagnose_and_fix(
+                error=error,
+                config=run.config,
+                task=task,
+                state=run.state,
+                meta_model=self._maw.meta_model,
+                temperature=temperature if temperature is not None else 0.3,
+                mcp_registry=self._maw.mcp_registry,
+                worker_models=self._maw.worker_models,
+                session_service=self._maw._session_service,
+                error_category=error_category,
+            )
+
+            new_config = run.config.replace_agent(error.agent_name, fixed_agent)
+            run = await self.resume(new_config, strategy=Strategy.RETRY_FAILED)
+
+        return run
 
     async def resume(
         self,
@@ -150,10 +235,9 @@ class Controller:
                 memory_service=self._maw._memory_service,
                 initial_state=initial_state,
             )
-        except RuntimeError as exc:
+        except Exception as exc:
             msg = str(exc)
-            match = _AGENT_ERROR_RE.search(msg)
-            agent_name = match.group(1) if match else "unknown"
+            agent_name = extract_failed_agent_name(msg)
             error_state = (
                 dict(checkpoint.checkpoints[-1].state) if checkpoint.checkpoints else {}
             )
@@ -171,3 +255,27 @@ class Controller:
             state=result.state,
             checkpoints=checkpoint.checkpoints,
         )
+
+
+_FATAL_ERROR_RE = re.compile(
+    r"\bconnection\b|\btimeout\b|\bauth\b|\bunauthorized\b|\brate[.\s_]?limit\b|\bquota\b",
+    re.IGNORECASE,
+)
+
+
+def _is_retryable(error: RunError | None) -> bool:
+    """Check whether an error is retryable using regex heuristics.
+
+    Returns ``False`` for infrastructure/auth errors (fatal),
+    ``True`` for everything else (retryable).
+    """
+    if error is None:
+        return False
+    return not bool(_FATAL_ERROR_RE.search(error.message))
+
+
+def _has_known_agent(error: RunError, config: MAWConfig) -> bool:
+    """Check that the failed agent actually exists in the config."""
+    if error.agent_name == "unknown":
+        return False
+    return any(a.name == error.agent_name for a in config.agents)

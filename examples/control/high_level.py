@@ -75,7 +75,40 @@ async def auto_generated():
     print(pipeline.result)
 
 
+async def auto_recovery():
+    """Run with regex-based error detection (default)."""
+    maw = MAW()
+    ctrl = Controller(maw)
+    result = await ctrl.run_with_recovery(
+        "Проанализируй рынок электромобилей",
+        max_retries=2,
+    )
+    print(f"Status: {result.status}")
+    if result.status == "success":
+        print(f"Result: {result.state}")
+    else:
+        print(f"Error: {result.error}")
+
+
+async def auto_recovery_llm():
+    """Run with LLM-based error classification."""
+    maw = MAW()
+    ctrl = Controller(maw)
+    result = await ctrl.run_with_recovery(
+        "Проанализируй рынок электромобилей",
+        max_retries=2,
+        llm_error_detection=True,
+        error_hint="agent produces empty output or hallucinates tool names",
+    )
+    print(f"Status: {result.status}")
+    if result.status == "success":
+        print(f"Result: {result.state}")
+    else:
+        print(f"Error: {result.error}")
+
+
 if __name__ == "__main__":
     # asyncio.run(interactive_debug())
     # asyncio.run(interactive_break())
-    asyncio.run(auto_generated())
+    # asyncio.run(auto_generated())
+    asyncio.run(auto_recovery())

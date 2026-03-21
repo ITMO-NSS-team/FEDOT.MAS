@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig
 from fedotmas.plugins._checkpoint import Checkpoint
+
+_AGENT_ERROR_RE = re.compile(r"Agent '(.+?)' failed")
+
+
+def extract_failed_agent_name(error_message: str) -> str:
+    """Extract agent name from a pipeline RuntimeError message."""
+    match = _AGENT_ERROR_RE.search(error_message)
+    return match.group(1) if match else "unknown"
 
 
 @dataclass
