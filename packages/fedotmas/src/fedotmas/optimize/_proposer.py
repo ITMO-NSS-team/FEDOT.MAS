@@ -9,6 +9,7 @@ from fedotmas._settings import ModelConfig, resolve_model_config, get_meta_model
 from fedotmas.common.logging import get_logger
 from fedotmas.meta._adk_runner import run_meta_agent_call
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig
+from fedotmas.optimize._config import OptimizationConfig
 from fedotmas.optimize._prompts import REFLECTION_SYSTEM_PROMPT, MERGE_SYSTEM_PROMPT
 from fedotmas.optimize._state import Candidate
 
@@ -40,18 +41,22 @@ class _MergeOutput(BaseModel):
 class Proposer:
     def __init__(
         self,
+        config: OptimizationConfig | None = None,
         *,
         model: str | ModelConfig | None = None,
-        max_output_chars: int = 3000,
     ) -> None:
         if model is None:
             self._model = resolve_model_config(get_meta_model())
         else:
             self._model = resolve_model_config(model)
 
+        cfg = config or OptimizationConfig()
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
-        self._max_output_chars = max_output_chars
+        self._max_output_chars = cfg.max_output_chars
+        self._temperature_reflect = cfg.temperature_reflect
+        self._temperature_merge = cfg.temperature_merge
+        self._max_merge_context_tasks = cfg.max_merge_context_tasks
 
     @property
     def token_usage(self) -> tuple[int, int]:
@@ -119,7 +124,9 @@ class Proposer:
                 if agent_a.instruction == agent_b.instruction:
                     continue
 
-                task_context = "\n".join(f"- {t}" for t in tasks[:5])
+                task_context = "\n".join(
+                    f"- {t}" for t in tasks[: self._max_merge_context_tasks]
+                )
                 merged = await self._merge(
                     name,
                     agent_a.instruction,
@@ -165,7 +172,7 @@ class Proposer:
                 output_schema=_ReflectionOutput,
                 output_key="reflection_result",
                 model=self._model,
-                temperature=0.7,
+                temperature=self._temperature_reflect,
             )
             self.total_prompt_tokens += result.prompt_tokens
             self.total_completion_tokens += result.completion_tokens
@@ -204,7 +211,7 @@ class Proposer:
                 output_schema=_MergeOutput,
                 output_key="merge_result",
                 model=self._model,
-                temperature=0.5,
+                temperature=self._temperature_merge,
             )
             self.total_prompt_tokens += result.prompt_tokens
             self.total_completion_tokens += result.completion_tokens

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from fedotmas.maw.models import MAWConfig
@@ -71,6 +73,8 @@ class OptimizationState:
         self.candidates: list[Candidate] = []
         self.cache = EvaluationCache()
         self._next_index = 0
+        self.total_evaluations: int = 0
+        self.iteration: int = 0
 
     def add_candidate(
         self,
@@ -95,6 +99,7 @@ class OptimizationState:
         candidate.feedbacks[result.task] = result.feedback
         candidate.states[result.task] = result.state
         self.cache.put(candidate.config_hash, result.task, result)
+        self.total_evaluations += 1
 
     def update_pareto_front(self) -> None:
         evaluated = [c for c in self.candidates if c.scores]
@@ -120,6 +125,61 @@ class OptimizationState:
         if not evaluated:
             return None
         return max(evaluated, key=lambda c: c.mean_score or 0.0)
+
+    def save(self, path: str | Path) -> None:
+        path = Path(path)
+        data = {
+            "next_index": self._next_index,
+            "total_evaluations": self.total_evaluations,
+            "iteration": self.iteration,
+            "candidates": [
+                {
+                    "index": c.index,
+                    "config": json.loads(c.config.model_dump_json()),
+                    "config_hash": c.config_hash,
+                    "scores": c.scores,
+                    "feedbacks": c.feedbacks,
+                    "states": c.states,
+                    "parent_index": c.parent_index,
+                    "origin": c.origin,
+                    "on_pareto_front": c.on_pareto_front,
+                }
+                for c in self.candidates
+            ],
+        }
+        path.write_text(json.dumps(data, indent=2))
+
+    @classmethod
+    def load(cls, path: str | Path) -> OptimizationState:
+        path = Path(path)
+        data = json.loads(path.read_text())
+        state = cls()
+        state._next_index = data["next_index"]
+        state.total_evaluations = data.get("total_evaluations", 0)
+        state.iteration = data.get("iteration", 0)
+        for cd in data["candidates"]:
+            config = MAWConfig.model_validate(cd["config"])
+            c = Candidate(
+                index=cd["index"],
+                config=config,
+                config_hash=cd["config_hash"],
+                scores=cd["scores"],
+                feedbacks=cd["feedbacks"],
+                states=cd["states"],
+                parent_index=cd["parent_index"],
+                origin=cd["origin"],
+                on_pareto_front=cd["on_pareto_front"],
+            )
+            state.candidates.append(c)
+            for task, score_val in c.scores.items():
+                result = TaskResult(
+                    task=task,
+                    state=c.states.get(task, {}),
+                    score=score_val,
+                    feedback=c.feedbacks.get(task, ""),
+                )
+                state.cache.put(c.config_hash, task, result)
+        return state
 
 
 def _dominates(a: Candidate, b: Candidate) -> bool:

@@ -8,6 +8,7 @@ import pytest
 
 from fedotmas.control._run import ControlledRun
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
+from fedotmas.optimize._config import OptimizationConfig
 from fedotmas.optimize._engine import run_optimization, _evaluate_candidate, _mean_score_on
 from fedotmas.optimize._proposer import Proposer
 from fedotmas.optimize._scoring import ScoringResult
@@ -133,14 +134,6 @@ async def test_evaluate_candidate_handles_error():
         assert "boom" in candidate.feedbacks["t1"]
 
 
-# --- 6b: Empty candidate list guard ---
-# Tested implicitly via run_optimization — the seed is always there.
-
-
-# --- 6d: Redundant isinstance removed ---
-# Verified by reading the code — the except branch now uses run.state directly.
-
-
 @pytest.mark.asyncio
 async def test_run_optimization_basic():
     maw = _mock_maw()
@@ -166,6 +159,8 @@ async def test_run_optimization_basic():
     proposer.propose_mutation = AsyncMock(return_value=mutated)
     proposer.propose_merge = AsyncMock(return_value=mutated)
 
+    cfg = OptimizationConfig(use_merge=False)
+
     with patch("fedotmas.optimize._engine.Controller") as MockCtrl:
         ctrl_instance = MagicMock()
         ctrl_instance.run = AsyncMock(
@@ -186,9 +181,7 @@ async def test_run_optimization_basic():
             batch_sampler=ShuffledBatchSampler(),
             component_selector=AllComponentSelector(),
             stopper=MaxIterations(2),
-            use_merge=False,
-            max_merge_attempts=0,
-            minibatch_size=2,
+            config=cfg,
         )
 
     assert result.best_score >= 0.0
@@ -208,6 +201,8 @@ async def test_run_optimization_rejects_identical_mutation():
     proposer.total_completion_tokens = 0
     # Return same config = no mutation
     proposer.propose_mutation = AsyncMock(return_value=seed)
+
+    cfg = OptimizationConfig(use_merge=False)
 
     with patch("fedotmas.optimize._engine.Controller") as MockCtrl:
         ctrl_instance = MagicMock()
@@ -229,9 +224,7 @@ async def test_run_optimization_rejects_identical_mutation():
             batch_sampler=ShuffledBatchSampler(),
             component_selector=AllComponentSelector(),
             stopper=MaxIterations(1),
-            use_merge=False,
-            max_merge_attempts=0,
-            minibatch_size=1,
+            config=cfg,
         )
 
     # Only seed candidate should exist

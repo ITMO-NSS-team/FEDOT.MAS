@@ -120,9 +120,9 @@ def test_optimizer_defaults():
     maw = _mock_maw()
     opt = Optimizer(maw, criteria="test")
     assert isinstance(opt._scorer, LLMJudge)
-    assert opt._use_merge is True
-    assert opt._max_merge_attempts == 5
-    assert opt._minibatch_size == 3
+    assert opt._config.use_merge is True
+    assert opt._config.max_merge_attempts == 5
+    assert opt._config.minibatch_size == 3
 
 
 # --- 7a: Token counting via public API ---

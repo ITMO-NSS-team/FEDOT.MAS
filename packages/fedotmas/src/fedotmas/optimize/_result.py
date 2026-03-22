@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fedotmas.maw.models import MAWConfig
+    from fedotmas.optimize._callbacks import OptimizationMetrics
     from fedotmas.optimize._state import Candidate
 
 
@@ -21,6 +22,7 @@ class OptimizationResult:
     total_evaluation_runs: int = 0
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
+    metrics: OptimizationMetrics | None = None
 
     def pareto_front(self) -> list[Candidate]:
         """Return candidates on the Pareto front."""

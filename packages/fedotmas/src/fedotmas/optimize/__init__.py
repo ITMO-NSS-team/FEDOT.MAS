@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import warnings
+
 from fedotmas.common.logging import get_logger
 from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import MAWConfig
+from fedotmas.optimize._callbacks import (
+    MetricsCallback,
+    NoOpCallback,
+    OptimizationCallback,
+    OptimizationMetrics,
+)
+from fedotmas.optimize._config import OptimizationConfig
 from fedotmas.optimize._engine import run_optimization
 from fedotmas.optimize._proposer import Proposer
 from fedotmas.optimize._result import OptimizationResult
@@ -14,6 +23,7 @@ from fedotmas.optimize._stopping import (
     MaxIterations,
     NoImprovement,
     ScoreThreshold,
+    SignalStopper,
     Stopper,
 )
 from fedotmas.optimize._strategies import (
@@ -26,12 +36,27 @@ _log = get_logger("fedotmas.optimize")
 
 __all__ = [
     "Optimizer",
+    "OptimizationConfig",
     "OptimizationResult",
+    "OptimizationCallback",
+    "OptimizationMetrics",
+    "NoOpCallback",
+    "MetricsCallback",
     "Scorer",
     "ScoringResult",
     "LLMJudge",
     "Candidate",
+    "SignalStopper",
 ]
+
+_DEPRECATED_KWARGS = {
+    "candidate_selection",
+    "use_merge",
+    "max_merge_attempts",
+    "minibatch_size",
+    "checkpoint_path",
+    "graceful_shutdown",
+}
 
 
 class Optimizer:
@@ -41,23 +66,56 @@ class Optimizer:
         *,
         scorer: Scorer | None = None,
         criteria: str | None = None,
-        candidate_selection: str = "pareto",
-        use_merge: bool = True,
-        max_merge_attempts: int = 5,
-        minibatch_size: int = 3,
+        config: OptimizationConfig | None = None,
+        callbacks: list[OptimizationCallback] | None = None,
+        **kwargs: object,
     ) -> None:
+        # Handle deprecated kwargs — forward to config
+        overrides: dict[str, object] = {}
+        for key in list(kwargs):
+            if key in _DEPRECATED_KWARGS:
+                warnings.warn(
+                    f"Passing '{key}' to Optimizer() is deprecated; "
+                    f"set it on OptimizationConfig instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                overrides[key] = kwargs.pop(key)
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
+
+        if config is not None and overrides:
+            import dataclasses
+
+            cfg_dict: dict[str, object] = {
+                f.name: getattr(config, f.name)
+                for f in dataclasses.fields(config)
+                if f.init
+            }
+            cfg_dict.update(overrides)
+            self._config: OptimizationConfig = OptimizationConfig(**cfg_dict)  # type: ignore[arg-type]
+        elif overrides:
+            self._config = OptimizationConfig(**overrides)  # type: ignore[arg-type]
+        else:
+            self._config = config or OptimizationConfig()
+
         self._maw = maw
-        self._use_merge = use_merge
-        self._max_merge_attempts = max_merge_attempts
-        self._minibatch_size = minibatch_size
+        self._callbacks = callbacks or []
 
         if scorer is not None:
             self._scorer: Scorer = scorer
         else:
-            self._scorer = LLMJudge(criteria=criteria)
+            self._scorer = LLMJudge(
+                criteria=criteria,
+                max_state_chars=self._config.max_state_chars,
+                temperature=self._config.temperature_judge,
+            )
 
-        self._candidate_selector = make_candidate_selector(candidate_selection)
-        self._batch_sampler = ShuffledBatchSampler()
+        rng = self._config.rng
+        self._candidate_selector = make_candidate_selector(
+            self._config.candidate_selection, rng=rng
+        )
+        self._batch_sampler = ShuffledBatchSampler(rng=rng)
         self._last_result: OptimizationResult | None = None
 
     async def optimize(
@@ -90,12 +148,12 @@ class Optimizer:
         stoppers: list[Stopper] = [MaxIterations(max_iterations)]
         if max_evaluations is not None:
             stoppers.append(MaxEvaluations(max_evaluations))
-        stoppers.append(NoImprovement(patience))
+        stoppers.append(NoImprovement(patience, epsilon=self._config.epsilon))
         if score_threshold is not None:
             stoppers.append(ScoreThreshold(score_threshold))
         stopper = CompositeStopper(stoppers)
 
-        proposer = Proposer()
+        proposer = Proposer(self._config)
 
         result = await run_optimization(
             maw=self._maw,
@@ -108,9 +166,8 @@ class Optimizer:
             batch_sampler=self._batch_sampler,
             component_selector=component_selector,
             stopper=stopper,
-            use_merge=self._use_merge,
-            max_merge_attempts=self._max_merge_attempts,
-            minibatch_size=self._minibatch_size,
+            config=self._config,
+            callbacks=self._callbacks,
         )
 
         prompt, completion = proposer.token_usage

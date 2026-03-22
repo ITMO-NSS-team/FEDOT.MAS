@@ -40,6 +40,7 @@ class LLMJudge:
         criteria: str | None = None,
         model: str | ModelConfig | None = None,
         max_state_chars: int = 2000,
+        temperature: float = 0.1,
     ) -> None:
         self._criteria = criteria or "Overall quality, completeness, and correctness."
         if model is None:
@@ -50,6 +51,7 @@ class LLMJudge:
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
         self._max_state_chars = max_state_chars
+        self._temperature = temperature
 
     @property
     def token_usage(self) -> tuple[int, int]:
@@ -69,7 +71,7 @@ class LLMJudge:
             output_schema=_JudgeOutput,
             output_key="judge_result",
             model=self._model,
-            temperature=0.1,
+            temperature=self._temperature,
         )
 
         self._total_prompt_tokens += result.prompt_tokens

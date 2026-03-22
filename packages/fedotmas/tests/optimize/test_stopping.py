@@ -35,13 +35,42 @@ class TestMaxIterations:
 
 
 class TestMaxEvaluations:
-    def test_stops_at_max_cache(self):
+    def test_stops_at_max_evaluations(self):
         s = MaxEvaluations(2)
         state = OptimizationState()
+        c = state.add_candidate(_config())
 
-        state.cache.put("h1", "t1", TaskResult(task="t1", state={}, score=0.5, feedback=""))
+        state.record_task_result(
+            c, TaskResult(task="t1", state={}, score=0.5, feedback="")
+        )
         assert s.should_stop(state, 0) is False
-        state.cache.put("h1", "t2", TaskResult(task="t2", state={}, score=0.5, feedback=""))
+
+        state.record_task_result(
+            c, TaskResult(task="t2", state={}, score=0.5, feedback="")
+        )
+        assert s.should_stop(state, 0) is True
+
+    def test_not_affected_by_cache_eviction(self):
+        """total_evaluations keeps counting even if cache evicts entries."""
+        from fedotmas.optimize._state import EvaluationCache
+
+        s = MaxEvaluations(5)
+        state = OptimizationState()
+        state.cache = EvaluationCache(max_size=2)
+        c = state.add_candidate(_config())
+
+        for i in range(4):
+            state.record_task_result(
+                c, TaskResult(task=f"t{i}", state={}, score=0.5, feedback="")
+            )
+        # Cache only has 2 entries, but total_evaluations is 4
+        assert len(state.cache) == 2
+        assert state.total_evaluations == 4
+        assert s.should_stop(state, 0) is False
+
+        state.record_task_result(
+            c, TaskResult(task="t4", state={}, score=0.5, feedback="")
+        )
         assert s.should_stop(state, 0) is True
 
 
