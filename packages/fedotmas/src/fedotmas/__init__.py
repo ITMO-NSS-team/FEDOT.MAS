@@ -7,6 +7,7 @@ from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import MAWConfig
 from fedotmas.mcp._config import HttpMCPServer, StdioMCPServer
 from fedotmas.mcp.discovery import discover_local_servers
+from fedotmas.optimize import Optimizer, OptimizationResult
 
 
 # litellm's Message.__init__ deletes None-valued attributes from instances,
@@ -43,4 +44,6 @@ __all__ = [
     "HttpMCPServer",
     "StdioMCPServer",
     "discover_local_servers",
+    "Optimizer",
+    "OptimizationResult",
 ]
