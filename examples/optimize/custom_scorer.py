@@ -9,10 +9,10 @@ import re
 
 from fedotmas import MAW, Optimizer
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.optimize import OptimizationConfig, ScoringResult
+from fedotmas.optimize import OptimizationConfig, Scorer, ScoringResult
 
 
-class KeywordScorer:
+class KeywordScorer(Scorer):
     """Deterministic scorer that checks for required keywords in pipeline output."""
 
     KEYWORDS_BY_TASK = {
