@@ -1,173 +1,243 @@
----
-icon: lucide/rocket
----
+# FEDOT.MAS
 
-# Get started
+A framework for building and optimizing multi-agent systems. Built on top of [Google ADK](https://google.github.io/adk-docs/).
 
-For full documentation visit [zensical.org](https://zensical.org/docs/).
+## Installation
 
-## Commands
-
-* [`zensical new`][new] - Create a new project
-* [`zensical serve`][serve] - Start local web server
-* [`zensical build`][build] - Build your site
-
-  [new]: https://zensical.org/docs/usage/new/
-  [serve]: https://zensical.org/docs/usage/preview/
-  [build]: https://zensical.org/docs/usage/build/
-
-## Examples
-
-### Admonitions
-
-> Go to [documentation](https://zensical.org/docs/authoring/admonitions/)
-
-!!! note
-
-    This is a **note** admonition. Use it to provide helpful information.
-
-!!! warning
-
-    This is a **warning** admonition. Be careful!
-
-### Details
-
-> Go to [documentation](https://zensical.org/docs/authoring/admonitions/#collapsible-blocks)
-
-??? info "Click to expand for more info"
-
-    This content is hidden until you click to expand it.
-    Great for FAQs or long explanations.
-
-## Code Blocks
-
-> Go to [documentation](https://zensical.org/docs/authoring/code-blocks/)
-
-``` python hl_lines="2" title="Code blocks"
-def greet(name):
-    print(f"Hello, {name}!") # (1)!
-
-greet("Python")
+```bash
+pip install fedotmas
 ```
 
-1.  > Go to [documentation](https://zensical.org/docs/authoring/code-blocks/#code-annotations)
+## Two Orchestration Modes
 
-    Code annotations allow to attach notes to lines of code.
+FEDOT.MAS provides two ways to organize agents:
 
-Code can also be highlighted inline: `#!python print("Hello, Python!")`.
+|                 | MAS                                             | MAW                                         |
+| --------------- | ----------------------------------------------- | ------------------------------------------- |
+| **Meaning**     | Multi-Agent System                              | Multi-Agent Workflow                        |
+| **Control**     | LLM coordinator decides where to route the task | Fixed pipeline: sequential, parallel, loop  |
+| **When to use** | Classification, routing, delegation             | Multi-step processes with predictable order |
+| **Example**     | Support: router -> billing / tech / sales       | Research: researcher -> writer -> reviewer  |
+| **Config**      | `MASConfig(coordinator, workers)`               | `MAWConfig(agents, pipeline)`               |
 
-## Content tabs
+## Quick Start: MAW
 
-> Go to [documentation](https://zensical.org/docs/authoring/content-tabs/)
+MAW (Multi-Agent Workflow) runs agents in a predefined order. Each agent writes its result to a shared state under `output_key`, and the next agent can use it via `{output_key}` in its instruction.
 
-=== "Python"
+### Fully Automatic Mode
 
-    ``` python
-    print("Hello from Python!")
-    ```
+MAW automatically generates the agent configuration and runs it:
 
-=== "Rust"
+```python
+import asyncio
+from fedotmas import MAW
 
-    ``` rs
-    println!("Hello from Rust!");
-    ```
+async def main():
+    maw = MAW()
+    state = await maw.run("Explain the difference between TCP and UDP")
+    print(state)
 
-## Diagrams
-
-> Go to [documentation](https://zensical.org/docs/authoring/diagrams/)
-
-``` mermaid
-graph LR
-  A[Start] --> B{Error?};
-  B -->|Yes| C[Hmm...];
-  C --> D[Debug];
-  D --> B;
-  B ---->|No| E[Yay!];
+asyncio.run(main())
 ```
 
-## Footnotes
+### Two-Step Mode
 
-> Go to [documentation](https://zensical.org/docs/authoring/footnotes/)
+First generate the config, inspect it, then run:
 
-Here's a sentence with a footnote.[^1]
+```python
+import asyncio
+from fedotmas import MAW
 
-Hover it, to see a tooltip.
+async def main():
+    maw = MAW()
 
-[^1]: This is the footnote.
+    config = await maw.generate_config("Compare Python and Rust for CLI tools")
+    print(config.model_dump_json(indent=2))  # inspect generated config
 
+    state = await maw.build_and_run(config, "Compare Python and Rust for CLI tools")
+    print(state)
 
-## Formatting
+asyncio.run(main())
+```
 
-> Go to [documentation](https://zensical.org/docs/authoring/formatting/)
+### Manual Config
 
-- ==This was marked (highlight)==
-- ^^This was inserted (underline)^^
-- ~~This was deleted (strikethrough)~~
-- H~2~O
-- A^T^A
-- ++ctrl+alt+del++
+Full control: you define agents and the pipeline yourself.
 
-## Icons, Emojis
+```python
+import asyncio
+from fedotmas import MAW, MAWConfig
+from fedotmas.maw.models import MAWAgentConfig, MAWStepConfig
 
-> Go to [documentation](https://zensical.org/docs/authoring/icons-emojis/)
+config = MAWConfig(
+    agents=[
+        MAWAgentConfig(
+            name="researcher",
+            model="openai/gpt-4o-mini",
+            instruction="Research the topic: {user_query}. Provide key facts.",
+            output_key="research",
+        ),
+        MAWAgentConfig(
+            name="writer",
+            model="openai/gpt-4o-mini",
+            instruction="Write a concise summary based on the research:\n\n{research}",
+            output_key="summary",
+        ),
+    ],
+    pipeline=MAWStepConfig(
+        type="sequential",
+        children=[
+            MAWStepConfig(type="agent", agent_name="researcher"),
+            MAWStepConfig(type="agent", agent_name="writer"),
+        ],
+    ),
+)
 
-* :sparkles: `:sparkles:`
-* :rocket: `:rocket:`
-* :tada: `:tada:`
-* :memo: `:memo:`
-* :eyes: `:eyes:`
+async def main():
+    maw = MAW()
+    state = await maw.build_and_run(config, "What is WebAssembly?")
+    print(state["summary"])
 
-## Maths
+asyncio.run(main())
+```
 
-> Go to [documentation](https://zensical.org/docs/authoring/math/)
+Agents run sequentially: `researcher` writes to `state["research"]`, and `writer` receives it via `{research}` in its instruction.
 
-$$
-\cos x=\sum_{k=0}^{\infty}\frac{(-1)^k}{(2k)!}x^{2k}
-$$
+## Pipeline Types
 
-!!! warning "Needs configuration"
-    Note that MathJax is included via a `script` tag on this page and is not
-    configured in the generated default configuration to avoid including it
-    in a pages that do not need it. See the documentation for details on how
-    to configure it on all your pages if they are more Maths-heavy than these
-    simple starter pages.
+### Sequential
 
-<script id="MathJax-script" src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
-<script>
-  window.MathJax = {
-    tex: {
-      inlineMath: [["\\(", "\\)"]],
-      displayMath: [["\\[", "\\]"]],
-      processEscapes: true,
-      processEnvironments: true
-    },
-    options: {
-      ignoreHtmlClass: ".*|",
-      processHtmlClass: "arithmatex"
-    }
-  };
+Agents run one after another. Each sees the results of the previous ones.
 
-  document$.subscribe(() => {
-    MathJax.startup.output.clearCache()
-    MathJax.typesetClear()
-    MathJax.texReset()
-    MathJax.typesetPromise()
-  })
-</script>
+```python
+pipeline = MAWStepConfig(
+    type="sequential",
+    children=[
+        MAWStepConfig(type="agent", agent_name="researcher"),
+        MAWStepConfig(type="agent", agent_name="writer"),
+    ],
+)
+```
 
-## Task Lists
+### Parallel
 
-> Go to [documentation](https://zensical.org/docs/authoring/lists/#using-task-lists)
+Agents run simultaneously. Useful when parts of the task are independent.
 
-* [x] Install Zensical
-* [x] Configure `zensical.toml`
-* [x] Write amazing documentation
-* [ ] Deploy anywhere
+```python
+config = MAWConfig(
+    agents=[
+        MAWAgentConfig(
+            name="pros_analyst",
+            model="openai/gpt-4o-mini",
+            instruction="List 3 key advantages of: {user_query}",
+            output_key="pros",
+        ),
+        MAWAgentConfig(
+            name="cons_analyst",
+            model="openai/gpt-4o-mini",
+            instruction="List 3 key disadvantages of: {user_query}",
+            output_key="cons",
+        ),
+        MAWAgentConfig(
+            name="synthesizer",
+            model="openai/gpt-4o-mini",
+            instruction="Given pros:\n{pros}\n\nAnd cons:\n{cons}\n\nWrite a balanced verdict.",
+            output_key="verdict",
+        ),
+    ],
+    pipeline=MAWStepConfig(
+        type="sequential",
+        children=[
+            MAWStepConfig(
+                type="parallel",
+                children=[
+                    MAWStepConfig(type="agent", agent_name="pros_analyst"),
+                    MAWStepConfig(type="agent", agent_name="cons_analyst"),
+                ],
+            ),
+            MAWStepConfig(type="agent", agent_name="synthesizer"),
+        ],
+    ),
+)
+```
 
-## Tooltips
+`pros_analyst` and `cons_analyst` run in parallel, then `synthesizer` combines their results.
 
-> Go to [documentation](https://zensical.org/docs/authoring/tooltips/)
+### Loop
 
-[Hover me][example]
+Agents repeat up to `max_iterations` times. The last LLM agent in the loop automatically gets access to the `exit_loop` tool for early stopping.
 
-  [example]: https://example.com "I'm a tooltip!"
+```python
+config = MAWConfig(
+    agents=[
+        MAWAgentConfig(
+            name="writer",
+            model="openai/gpt-4o-mini",
+            instruction="Write a short poem about: {user_query}.\n"
+                        "If there is feedback, incorporate it: {feedback}",
+            output_key="draft",
+        ),
+        MAWAgentConfig(
+            name="critic",
+            model="openai/gpt-4o-mini",
+            instruction="Review this poem:\n{draft}\n\n"
+                        "If the poem is good, call the exit_loop tool.\n"
+                        "Otherwise, provide specific feedback for improvement.",
+            output_key="feedback",
+        ),
+    ],
+    pipeline=MAWStepConfig(
+        type="loop",
+        max_iterations=3,
+        children=[
+            MAWStepConfig(type="agent", agent_name="writer"),
+            MAWStepConfig(type="agent", agent_name="critic"),
+        ],
+    ),
+)
+```
+
+## Quick Start: MAS
+
+MAS (Multi-Agent System) uses a coordinator that dynamically decides which worker should handle the task.
+
+```python
+import asyncio
+from fedotmas import MAS, MASConfig
+from fedotmas.mas.models import MASAgentConfig
+
+config = MASConfig(
+    coordinator=MASAgentConfig(
+        name="router",
+        description="Routes customer queries to the right specialist",
+        instruction="Analyze the user's request and route it to the appropriate specialist.",
+    ),
+    workers=[
+        MASAgentConfig(
+            name="billing_agent",
+            description="Handles billing, invoices, and payment questions",
+            instruction="Help the customer with their billing inquiry.",
+            output_key="billing_response",
+        ),
+        MASAgentConfig(
+            name="support_agent",
+            description="Handles technical support and troubleshooting",
+            instruction="Help the customer troubleshoot their issue.",
+            output_key="support_response",
+        ),
+    ],
+)
+
+async def main():
+    mas = MAS()
+    state = await mas.build_and_run(config, "Why was I charged twice?")
+    print(state)
+
+asyncio.run(main())
+```
+
+The coordinator reads worker descriptions and decides that `billing_agent` is the best fit for a double charge issue.
+
+## What’s Next
+
+* [Optimizer](optimizer.md) - evolutionary optimization of agent prompts
