@@ -1,7 +1,32 @@
 import asyncio
 
-from fedotmas import MAW, Optimizer
+from fedotmas import MAW, MAWConfig, Optimizer
+from fedotmas.maw.models import MAWAgentConfig, MAWStepConfig
 from fedotmas.optimize import OptimizationConfig
+
+SEED_CONFIG = MAWConfig(
+    agents=[
+        MAWAgentConfig(
+            name="planner",
+            model="openai/gpt-4o-mini",
+            instruction="Create a structured plan for the given task.",
+            output_key="plan",
+        ),
+        MAWAgentConfig(
+            name="executor",
+            model="openai/gpt-4o-mini",
+            instruction="Execute the plan and produce a detailed result.",
+            output_key="result",
+        ),
+    ],
+    pipeline=MAWStepConfig(
+        type="sequential",
+        children=[
+            MAWStepConfig(type="agent", agent_name="planner"),
+            MAWStepConfig(type="agent", agent_name="executor"),
+        ],
+    ),
+)
 
 
 async def main() -> None:
@@ -27,7 +52,7 @@ async def main() -> None:
     )
 
     # Run optimization
-    result = await opt.optimize(trainset)
+    result = await opt.optimize(trainset, seed_config=SEED_CONFIG)
 
     print(f"Best score: {result.best_score:.3f}")
     print(f"Iterations: {result.iterations}")
