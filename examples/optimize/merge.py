@@ -15,16 +15,19 @@ SEED_CONFIG = MAWConfig(
     agents=[
         MAWAgentConfig(
             name="analyst",
+            model="openai/gpt-4o-mini",
             instruction="Analyze the given topic and identify key factors.",
             output_key="analysis",
         ),
         MAWAgentConfig(
             name="critic",
+            model="openai/gpt-4o-mini",
             instruction="Critically evaluate the analysis and suggest improvements.",
             output_key="critique",
         ),
         MAWAgentConfig(
             name="writer",
+            model="openai/gpt-4o-mini",
             instruction="Produce a final report incorporating analysis and critique.",
             output_key="report",
         ),

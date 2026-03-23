@@ -14,11 +14,13 @@ SEED_CONFIG = MAWConfig(
     agents=[
         MAWAgentConfig(
             name="drafter",
+            model="openai/gpt-4o-mini",
             instruction="Draft a response to the given task.",
             output_key="draft",
         ),
         MAWAgentConfig(
             name="refiner",
+            model="openai/gpt-4o-mini",
             instruction="Refine the draft for clarity and completeness.",
             output_key="final",
         ),

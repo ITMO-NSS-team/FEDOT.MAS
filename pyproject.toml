@@ -22,6 +22,9 @@ dev = [
   "ruff>=0.15.1",
   "ty>=0.0.17",
 ]
+docs = [
+  "zensical>=0.0.28",
+]
 
 [tool.uv]
 sources.fedotmas = { workspace = true }

@@ -15,11 +15,13 @@ SEED_CONFIG = MAWConfig(
     agents=[
         MAWAgentConfig(
             name="analyst",
+            model="openai/gpt-4o-mini",
             instruction="Analyze the given topic and list key points.",
             output_key="analysis",
         ),
         MAWAgentConfig(
             name="synthesizer",
+            model="openai/gpt-4o-mini",
             instruction="Synthesize the analysis into a concise summary.",
             output_key="summary",
         ),

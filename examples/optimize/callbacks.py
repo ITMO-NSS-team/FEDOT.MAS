@@ -20,11 +20,13 @@ SEED_CONFIG = MAWConfig(
     agents=[
         MAWAgentConfig(
             name="planner",
+            model="openai/gpt-4o-mini",
             instruction="Create a structured plan for the given task.",
             output_key="plan",
         ),
         MAWAgentConfig(
             name="executor",
+            model="openai/gpt-4o-mini",
             instruction="Execute the plan and produce a detailed result.",
             output_key="result",
         ),
