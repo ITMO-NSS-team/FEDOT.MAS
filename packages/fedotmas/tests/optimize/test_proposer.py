@@ -234,6 +234,6 @@ def test_proposer_token_usage():
     """token_usage property returns (prompt, completion) tuple."""
     proposer = Proposer()
     assert proposer.token_usage == (0, 0)
-    proposer.total_prompt_tokens = 100
-    proposer.total_completion_tokens = 50
+    proposer._total_prompt_tokens = 100
+    proposer._total_completion_tokens = 50
     assert proposer.token_usage == (100, 50)

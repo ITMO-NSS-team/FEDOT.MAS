@@ -9,6 +9,7 @@ import pytest
 from fedotmas.control._run import ControlledRun
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.optimize import Optimizer, OptimizationResult
+from fedotmas.optimize._config import OptimizationConfig
 from fedotmas.optimize._scoring import LLMJudge, ScoringResult
 
 
@@ -50,7 +51,11 @@ async def test_optimizer_generates_seed_config():
         return_value=ScoringResult(score=0.5, feedback="ok", reasoning="fine")
     )
 
-    opt = Optimizer(maw, scorer=scorer)
+    opt = Optimizer(
+        maw,
+        scorer=scorer,
+        config=OptimizationConfig(max_iterations=1),
+    )
 
     with patch("fedotmas.optimize._engine.Controller") as MockCtrl:
         ctrl = MagicMock()
@@ -69,7 +74,7 @@ async def test_optimizer_generates_seed_config():
                 best_score=0.5,
                 iterations=1,
             )
-            result = await opt.optimize(["task1"], max_iterations=1)
+            result = await opt.optimize(["task1"])
 
     maw.generate_config.assert_called_once_with("task1")
     assert result.best_score == 0.5
@@ -84,7 +89,11 @@ async def test_optimizer_uses_provided_seed():
     )
     seed = _config("x", "y")
 
-    opt = Optimizer(maw, scorer=scorer)
+    opt = Optimizer(
+        maw,
+        scorer=scorer,
+        config=OptimizationConfig(max_iterations=1),
+    )
 
     with patch("fedotmas.optimize.run_optimization") as mock_engine:
         mock_engine.return_value = OptimizationResult(
@@ -92,7 +101,7 @@ async def test_optimizer_uses_provided_seed():
             best_score=0.8,
             iterations=1,
         )
-        result = await opt.optimize(["task1"], seed_config=seed, max_iterations=1)
+        result = await opt.optimize(["task1"], seed_config=seed)
 
     maw.generate_config.assert_not_called()
     assert mock_engine.call_args.kwargs["seed_config"] is seed
@@ -101,7 +110,11 @@ async def test_optimizer_uses_provided_seed():
 @pytest.mark.asyncio
 async def test_optimizer_last_result():
     maw = _mock_maw()
-    opt = Optimizer(maw, criteria="quality")
+    opt = Optimizer(
+        maw,
+        criteria="quality",
+        config=OptimizationConfig(max_iterations=1),
+    )
     assert opt.last_result is None
 
     with patch("fedotmas.optimize.run_optimization") as mock_engine:
@@ -110,7 +123,7 @@ async def test_optimizer_last_result():
             best_score=0.9,
             iterations=5,
         )
-        await opt.optimize(["task1"], max_iterations=1)
+        await opt.optimize(["task1"])
 
     assert opt.last_result is not None
     assert opt.last_result.best_score == 0.9
@@ -125,9 +138,6 @@ def test_optimizer_defaults():
     assert opt._config.minibatch_size == 3
 
 
-# --- 7a: Token counting via public API ---
-
-
 @pytest.mark.asyncio
 async def test_optimizer_token_usage_via_public_api():
     """Token usage should be collected via token_usage property, not private attrs."""
@@ -137,10 +147,13 @@ async def test_optimizer_token_usage_via_public_api():
     scorer.evaluate = AsyncMock(
         return_value=ScoringResult(score=0.5, feedback="ok", reasoning="fine")
     )
-    # Scorer has token_usage property
     scorer.token_usage = (200, 100)
 
-    opt = Optimizer(maw, scorer=scorer)
+    opt = Optimizer(
+        maw,
+        scorer=scorer,
+        config=OptimizationConfig(max_iterations=1),
+    )
 
     with patch("fedotmas.optimize.run_optimization") as mock_engine:
         mock_engine.return_value = OptimizationResult(
@@ -150,10 +163,7 @@ async def test_optimizer_token_usage_via_public_api():
             total_prompt_tokens=50,
             total_completion_tokens=25,
         )
-        result = await opt.optimize(["task1"], seed_config=_config("a"), max_iterations=1)
+        result = await opt.optimize(["task1"], seed_config=_config("a"))
 
-    # The optimizer should add scorer and proposer token usage
-    # Proposer token_usage comes from the Proposer instance created inside optimize()
-    # Scorer token_usage comes from scorer.token_usage = (200, 100)
     assert result.total_prompt_tokens >= 200
     assert result.total_completion_tokens >= 100

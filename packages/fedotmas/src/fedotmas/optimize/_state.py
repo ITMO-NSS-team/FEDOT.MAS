@@ -30,6 +30,7 @@ class Candidate:
     parent_index: int | None = None
     origin: str = "seed"
     on_pareto_front: bool = False
+    merge_parent_indices: tuple[int, int] | None = None
 
     @property
     def mean_score(self) -> float | None:
@@ -81,6 +82,7 @@ class OptimizationState:
         config: MAWConfig,
         *,
         parent_index: int | None = None,
+        merge_parent_indices: tuple[int, int] | None = None,
         origin: str = "seed",
     ) -> Candidate:
         c = Candidate(
@@ -89,6 +91,7 @@ class OptimizationState:
             config_hash=config_hash(config),
             parent_index=parent_index,
             origin=origin,
+            merge_parent_indices=merge_parent_indices,
         )
         self.candidates.append(c)
         self._next_index += 1
@@ -143,6 +146,9 @@ class OptimizationState:
                     "parent_index": c.parent_index,
                     "origin": c.origin,
                     "on_pareto_front": c.on_pareto_front,
+                    "merge_parent_indices": list(c.merge_parent_indices)
+                    if c.merge_parent_indices
+                    else None,
                 }
                 for c in self.candidates
             ],
@@ -159,6 +165,7 @@ class OptimizationState:
         state.iteration = data.get("iteration", 0)
         for cd in data["candidates"]:
             config = MAWConfig.model_validate(cd["config"])
+            mpi = cd.get("merge_parent_indices")
             c = Candidate(
                 index=cd["index"],
                 config=config,
@@ -169,6 +176,7 @@ class OptimizationState:
                 parent_index=cd["parent_index"],
                 origin=cd["origin"],
                 on_pareto_front=cd["on_pareto_front"],
+                merge_parent_indices=tuple(mpi) if mpi else None,
             )
             state.candidates.append(c)
             for task, score_val in c.scores.items():
@@ -180,6 +188,33 @@ class OptimizationState:
                 )
                 state.cache.put(c.config_hash, task, result)
         return state
+
+
+def find_common_ancestor(
+    candidate_a: Candidate,
+    candidate_b: Candidate,
+    candidates: list[Candidate],
+) -> Candidate | None:
+    """Find the lowest common ancestor of two candidates via parent_index chains."""
+    index_map = {c.index: c for c in candidates}
+
+    def _ancestors(c: Candidate) -> list[int]:
+        chain: list[int] = [c.index]
+        cur = c
+        while cur.parent_index is not None:
+            chain.append(cur.parent_index)
+            cur = index_map.get(cur.parent_index)
+            if cur is None:
+                break
+        return chain
+
+    ancestors_a = _ancestors(candidate_a)
+    ancestors_b_set = set(_ancestors(candidate_b))
+
+    for idx in ancestors_a:
+        if idx in ancestors_b_set:
+            return index_map.get(idx)
+    return None
 
 
 def _dominates(a: Candidate, b: Candidate) -> bool:

@@ -1,6 +1,7 @@
 import asyncio
 
 from fedotmas import MAW, Optimizer
+from fedotmas.optimize import OptimizationConfig
 
 
 async def main() -> None:
@@ -17,16 +18,16 @@ async def main() -> None:
     opt = Optimizer(
         maw,
         criteria="Completeness, accuracy, and actionability of the analysis",
-        max_merge_attempts=3,
-        minibatch_size=2,
+        config=OptimizationConfig(
+            max_iterations=5,
+            patience=3,
+            max_merge_attempts=3,
+            minibatch_size=2,
+        ),
     )
 
     # Run optimization
-    result = await opt.optimize(
-        trainset,
-        max_iterations=5,
-        patience=3,
-    )
+    result = await opt.optimize(trainset)
 
     print(f"Best score: {result.best_score:.3f}")
     print(f"Iterations: {result.iterations}")

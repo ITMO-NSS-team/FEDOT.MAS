@@ -24,8 +24,8 @@ pipeline.
 
 You will receive:
 1. The current instruction for a specific agent.
-2. A set of examples showing: the task, the agent's output, the full pipeline \
-output, the score it received, and feedback from an evaluator.
+2. A set of examples showing: the task, the agent's output, outputs from other \
+agents in the pipeline (pipeline context), the score, and feedback from an evaluator.
 
 Your job is to produce an IMPROVED instruction for this agent that would lead to \
 better pipeline outputs. The improved instruction should:
@@ -33,6 +33,12 @@ better pipeline outputs. The improved instruction should:
 - Preserve the core purpose of the agent.
 - Be clear, specific, and actionable.
 - Not include meta-commentary — output ONLY the new instruction text.
+- Identify domain-specific factual information from the task and include it in \
+the instruction when it would improve accuracy.
+
+Use the pipeline context to understand WHY the agent failed, not just WHAT it \
+produced. If preceding agents produced incorrect or incomplete outputs that this \
+agent relied on, focus on making this agent more robust to upstream errors.
 
 Important constraints:
 - Keep the same general role and responsibility of the agent.

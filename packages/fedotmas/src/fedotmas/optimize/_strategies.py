@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-import random as _random_module
+import random
+from enum import Enum
 from typing import Protocol, runtime_checkable
 
 from fedotmas.maw.models import MAWConfig
 from fedotmas.optimize._state import Candidate
+
+
+class MutationType(Enum):
+    INSTRUCTION = "instruction"
+    TOOL = "tool"
+    MODEL = "model"
+    STRUCTURE = "structure"
 
 
 @runtime_checkable
@@ -18,8 +26,8 @@ class BestCandidateSelector:
 
 
 class ParetoCandidateSelector:
-    def __init__(self, rng: _random_module.Random | None = None) -> None:
-        self._rng = rng or _random_module.Random()
+    def __init__(self, rng: random.Random | None = None) -> None:
+        self._rng = rng or random.Random()
 
     def select(self, candidates: list[Candidate]) -> Candidate:
         pareto = [c for c in candidates if c.on_pareto_front]
@@ -29,11 +37,9 @@ class ParetoCandidateSelector:
 
 
 class EpsilonGreedySelector:
-    def __init__(
-        self, epsilon: float = 0.1, rng: _random_module.Random | None = None
-    ) -> None:
+    def __init__(self, epsilon: float = 0.1, rng: random.Random | None = None) -> None:
         self._epsilon = epsilon
-        self._rng = rng or _random_module.Random()
+        self._rng = rng or random.Random()
 
     def select(self, candidates: list[Candidate]) -> Candidate:
         if self._rng.random() < self._epsilon:
@@ -47,8 +53,8 @@ class BatchSampler(Protocol):
 
 
 class ShuffledBatchSampler:
-    def __init__(self, rng: _random_module.Random | None = None) -> None:
-        self._rng = rng or _random_module.Random()
+    def __init__(self, rng: random.Random | None = None) -> None:
+        self._rng = rng or random.Random()
 
     def sample(self, tasks: list[str], batch_size: int) -> list[str]:
         k = min(batch_size, len(tasks))
@@ -75,7 +81,7 @@ class RoundRobinComponentSelector:
 
 
 def make_candidate_selector(
-    name: str, rng: _random_module.Random | None = None
+    name: str, rng: random.Random | None = None
 ) -> CandidateSelector:
     if name == "pareto":
         return ParetoCandidateSelector(rng=rng)

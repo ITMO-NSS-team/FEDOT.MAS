@@ -83,7 +83,7 @@ async def test_evaluate_candidate_creates_controller_per_task():
 
         MockCtrl.side_effect = make_ctrl
 
-        await _evaluate_candidate(maw, scorer, candidate, ["t1", "t2"], state)
+        await _evaluate_candidate(maw, scorer, candidate, ["t1", "t2"], state, OptimizationConfig())
 
     # Should create 2 Controller instances (one per task)
     assert len(controller_instances) == 2
@@ -104,13 +104,13 @@ async def test_evaluate_candidate_caches():
         )
         MockCtrl.return_value = ctrl_instance
 
-        runs = await _evaluate_candidate(maw, scorer, candidate, ["t1"], state)
+        runs = await _evaluate_candidate(maw, scorer, candidate, ["t1"], state, OptimizationConfig())
         assert runs == 1
         assert candidate.scores["t1"] == 0.8
 
         # Second eval should use cache
         candidate2 = state.add_candidate(config, origin="mutation")
-        runs2 = await _evaluate_candidate(maw, scorer, candidate2, ["t1"], state)
+        runs2 = await _evaluate_candidate(maw, scorer, candidate2, ["t1"], state, OptimizationConfig())
         assert runs2 == 0
         assert candidate2.scores["t1"] == 0.8
 
@@ -128,7 +128,7 @@ async def test_evaluate_candidate_handles_error():
         ctrl_instance.run = AsyncMock(side_effect=RuntimeError("boom"))
         MockCtrl.return_value = ctrl_instance
 
-        runs = await _evaluate_candidate(maw, scorer, candidate, ["t1"], state)
+        runs = await _evaluate_candidate(maw, scorer, candidate, ["t1"], state, OptimizationConfig())
         assert runs == 1
         assert candidate.scores["t1"] == 0.0
         assert "boom" in candidate.feedbacks["t1"]
@@ -141,8 +141,8 @@ async def test_run_optimization_basic():
 
     scorer = _mock_scorer(0.6)
     proposer = MagicMock(spec=Proposer)
-    proposer.total_prompt_tokens = 0
-    proposer.total_completion_tokens = 0
+    proposer._total_prompt_tokens = 0
+    proposer._total_completion_tokens = 0
 
     # Mutation returns a different config
     mutated_agents = [
@@ -197,8 +197,8 @@ async def test_run_optimization_rejects_identical_mutation():
 
     scorer = _mock_scorer(0.5)
     proposer = MagicMock(spec=Proposer)
-    proposer.total_prompt_tokens = 0
-    proposer.total_completion_tokens = 0
+    proposer._total_prompt_tokens = 0
+    proposer._total_completion_tokens = 0
     # Return same config = no mutation
     proposer.propose_mutation = AsyncMock(return_value=seed)
 

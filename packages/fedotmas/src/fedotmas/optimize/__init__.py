@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import warnings
-
 from fedotmas.common.logging import get_logger
 from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import MAWConfig
 from fedotmas.optimize._callbacks import (
+    CallbackDispatcher,
     MetricsCallback,
-    NoOpCallback,
     OptimizationCallback,
     OptimizationMetrics,
 )
@@ -40,23 +38,14 @@ __all__ = [
     "OptimizationResult",
     "OptimizationCallback",
     "OptimizationMetrics",
-    "NoOpCallback",
     "MetricsCallback",
     "Scorer",
     "ScoringResult",
     "LLMJudge",
     "Candidate",
     "SignalStopper",
+    "CallbackDispatcher",
 ]
-
-_DEPRECATED_KWARGS = {
-    "candidate_selection",
-    "use_merge",
-    "max_merge_attempts",
-    "minibatch_size",
-    "checkpoint_path",
-    "graceful_shutdown",
-}
 
 
 class Optimizer:
@@ -68,37 +57,8 @@ class Optimizer:
         criteria: str | None = None,
         config: OptimizationConfig | None = None,
         callbacks: list[OptimizationCallback] | None = None,
-        **kwargs: object,
     ) -> None:
-        # Handle deprecated kwargs — forward to config
-        overrides: dict[str, object] = {}
-        for key in list(kwargs):
-            if key in _DEPRECATED_KWARGS:
-                warnings.warn(
-                    f"Passing '{key}' to Optimizer() is deprecated; "
-                    f"set it on OptimizationConfig instead.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                overrides[key] = kwargs.pop(key)
-        if kwargs:
-            raise TypeError(f"Unexpected keyword arguments: {', '.join(kwargs)}")
-
-        if config is not None and overrides:
-            import dataclasses
-
-            cfg_dict: dict[str, object] = {
-                f.name: getattr(config, f.name)
-                for f in dataclasses.fields(config)
-                if f.init
-            }
-            cfg_dict.update(overrides)
-            self._config: OptimizationConfig = OptimizationConfig(**cfg_dict)  # type: ignore[arg-type]
-        elif overrides:
-            self._config = OptimizationConfig(**overrides)  # type: ignore[arg-type]
-        else:
-            self._config = config or OptimizationConfig()
-
+        self._config: OptimizationConfig = config or OptimizationConfig()
         self._maw = maw
         self._callbacks = callbacks or []
 
@@ -124,10 +84,6 @@ class Optimizer:
         *,
         seed_config: MAWConfig | None = None,
         valset: list[str] | None = None,
-        max_iterations: int = 20,
-        max_evaluations: int | None = None,
-        patience: int = 5,
-        score_threshold: float | None = None,
     ) -> OptimizationResult:
         if not trainset:
             raise ValueError("trainset must not be empty")
@@ -145,12 +101,13 @@ class Optimizer:
 
         component_selector = make_component_selector(len(seed_config.agents))
 
-        stoppers: list[Stopper] = [MaxIterations(max_iterations)]
-        if max_evaluations is not None:
-            stoppers.append(MaxEvaluations(max_evaluations))
-        stoppers.append(NoImprovement(patience, epsilon=self._config.epsilon))
-        if score_threshold is not None:
-            stoppers.append(ScoreThreshold(score_threshold))
+        cfg = self._config
+        stoppers: list[Stopper] = [MaxIterations(cfg.max_iterations)]
+        if cfg.max_evaluations is not None:
+            stoppers.append(MaxEvaluations(cfg.max_evaluations))
+        stoppers.append(NoImprovement(cfg.patience, epsilon=cfg.improvement_epsilon))
+        if cfg.score_threshold is not None:
+            stoppers.append(ScoreThreshold(cfg.score_threshold))
         stopper = CompositeStopper(stoppers)
 
         proposer = Proposer(self._config)

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import random as _random_module
+import random
+from dataclasses import dataclass
 from pathlib import Path
 
 from fedotmas.common.logging import get_logger
@@ -23,6 +24,7 @@ from fedotmas.optimize._state import (
     OptimizationState,
     TaskResult,
     config_hash,
+    find_common_ancestor,
 )
 from fedotmas.optimize._stopping import SignalStopper, Stopper
 from fedotmas.optimize._strategies import (
@@ -34,38 +36,22 @@ from fedotmas.optimize._strategies import (
 _log = get_logger("fedotmas.optimize._engine")
 
 
+@dataclass
 class _LoopContext:
-    def __init__(
-        self,
-        maw: MAW,
-        scorer: Scorer,
-        proposer: Proposer,
-        candidate_selector: CandidateSelector,
-        batch_sampler: BatchSampler,
-        component_selector: ComponentSelector,
-        dispatcher: CallbackDispatcher,
-        metrics_cb: MetricsCallback,
-        state: OptimizationState,
-        cfg: OptimizationConfig,
-        rng: _random_module.Random,
-        trainset: list[str],
-        valset: list[str],
-        seed: Candidate | None,
-    ) -> None:
-        self.maw = maw
-        self.scorer = scorer
-        self.proposer = proposer
-        self.candidate_selector = candidate_selector
-        self.batch_sampler = batch_sampler
-        self.component_selector = component_selector
-        self.dispatcher = dispatcher
-        self.metrics_cb = metrics_cb
-        self.state = state
-        self.cfg = cfg
-        self.rng = rng
-        self.trainset = trainset
-        self.valset = valset
-        self.seed = seed
+    maw: MAW
+    scorer: Scorer
+    proposer: Proposer
+    candidate_selector: CandidateSelector
+    batch_sampler: BatchSampler
+    component_selector: ComponentSelector
+    dispatcher: CallbackDispatcher
+    metrics_cb: MetricsCallback
+    state: OptimizationState
+    cfg: OptimizationConfig
+    rng: random.Random
+    trainset: list[str]
+    valset: list[str]
+    seed: Candidate | None
 
 
 async def run_optimization(
@@ -321,13 +307,27 @@ async def _try_merge(
     pareto = state.get_pareto_candidates()
     pair = ctx.rng.sample(pareto, 2)
     ctx.dispatcher.on_merge_attempted((pair[0], pair[1]))
-    merged_config = await ctx.proposer.propose_merge(pair[0], pair[1], ctx.trainset)
+
+    ancestor = find_common_ancestor(pair[0], pair[1], state.candidates)
+    if ancestor is not None:
+        _log.info(
+            "Genealogy merge: ancestor #{} for pair ({}, {})",
+            ancestor.index,
+            pair[0].index,
+            pair[1].index,
+        )
+        merged_config = await ctx.proposer.propose_genealogy_merge(
+            ancestor, pair[0], pair[1], ctx.trainset
+        )
+    else:
+        merged_config = await ctx.proposer.propose_merge(pair[0], pair[1], ctx.trainset)
     merged_hash = config_hash(merged_config)
 
     if merged_hash != pair[0].config_hash and merged_hash != pair[1].config_hash:
         merged = state.add_candidate(
             merged_config,
             parent_index=pair[0].index,
+            merge_parent_indices=(pair[0].index, pair[1].index),
             origin="merge",
         )
         runs = await _evaluate_candidate(
@@ -374,8 +374,8 @@ def _build_result(
         all_candidates=state.candidates,
         iterations=iteration,
         total_evaluation_runs=total_eval_runs,
-        total_prompt_tokens=proposer.total_prompt_tokens,
-        total_completion_tokens=proposer.total_completion_tokens,
+        total_prompt_tokens=proposer.token_usage[0],
+        total_completion_tokens=proposer.token_usage[1],
         metrics=metrics_cb.metrics,
     )
     dispatcher.on_optimization_end(result)
@@ -388,7 +388,7 @@ async def _evaluate_candidate(
     candidate: Candidate,
     tasks: list[str],
     state: OptimizationState,
-    config: OptimizationConfig | None = None,
+    config: OptimizationConfig,
     metrics_cb: MetricsCallback | None = None,
 ) -> int:
     """Returns number of new evaluation runs performed."""
@@ -412,7 +412,7 @@ async def _evaluate_candidate(
         return_exceptions=True,
     )
 
-    max_failures = config.max_consecutive_failures if config else 3
+    max_failures = config.max_consecutive_failures
     consecutive_errors = 0
 
     for task, run in zip(tasks_to_run, runs):
@@ -425,11 +425,14 @@ async def _evaluate_candidate(
                 feedback=f"Pipeline failed: {run}",
                 error=True,
             )
+            state.record_task_result(candidate, result)
             if consecutive_errors >= max_failures:
                 _log.warning(
                     "Skipping remaining tasks after {} consecutive failures",
                     max_failures,
                 )
+                break
+            continue
         else:
             consecutive_errors = 0
             try:

@@ -6,7 +6,7 @@ from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.optimize._callbacks import (
     CallbackDispatcher,
     MetricsCallback,
-    NoOpCallback,
+    OptimizationCallback,
     OptimizationMetrics,
 )
 from fedotmas.optimize._result import OptimizationResult
@@ -24,9 +24,9 @@ def _candidate(index: int, score: float) -> Candidate:
     return c
 
 
-class TestNoOpCallback:
+class TestOptimizationCallback:
     def test_all_methods_callable(self):
-        cb = NoOpCallback()
+        cb = OptimizationCallback()
         state = OptimizationState()
         result = OptimizationResult(best_config=_config(), best_score=0.5)
         parent = _candidate(0, 0.5)
@@ -45,7 +45,7 @@ class TestCallbackDispatcher:
     def test_dispatches_to_all(self):
         calls: list[str] = []
 
-        class TrackerCb(NoOpCallback):
+        class TrackerCb(OptimizationCallback):
             def on_iteration_start(self, iteration, state):
                 calls.append(f"start_{iteration}")
 
@@ -62,7 +62,7 @@ class TestCallbackDispatcher:
     def test_add(self):
         calls: list[str] = []
 
-        class TrackerCb(NoOpCallback):
+        class TrackerCb(OptimizationCallback):
             def on_iteration_start(self, iteration, state):
                 calls.append("called")
 
@@ -75,11 +75,11 @@ class TestCallbackDispatcher:
         """A failing callback should not prevent others from running."""
         calls: list[str] = []
 
-        class FailingCb(NoOpCallback):
+        class FailingCb(OptimizationCallback):
             def on_iteration_start(self, iteration, state):
                 raise RuntimeError("boom")
 
-        class GoodCb(NoOpCallback):
+        class GoodCb(OptimizationCallback):
             def on_iteration_start(self, iteration, state):
                 calls.append("ok")
 

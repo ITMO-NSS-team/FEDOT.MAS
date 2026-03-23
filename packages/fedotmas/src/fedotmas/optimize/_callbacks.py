@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 _log = get_logger("fedotmas.optimize._callbacks")
 
 
-class NoOpCallback:
+class OptimizationCallback:
     """Default callback that does nothing. Subclass and override specific methods."""
 
     def on_iteration_start(self, iteration: int, state: OptimizationState) -> None:
@@ -37,9 +37,6 @@ class NoOpCallback:
         pass
 
 
-OptimizationCallback = NoOpCallback
-
-
 class CallbackDispatcher:
     """Dispatches events to multiple callbacks with error isolation."""
 
@@ -60,6 +57,7 @@ class CallbackDispatcher:
                         "Callback error in {}.{}",
                         type(cb).__name__,
                         name,
+                        exc_info=True,
                     )
 
     def on_iteration_start(self, iteration: int, state: OptimizationState) -> None:
@@ -106,7 +104,7 @@ class OptimizationMetrics:
         return self.cache_hits / total if total > 0 else 0.0
 
 
-class MetricsCallback(NoOpCallback):
+class MetricsCallback(OptimizationCallback):
     """Built-in callback that tracks optimization metrics."""
 
     def __init__(self) -> None:
