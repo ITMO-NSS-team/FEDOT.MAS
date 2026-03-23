@@ -4,6 +4,8 @@ A framework for building and optimizing multi-agent systems. Built on top of [Go
 
 ## Installation
 
+Soon...
+
 ```bash
 pip install fedotmas
 ```
