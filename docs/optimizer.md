@@ -344,3 +344,4 @@ for c in result.pareto_front():
 print(f"Iterations: {result.iterations}")
 print(f"Total pipeline runs: {result.total_evaluation_runs}")
 print(f"Tokens: {result.total_prompt_tokens} prompt / {result.total_completion_tokens} completion")
+```
