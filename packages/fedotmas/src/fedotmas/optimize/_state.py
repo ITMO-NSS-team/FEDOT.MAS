@@ -217,6 +217,19 @@ def find_common_ancestor(
     return None
 
 
+def is_ancestor_of(a: Candidate, b: Candidate, candidates: list[Candidate]) -> bool:
+    """Check if *a* is an ancestor of *b* via parent_index chain."""
+    index_map = {c.index: c for c in candidates}
+    cur = b
+    while cur.parent_index is not None:
+        if cur.parent_index == a.index:
+            return True
+        cur = index_map.get(cur.parent_index)
+        if cur is None:
+            break
+    return False
+
+
 def _dominates(a: Candidate, b: Candidate) -> bool:
     """Compares only on intersection of tasks. Empty intersection → no domination."""
     common_tasks = a.scores.keys() & b.scores.keys()

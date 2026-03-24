@@ -9,10 +9,12 @@ from fedotmas.optimize._state import Candidate
 from fedotmas.optimize._strategies import (
     AllComponentSelector,
     BestCandidateSelector,
+    EpochShuffledBatchSampler,
     EpsilonGreedySelector,
     ParetoCandidateSelector,
     RoundRobinComponentSelector,
     ShuffledBatchSampler,
+    make_batch_sampler,
     make_candidate_selector,
     make_component_selector,
 )
@@ -142,3 +144,69 @@ class TestFactories:
         assert isinstance(make_component_selector(2), AllComponentSelector)
         assert isinstance(make_component_selector(3), AllComponentSelector)
         assert isinstance(make_component_selector(5), RoundRobinComponentSelector)
+
+    def test_make_batch_sampler(self):
+        assert isinstance(make_batch_sampler("epoch_shuffled"), EpochShuffledBatchSampler)
+        assert isinstance(make_batch_sampler("random"), ShuffledBatchSampler)
+
+    def test_make_batch_sampler_unknown(self):
+        with pytest.raises(ValueError, match="Unknown"):
+            make_batch_sampler("nonexistent")
+
+
+class TestEpochShuffledBatchSampler:
+    def test_covers_all_tasks_in_one_epoch(self):
+        """All tasks should appear at least once within one epoch."""
+        import random
+
+        sampler = EpochShuffledBatchSampler(rng=random.Random(42))
+        tasks = ["t1", "t2", "t3", "t4", "t5"]
+        seen: set[str] = set()
+        # With batch_size=2, need ceil(5/2)=3 batches to cover all
+        for _ in range(3):
+            batch = sampler.sample(tasks, 2)
+            assert len(batch) == 2
+            seen.update(batch)
+        assert seen == set(tasks)
+
+    def test_pads_to_batch_size_multiple(self):
+        """Shuffled list should be padded to a multiple of batch_size."""
+        import random
+
+        sampler = EpochShuffledBatchSampler(rng=random.Random(42))
+        tasks = ["t1", "t2", "t3"]  # 3 tasks, batch=2 → pad to 4
+        batch1 = sampler.sample(tasks, 2)
+        batch2 = sampler.sample(tasks, 2)
+        assert len(batch1) == 2
+        assert len(batch2) == 2
+        # All original tasks should appear across 2 batches
+        combined = set(batch1 + batch2)
+        assert combined == set(tasks)
+
+    def test_reshuffles_on_new_epoch(self):
+        """After all batches consumed, should reshuffle for next epoch."""
+        import random
+
+        sampler = EpochShuffledBatchSampler(rng=random.Random(42))
+        tasks = ["t1", "t2"]
+        # Epoch 1
+        batch1 = sampler.sample(tasks, 2)
+        # Epoch 2 (should reshuffle)
+        batch2 = sampler.sample(tasks, 2)
+        assert len(batch1) == 2
+        assert len(batch2) == 2
+
+    def test_refreshes_on_trainset_change(self):
+        """If trainset size changes, should rebuild shuffled list."""
+        import random
+
+        sampler = EpochShuffledBatchSampler(rng=random.Random(42))
+        batch1 = sampler.sample(["t1", "t2"], 2)
+        assert len(batch1) == 2
+        batch2 = sampler.sample(["t1", "t2", "t3"], 2)
+        assert len(batch2) == 2
+
+    def test_empty_raises(self):
+        sampler = EpochShuffledBatchSampler()
+        with pytest.raises(ValueError, match="empty"):
+            sampler.sample([], 2)

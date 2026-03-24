@@ -19,12 +19,12 @@ from fedotmas.optimize._stopping import (
     Stopper,
 )
 from fedotmas.optimize._strategies import (
-    ShuffledBatchSampler,
+    make_batch_sampler,
     make_candidate_selector,
     make_component_selector,
 )
 
-_log = get_logger("fedotmas.optimize")
+_log = get_logger("fedotmas.optimize._optimizer")
 
 
 class Optimizer:
@@ -56,7 +56,7 @@ class Optimizer:
         self._candidate_selector = make_candidate_selector(
             self._config.candidate_selection, rng=rng
         )
-        self._batch_sampler = ShuffledBatchSampler(rng=rng)
+        self._batch_sampler = make_batch_sampler(self._config.batch_strategy, rng=rng)
         self._last_result: OptimizationResult | None = None
 
     async def optimize(

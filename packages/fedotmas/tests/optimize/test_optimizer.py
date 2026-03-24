@@ -136,6 +136,7 @@ def test_optimizer_defaults():
     assert opt._config.use_merge is True
     assert opt._config.max_merge_attempts == 5
     assert opt._config.minibatch_size == 3
+    assert opt._config.batch_strategy == "epoch_shuffled"
 
 
 @pytest.mark.asyncio

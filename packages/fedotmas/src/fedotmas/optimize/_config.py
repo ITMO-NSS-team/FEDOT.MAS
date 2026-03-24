@@ -54,6 +54,13 @@ class OptimizationConfig:
     minibatch_size: int = 3
     """Number of tasks sampled per iteration for evaluation."""
 
+    batch_strategy: Literal["epoch_shuffled", "random"] = "epoch_shuffled"
+    """Batch sampling strategy.
+    - "epoch_shuffled": sequential minibatches from shuffled trainset,
+      guarantees full coverage per epoch (GEPA default)
+    - "random": random sample each iteration, no coverage guarantee
+    """
+
     # Truncation limits
     max_merge_context_tasks: int = 5
     """Max tasks included in merge LLM context."""

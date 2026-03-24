@@ -11,6 +11,7 @@ from fedotmas.optimize._state import (
     OptimizationState,
     TaskResult,
     config_hash,
+    is_ancestor_of,
 )
 
 
@@ -262,3 +263,37 @@ def test_best_candidate():
 def test_best_candidate_empty():
     state = OptimizationState()
     assert state.best_candidate() is None
+
+
+def test_is_ancestor_of():
+    state = OptimizationState()
+    c0 = state.add_candidate(_config("a"), origin="seed")
+    c1 = state.add_candidate(
+        _config("a", instructions={"a": "v1"}), parent_index=0, origin="mutation"
+    )
+    c2 = state.add_candidate(
+        _config("a", instructions={"a": "v2"}), parent_index=1, origin="mutation"
+    )
+    # c0 → c1 → c2
+    assert is_ancestor_of(c0, c2, state.candidates) is True
+    assert is_ancestor_of(c0, c1, state.candidates) is True
+    assert is_ancestor_of(c1, c2, state.candidates) is True
+    # Not ancestors
+    assert is_ancestor_of(c2, c0, state.candidates) is False
+    assert is_ancestor_of(c1, c0, state.candidates) is False
+    # Self is not its own ancestor
+    assert is_ancestor_of(c0, c0, state.candidates) is False
+
+
+def test_is_ancestor_of_unrelated():
+    state = OptimizationState()
+    c0 = state.add_candidate(_config("a"), origin="seed")
+    c1 = state.add_candidate(
+        _config("a", instructions={"a": "v1"}), parent_index=0, origin="mutation"
+    )
+    c2 = state.add_candidate(
+        _config("a", instructions={"a": "v2"}), parent_index=0, origin="mutation"
+    )
+    # c1 and c2 are siblings, not ancestors of each other
+    assert is_ancestor_of(c1, c2, state.candidates) is False
+    assert is_ancestor_of(c2, c1, state.candidates) is False

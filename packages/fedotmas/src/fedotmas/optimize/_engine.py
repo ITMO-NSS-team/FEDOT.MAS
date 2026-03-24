@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fedotmas.common.logging import get_logger
@@ -25,6 +25,7 @@ from fedotmas.optimize._state import (
     TaskResult,
     config_hash,
     find_common_ancestor,
+    is_ancestor_of,
 )
 from fedotmas.optimize._stopping import SignalStopper, Stopper
 from fedotmas.optimize._strategies import (
@@ -34,6 +35,15 @@ from fedotmas.optimize._strategies import (
 )
 
 _log = get_logger("fedotmas.optimize._engine")
+
+
+@dataclass
+class _MergeSchedule:
+    """Tracks merge scheduling state (GEPA merge scheduling logic)."""
+
+    merges_due: int = 0
+    total_tested: int = 0
+    last_found_new: bool = False
 
 
 @dataclass
@@ -52,6 +62,8 @@ class _LoopContext:
     trainset: list[str]
     valset: list[str]
     seed: Candidate | None
+    merge: _MergeSchedule = field(default_factory=_MergeSchedule)
+    merged_pairs: set[tuple[int, int]] = field(default_factory=set)
 
 
 async def run_optimization(
@@ -87,15 +99,13 @@ async def run_optimization(
     total_eval_runs = 0
 
     if seed is not None and not seed.scores:
-        _log.info(
-            "Evaluating seed candidate on full trainset ({} tasks)", len(trainset)
-        )
+        _log.info("Evaluating seed candidate on valset ({} tasks)", len(valset))
         eval_runs = await _evaluate_candidate(
-            maw, scorer, seed, trainset, state, cfg, metrics_cb
+            maw, scorer, seed, valset, state, cfg, metrics_cb
         )
         total_eval_runs += eval_runs
         state.update_pareto_front()
-        dispatcher.on_candidate_evaluated(seed, trainset)
+        dispatcher.on_candidate_evaluated(seed, valset)
 
         _log.info(
             "Seed | mean_score={:.3f} min_score={:.3f}",
@@ -103,8 +113,6 @@ async def run_optimization(
             seed.min_score or 0.0,
         )
 
-    merge_attempts = 0
-    last_accepted = False
     consecutive_failures = 0
 
     def _should_stop() -> bool:
@@ -143,27 +151,13 @@ async def run_optimization(
             _log.info("=== Iteration {} ===", iteration)
             dispatcher.on_iteration_start(iteration, state)
 
-            eval_runs, accepted, fail_count = await _run_iteration(
+            eval_runs, consecutive_failures = await _run_loop_step(
                 ctx, iteration, consecutive_failures
             )
             total_eval_runs += eval_runs
-            last_accepted = accepted
-            consecutive_failures = fail_count
-
-            if (
-                cfg.use_merge
-                and last_accepted
-                and merge_attempts < cfg.max_merge_attempts
-                and len(state.get_pareto_candidates()) >= 2
-            ):
-                merge_eval, merge_attempts = await _try_merge(ctx, merge_attempts)
-                total_eval_runs += merge_eval
 
             dispatcher.on_iteration_end(iteration, state)
-
-            cp = Path(cfg.checkpoint_path) if cfg.checkpoint_path else None
-            if cp is not None:
-                state.save(cp)
+            _checkpoint(state, cfg)
 
     finally:
         if signal_stopper is not None:
@@ -172,6 +166,48 @@ async def run_optimization(
     return _build_result(
         state, seed, iteration, total_eval_runs, mutator, metrics_cb, dispatcher
     )
+
+
+def _checkpoint(state: OptimizationState, cfg: OptimizationConfig) -> None:
+    cp = Path(cfg.checkpoint_path) if cfg.checkpoint_path else None
+    if cp is not None:
+        state.save(cp)
+
+
+async def _run_loop_step(
+    ctx: _LoopContext,
+    iteration: int,
+    consecutive_failures: int,
+) -> tuple[int, int]:
+    """Run one loop step: merge OR mutation. Returns (eval_runs, consecutive_failures)."""
+    cfg = ctx.cfg
+    ms = ctx.merge
+
+    # 1) Merge first if scheduled (replaces mutation this iteration)
+    if (
+        cfg.use_merge
+        and ms.merges_due > 0
+        and ms.last_found_new
+        and len(ctx.state.get_pareto_candidates()) >= 2
+    ):
+        merge_eval, merge_accepted = await _try_merge(ctx)
+        ms.last_found_new = False
+        if merge_accepted:
+            ms.merges_due -= 1
+            ms.total_tested += 1
+        return merge_eval, consecutive_failures
+
+    # 2) Mutation
+    eval_runs, accepted, fail_count = await _run_iteration(
+        ctx, iteration, consecutive_failures
+    )
+    ms.last_found_new = accepted
+
+    # 3) Schedule merge after successful mutation
+    if accepted and cfg.use_merge and ms.total_tested < cfg.max_merge_attempts:
+        ms.merges_due += 1
+
+    return eval_runs, fail_count
 
 
 def _setup_state(
@@ -294,28 +330,55 @@ async def _run_iteration(
         return eval_runs, False, consecutive_failures
 
 
-async def _try_merge(
-    ctx: _LoopContext,
-    merge_attempts: int,
-) -> tuple[int, int]:
-    """Attempt a merge. Returns (eval_runs, updated_merge_attempts)."""
+async def _try_merge(ctx: _LoopContext) -> tuple[int, bool]:
+    """Attempt a merge. Returns (eval_runs, accepted)."""
     state = ctx.state
     cfg = ctx.cfg
     eval_runs = 0
 
-    merge_attempts += 1
-    _log.info(
-        "Attempting merge (attempt {}/{})",
-        merge_attempts,
-        cfg.max_merge_attempts,
-    )
-
     pareto = state.get_pareto_candidates()
-    pair = ctx.rng.sample(pareto, 2)
+    if len(pareto) < 2:
+        return 0, False
+
+    # Select a valid pair with filtering (like GEPA merge.py:69-116)
+    pair: list[Candidate] | None = None
+    for _ in range(10):
+        sample = ctx.rng.sample(pareto, 2)
+        key = (
+            min(sample[0].index, sample[1].index),
+            max(sample[0].index, sample[1].index),
+        )
+        # Triplet dedup: don't re-merge the same pair
+        if key in ctx.merged_pairs:
+            continue
+        # Don't merge direct ancestors
+        if is_ancestor_of(sample[0], sample[1], state.candidates):
+            continue
+        if is_ancestor_of(sample[1], sample[0], state.candidates):
+            continue
+        pair = sample
+        ctx.merged_pairs.add(key)
+        break
+
+    if pair is None:
+        _log.info("No valid merge pair found after filtering")
+        return 0, False
+
     ctx.dispatcher.on_merge_attempted((pair[0], pair[1]))
 
     ancestor = find_common_ancestor(pair[0], pair[1], state.candidates)
     if ancestor is not None:
+        # Ancestor must not be better than children
+        anc_score = ancestor.mean_score or 0.0
+        if anc_score > (pair[0].mean_score or 0.0) or anc_score > (
+            pair[1].mean_score or 0.0
+        ):
+            _log.info(
+                "Skipping merge: ancestor #{} score {:.3f} > child",
+                ancestor.index,
+                anc_score,
+            )
+            return 0, False
         _log.info(
             "Genealogy merge: ancestor #{} for pair ({}, {})",
             ancestor.index,
@@ -327,29 +390,46 @@ async def _try_merge(
         )
     else:
         merged_config = await ctx.mutator.merge(pair[0], pair[1], ctx.trainset)
+
     merged_hash = config_hash(merged_config)
+    if merged_hash == pair[0].config_hash or merged_hash == pair[1].config_hash:
+        _log.info("Merge produced config identical to a parent, skipping")
+        return 0, False
 
-    if merged_hash != pair[0].config_hash and merged_hash != pair[1].config_hash:
-        merged = state.add_candidate(
-            merged_config,
-            parent_index=pair[0].index,
-            merge_parent_indices=(pair[0].index, pair[1].index),
-            origin="merge",
-        )
-        runs = await _evaluate_candidate(
-            ctx.maw, ctx.scorer, merged, ctx.valset, state, cfg, ctx.metrics_cb
-        )
-        eval_runs += runs
-        state.update_pareto_front()
-        ctx.dispatcher.on_candidate_evaluated(merged, ctx.valset)
+    merged = state.add_candidate(
+        merged_config,
+        parent_index=pair[0].index,
+        merge_parent_indices=(pair[0].index, pair[1].index),
+        origin="merge",
+    )
+    runs = await _evaluate_candidate(
+        ctx.maw, ctx.scorer, merged, ctx.valset, state, cfg, ctx.metrics_cb
+    )
+    eval_runs += runs
+    ctx.dispatcher.on_candidate_evaluated(merged, ctx.valset)
 
+    # Acceptance check: merged must be >= max(parents) (GEPA engine.py:479)
+    parent_best = max(pair[0].mean_score or 0.0, pair[1].mean_score or 0.0)
+    merged_score = merged.mean_score or 0.0
+
+    if merged_score >= parent_best:
         _log.info(
-            "Merge #{} | score={:.3f}",
+            "Merge accepted #{} | score={:.3f} >= max parent {:.3f}",
             merged.index,
-            merged.mean_score or 0.0,
+            merged_score,
+            parent_best,
         )
-
-    return eval_runs, merge_attempts
+        state.update_pareto_front()
+        return eval_runs, True
+    else:
+        _log.info(
+            "Merge rejected #{} | score={:.3f} < max parent {:.3f}",
+            merged.index,
+            merged_score,
+            parent_best,
+        )
+        ctx.dispatcher.on_candidate_rejected(merged, pair[0])
+        return eval_runs, False
 
 
 def _build_result(
