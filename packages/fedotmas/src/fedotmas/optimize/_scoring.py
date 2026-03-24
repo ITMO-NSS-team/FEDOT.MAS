@@ -94,6 +94,12 @@ def _format_state(state: dict[str, Any], max_chars: int = 2000) -> str:
     for key, value in state.items():
         text = str(value)
         if len(text) > max_chars:
+            _log.debug(
+                "State key '{}' truncated: {} -> {} chars",
+                key,
+                len(text),
+                max_chars,
+            )
             text = text[:max_chars] + "... (truncated)"
         parts.append(f"### {key}\n{text}")
     return "\n\n".join(parts) if parts else "(empty state)"

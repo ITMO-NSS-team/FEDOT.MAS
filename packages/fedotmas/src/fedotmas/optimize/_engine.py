@@ -16,7 +16,7 @@ from fedotmas.optimize._callbacks import (
     OptimizationCallback,
 )
 from fedotmas.optimize._config import OptimizationConfig
-from fedotmas.optimize._proposer import Proposer
+from fedotmas.optimize._mutators._protocol import Mutator
 from fedotmas.optimize._result import OptimizationResult
 from fedotmas.optimize._scoring import Scorer, ScoringResult
 from fedotmas.optimize._state import (
@@ -40,7 +40,7 @@ _log = get_logger("fedotmas.optimize._engine")
 class _LoopContext:
     maw: MAW
     scorer: Scorer
-    proposer: Proposer
+    mutator: Mutator
     candidate_selector: CandidateSelector
     batch_sampler: BatchSampler
     component_selector: ComponentSelector
@@ -61,7 +61,7 @@ async def run_optimization(
     trainset: list[str],
     valset: list[str],
     scorer: Scorer,
-    proposer: Proposer,
+    mutator: Mutator,
     candidate_selector: CandidateSelector,
     batch_sampler: BatchSampler,
     component_selector: ComponentSelector,
@@ -119,7 +119,7 @@ async def run_optimization(
     ctx = _LoopContext(
         maw=maw,
         scorer=scorer,
-        proposer=proposer,
+        mutator=mutator,
         candidate_selector=candidate_selector,
         batch_sampler=batch_sampler,
         component_selector=component_selector,
@@ -170,7 +170,7 @@ async def run_optimization(
             signal_stopper.uninstall()
 
     return _build_result(
-        state, seed, iteration, total_eval_runs, proposer, metrics_cb, dispatcher
+        state, seed, iteration, total_eval_runs, mutator, metrics_cb, dispatcher
     )
 
 
@@ -225,17 +225,23 @@ async def _run_iteration(
     eval_runs += runs
 
     try:
-        new_config = await ctx.proposer.propose_mutation(parent, components, batch)
+        new_config = await ctx.mutator.mutate(parent, components, batch)
     except Exception as e:
         consecutive_failures += 1
         _log.warning(
-            "Proposer failed ({}/{}): {}",
+            "Mutator failed ({}/{}): {}: {}",
             consecutive_failures,
             cfg.max_consecutive_failures,
+            type(e).__name__,
             e,
         )
         if consecutive_failures >= cfg.max_consecutive_failures:
-            _log.warning("Max consecutive failures reached, shuffling agents")
+            _log.warning(
+                "Max consecutive failures reached — shuffling agent order as fallback. "
+                "Last error: {}: {}. Consider increasing llm_timeout or checking LLM connectivity.",
+                type(e).__name__,
+                e,
+            )
             agents = list(parent.config.agents)
             ctx.rng.shuffle(agents)
             new_config = parent.config.model_copy(update={"agents": agents})
@@ -316,11 +322,11 @@ async def _try_merge(
             pair[0].index,
             pair[1].index,
         )
-        merged_config = await ctx.proposer.propose_genealogy_merge(
+        merged_config = await ctx.mutator.genealogy_merge(
             ancestor, pair[0], pair[1], ctx.trainset
         )
     else:
-        merged_config = await ctx.proposer.propose_merge(pair[0], pair[1], ctx.trainset)
+        merged_config = await ctx.mutator.merge(pair[0], pair[1], ctx.trainset)
     merged_hash = config_hash(merged_config)
 
     if merged_hash != pair[0].config_hash and merged_hash != pair[1].config_hash:
@@ -351,7 +357,7 @@ def _build_result(
     seed: Candidate | None,
     iteration: int,
     total_eval_runs: int,
-    proposer: Proposer,
+    mutator: Mutator,
     metrics_cb: MetricsCallback,
     dispatcher: CallbackDispatcher,
 ) -> OptimizationResult:
@@ -374,8 +380,8 @@ def _build_result(
         all_candidates=state.candidates,
         iterations=iteration,
         total_evaluation_runs=total_eval_runs,
-        total_prompt_tokens=proposer.token_usage[0],
-        total_completion_tokens=proposer.token_usage[1],
+        total_prompt_tokens=mutator.token_usage[0],
+        total_completion_tokens=mutator.token_usage[1],
         metrics=metrics_cb.metrics,
     )
     dispatcher.on_optimization_end(result)

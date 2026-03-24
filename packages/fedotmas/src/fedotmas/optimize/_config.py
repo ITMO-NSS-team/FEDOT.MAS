@@ -64,6 +64,19 @@ class OptimizationConfig:
     max_output_chars: int = 3000
     """Max characters of agent output in reflection examples."""
 
+    # Mutation types (toggle which aspects of the graph to optimize)
+    mutate_instructions: bool = True
+    """Optimize agent instructions via LLM reflection."""
+
+    mutate_tools: bool = False
+    """Optimize agent tool assignments. (Not yet implemented)"""
+
+    mutate_models: bool = False
+    """Optimize model selection per agent. (Not yet implemented)"""
+
+    mutate_structure: bool = False
+    """Optimize pipeline structure (agent ordering, parallel/sequential). (Not yet implemented)"""
+
     # Error recovery
     max_consecutive_failures: int = 3
     """Threshold before emergency shuffle of agents."""

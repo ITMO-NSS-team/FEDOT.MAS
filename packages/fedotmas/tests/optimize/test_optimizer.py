@@ -68,7 +68,7 @@ async def test_optimizer_generates_seed_config():
         )
         MockCtrl.return_value = ctrl
 
-        with patch("fedotmas.optimize.run_optimization") as mock_engine:
+        with patch("fedotmas.optimize._optimizer.run_optimization") as mock_engine:
             mock_engine.return_value = OptimizationResult(
                 best_config=_config("a", "b"),
                 best_score=0.5,
@@ -95,7 +95,7 @@ async def test_optimizer_uses_provided_seed():
         config=OptimizationConfig(max_iterations=1),
     )
 
-    with patch("fedotmas.optimize.run_optimization") as mock_engine:
+    with patch("fedotmas.optimize._optimizer.run_optimization") as mock_engine:
         mock_engine.return_value = OptimizationResult(
             best_config=seed,
             best_score=0.8,
@@ -117,7 +117,7 @@ async def test_optimizer_last_result():
     )
     assert opt.last_result is None
 
-    with patch("fedotmas.optimize.run_optimization") as mock_engine:
+    with patch("fedotmas.optimize._optimizer.run_optimization") as mock_engine:
         mock_engine.return_value = OptimizationResult(
             best_config=_config("a"),
             best_score=0.9,
@@ -155,7 +155,7 @@ async def test_optimizer_token_usage_via_public_api():
         config=OptimizationConfig(max_iterations=1),
     )
 
-    with patch("fedotmas.optimize.run_optimization") as mock_engine:
+    with patch("fedotmas.optimize._optimizer.run_optimization") as mock_engine:
         mock_engine.return_value = OptimizationResult(
             best_config=_config("a"),
             best_score=0.5,
@@ -167,3 +167,33 @@ async def test_optimizer_token_usage_via_public_api():
 
     assert result.total_prompt_tokens >= 200
     assert result.total_completion_tokens >= 100
+
+
+@pytest.mark.asyncio
+async def test_optimizer_accepts_custom_mutator():
+    """Custom mutator passed to Optimizer should be forwarded to run_optimization."""
+    maw = _mock_maw()
+    scorer = MagicMock()
+    scorer.evaluate = AsyncMock(
+        return_value=ScoringResult(score=0.5, feedback="ok", reasoning="fine")
+    )
+
+    custom_mutator = MagicMock()
+    custom_mutator.token_usage = (0, 0)
+
+    opt = Optimizer(
+        maw,
+        scorer=scorer,
+        config=OptimizationConfig(max_iterations=1),
+        mutator=custom_mutator,
+    )
+
+    with patch("fedotmas.optimize._optimizer.run_optimization") as mock_engine:
+        mock_engine.return_value = OptimizationResult(
+            best_config=_config("a"),
+            best_score=0.5,
+            iterations=1,
+        )
+        await opt.optimize(["task1"], seed_config=_config("a"))
+
+    assert mock_engine.call_args.kwargs["mutator"] is custom_mutator

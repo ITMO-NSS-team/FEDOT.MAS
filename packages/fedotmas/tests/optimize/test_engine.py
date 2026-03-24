@@ -10,7 +10,7 @@ from fedotmas.control._run import ControlledRun
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.optimize._config import OptimizationConfig
 from fedotmas.optimize._engine import run_optimization, _evaluate_candidate, _mean_score_on
-from fedotmas.optimize._proposer import Proposer
+from fedotmas.optimize._mutators._instruction import InstructionMutator
 from fedotmas.optimize._scoring import ScoringResult
 from fedotmas.optimize._state import Candidate, OptimizationState
 from fedotmas.optimize._stopping import MaxIterations
@@ -49,6 +49,14 @@ def _mock_scorer(score: float = 0.7) -> MagicMock:
         return_value=ScoringResult(score=score, feedback="ok", reasoning="fine")
     )
     return scorer
+
+
+def _mock_mutator(mutated_config: MAWConfig) -> MagicMock:
+    mutator = MagicMock(spec=InstructionMutator)
+    mutator.mutate = AsyncMock(return_value=mutated_config)
+    mutator.merge = AsyncMock(return_value=mutated_config)
+    mutator.token_usage = (0, 0)
+    return mutator
 
 
 def test_mean_score_on():
@@ -140,24 +148,15 @@ async def test_run_optimization_basic():
     seed = _config("a", "b")
 
     scorer = _mock_scorer(0.6)
-    proposer = MagicMock(spec=Proposer)
-    proposer._total_prompt_tokens = 0
-    proposer._total_completion_tokens = 0
 
-    # Mutation returns a different config
-    mutated_agents = [
-        _agent("a", "Improved a"),
-        _agent("b", "Do b"),
-    ]
     mutated = MAWConfig(
-        agents=mutated_agents,
+        agents=[_agent("a", "Improved a"), _agent("b", "Do b")],
         pipeline=MAWStepConfig(
             type="sequential",
             children=[MAWStepConfig(agent_name="a"), MAWStepConfig(agent_name="b")],
         ),
     )
-    proposer.propose_mutation = AsyncMock(return_value=mutated)
-    proposer.propose_merge = AsyncMock(return_value=mutated)
+    mutator = _mock_mutator(mutated)
 
     cfg = OptimizationConfig(use_merge=False)
 
@@ -176,7 +175,7 @@ async def test_run_optimization_basic():
             trainset=["t1", "t2"],
             valset=["t1", "t2"],
             scorer=scorer,
-            proposer=proposer,
+            mutator=mutator,
             candidate_selector=BestCandidateSelector(),
             batch_sampler=ShuffledBatchSampler(),
             component_selector=AllComponentSelector(),
@@ -196,11 +195,8 @@ async def test_run_optimization_rejects_identical_mutation():
     seed = _config("a")
 
     scorer = _mock_scorer(0.5)
-    proposer = MagicMock(spec=Proposer)
-    proposer._total_prompt_tokens = 0
-    proposer._total_completion_tokens = 0
     # Return same config = no mutation
-    proposer.propose_mutation = AsyncMock(return_value=seed)
+    mutator = _mock_mutator(seed)
 
     cfg = OptimizationConfig(use_merge=False)
 
@@ -219,7 +215,7 @@ async def test_run_optimization_rejects_identical_mutation():
             trainset=["t1"],
             valset=["t1"],
             scorer=scorer,
-            proposer=proposer,
+            mutator=mutator,
             candidate_selector=BestCandidateSelector(),
             batch_sampler=ShuffledBatchSampler(),
             component_selector=AllComponentSelector(),

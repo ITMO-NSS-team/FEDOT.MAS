@@ -1,4 +1,4 @@
-"""Tests for mutation and merge proposer."""
+"""Tests for InstructionMutator (mutation, merge, genealogy merge)."""
 
 from __future__ import annotations
 
@@ -8,12 +8,13 @@ import pytest
 
 from fedotmas.meta._adk_runner import LLMCallResult
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.optimize._proposer import (
-    Proposer,
+from fedotmas.optimize._mutators._instruction import (
+    InstructionMutator,
     ReflectionExample,
     _build_reflection_examples,
     _find_agent,
     _format_reflection_examples,
+    _mean_score_on_common,
 )
 from fedotmas.optimize._state import Candidate
 
@@ -101,7 +102,7 @@ def test_format_reflection_examples_truncation():
 
 
 @pytest.mark.asyncio
-async def test_propose_mutation():
+async def test_mutate():
     a1 = _agent("a", "Original instruction")
     config = _config(a1)
     candidate = Candidate(index=0, config=config, config_hash="h0")
@@ -109,15 +110,15 @@ async def test_propose_mutation():
     candidate.feedbacks = {"t1": "improve"}
     candidate.states = {"t1": {"a": "output"}}
 
-    proposer = Proposer()
-    with patch("fedotmas.optimize._proposer.run_meta_agent_call") as mock_call:
+    mutator = InstructionMutator()
+    with patch("fedotmas.optimize._mutators._instruction.run_meta_agent_call") as mock_call:
         mock_call.return_value = LLMCallResult(
             raw_output={"improved_instruction": "Better instruction"},
             prompt_tokens=100,
             completion_tokens=50,
             elapsed=1.0,
         )
-        new_config = await proposer.propose_mutation(candidate, ["a"], ["t1"])
+        new_config = await mutator.mutate(candidate, ["a"], ["t1"])
 
     assert new_config.agents[0].name == "a"
     assert "Better instruction" in new_config.agents[0].instruction
@@ -125,7 +126,7 @@ async def test_propose_mutation():
 
 
 @pytest.mark.asyncio
-async def test_propose_mutation_preserves_invariants():
+async def test_mutate_preserves_invariants():
     """Name and output_key must not change during mutation."""
     a1 = MAWAgentConfig(
         name="researcher",
@@ -139,15 +140,15 @@ async def test_propose_mutation_preserves_invariants():
     candidate.feedbacks = {"t1": "improve"}
     candidate.states = {"t1": {"research_result": "output"}}
 
-    proposer = Proposer()
-    with patch("fedotmas.optimize._proposer.run_meta_agent_call") as mock_call:
+    mutator = InstructionMutator()
+    with patch("fedotmas.optimize._mutators._instruction.run_meta_agent_call") as mock_call:
         mock_call.return_value = LLMCallResult(
             raw_output={"improved_instruction": "New instruction"},
             prompt_tokens=50,
             completion_tokens=25,
             elapsed=0.5,
         )
-        new_config = await proposer.propose_mutation(candidate, ["researcher"], ["t1"])
+        new_config = await mutator.mutate(candidate, ["researcher"], ["t1"])
 
     agent = new_config.agents[0]
     assert agent.name == "researcher"
@@ -156,7 +157,7 @@ async def test_propose_mutation_preserves_invariants():
 
 
 @pytest.mark.asyncio
-async def test_propose_merge():
+async def test_merge():
     a1 = _agent("a", "Approach A")
     a2 = _agent("a", "Approach B")
     config_a = _config(a1)
@@ -165,21 +166,21 @@ async def test_propose_merge():
     ca = Candidate(index=0, config=config_a, config_hash="h0")
     cb = Candidate(index=1, config=config_b, config_hash="h1")
 
-    proposer = Proposer()
-    with patch("fedotmas.optimize._proposer.run_meta_agent_call") as mock_call:
+    mutator = InstructionMutator()
+    with patch("fedotmas.optimize._mutators._instruction.run_meta_agent_call") as mock_call:
         mock_call.return_value = LLMCallResult(
             raw_output={"merged_instruction": "Combined approach"},
             prompt_tokens=80,
             completion_tokens=40,
             elapsed=0.8,
         )
-        merged = await proposer.propose_merge(ca, cb, ["t1"])
+        merged = await mutator.merge(ca, cb, ["t1"])
 
     assert "Combined approach" in merged.agents[0].instruction
 
 
 @pytest.mark.asyncio
-async def test_propose_merge_skips_identical():
+async def test_merge_skips_identical():
     """If instructions are identical, no merge call is made."""
     a = _agent("a", "Same instruction")
     config = _config(a)
@@ -187,16 +188,16 @@ async def test_propose_merge_skips_identical():
     ca = Candidate(index=0, config=config, config_hash="h0")
     cb = Candidate(index=1, config=config, config_hash="h1")
 
-    proposer = Proposer()
-    with patch("fedotmas.optimize._proposer.run_meta_agent_call") as mock_call:
-        merged = await proposer.propose_merge(ca, cb, ["t1"])
+    mutator = InstructionMutator()
+    with patch("fedotmas.optimize._mutators._instruction.run_meta_agent_call") as mock_call:
+        merged = await mutator.merge(ca, cb, ["t1"])
 
     mock_call.assert_not_called()
     assert merged.agents[0].instruction == config.agents[0].instruction
 
 
 @pytest.mark.asyncio
-async def test_propose_merge_union_agents():
+async def test_merge_union_agents():
     """Agents present only in config_b should be preserved in the result."""
     a = _agent("a", "Approach A")
     b = _agent("b", "Only in B")
@@ -212,28 +213,77 @@ async def test_propose_merge_union_agents():
     ca = Candidate(index=0, config=config_a, config_hash="h0")
     cb = Candidate(index=1, config=config_b, config_hash="h1")
 
-    proposer = Proposer()
-    with patch("fedotmas.optimize._proposer.run_meta_agent_call") as mock_call:
+    mutator = InstructionMutator()
+    with patch("fedotmas.optimize._mutators._instruction.run_meta_agent_call") as mock_call:
         mock_call.return_value = LLMCallResult(
             raw_output={"merged_instruction": "Merged A"},
             prompt_tokens=80,
             completion_tokens=40,
             elapsed=0.8,
         )
-        merged = await proposer.propose_merge(ca, cb, ["t1"])
+        merged = await mutator.merge(ca, cb, ["t1"])
 
     agent_names = [ag.name for ag in merged.agents]
     assert "a" in agent_names
     assert "b" in agent_names
 
 
-# --- 5c: token_usage property ---
+# --- _mean_score_on_common ---
 
 
-def test_proposer_token_usage():
+def test_mean_score_on_common_with_overlap():
+    c1 = Candidate(index=0, config=_config(_agent("a")), config_hash="h0")
+    c1.scores = {"t1": 0.8, "t2": 0.6, "t3": 0.4}
+    c2 = Candidate(index=1, config=_config(_agent("a")), config_hash="h1")
+    c2.scores = {"t2": 0.5, "t3": 0.9}
+    # Common tasks: t2, t3 → c1 scores on those: (0.6 + 0.4) / 2 = 0.5
+    assert _mean_score_on_common(c1, c2) == pytest.approx(0.5)
+
+
+def test_mean_score_on_common_no_overlap():
+    c1 = Candidate(index=0, config=_config(_agent("a")), config_hash="h0")
+    c1.scores = {"t1": 0.8}
+    c2 = Candidate(index=1, config=_config(_agent("a")), config_hash="h1")
+    c2.scores = {"t2": 0.5}
+    # No common tasks → falls back to c1.mean_score
+    assert _mean_score_on_common(c1, c2) == pytest.approx(0.8)
+
+
+# --- Genealogy merge fallback uses common-task scoring ---
+
+
+@pytest.mark.asyncio
+async def test_genealogy_merge_fallback_uses_common_tasks():
+    """When LLM merge fails, fallback should compare on common tasks, not mean_score."""
+    anc_agent = _agent("a", "Original")
+    config_anc = _config(anc_agent)
+    config_a = _config(_agent("a", "Changed by A"))
+    config_b = _config(_agent("a", "Changed by B"))
+
+    ancestor = Candidate(index=0, config=config_anc, config_hash="h0")
+    child_a = Candidate(index=1, config=config_a, config_hash="h1", parent_index=0)
+    child_a.scores = {"t1": 0.9, "t2": 0.3}
+    child_b = Candidate(index=2, config=config_b, config_hash="h2", parent_index=0)
+    child_b.scores = {"t2": 0.8, "t3": 0.95}
+
+    mutator = InstructionMutator()
+    with patch("fedotmas.optimize._mutators._instruction.run_meta_agent_call") as mock_call:
+        mock_call.side_effect = RuntimeError("LLM unavailable")
+        merged = await mutator.genealogy_merge(
+            ancestor, child_a, child_b, ["t1"]
+        )
+
+    # Should pick child_b's instruction (higher on common task t2)
+    assert merged.agents[0].instruction == "Changed by B"
+
+
+# --- token_usage property ---
+
+
+def test_mutator_token_usage():
     """token_usage property returns (prompt, completion) tuple."""
-    proposer = Proposer()
-    assert proposer.token_usage == (0, 0)
-    proposer._total_prompt_tokens = 100
-    proposer._total_completion_tokens = 50
-    assert proposer.token_usage == (100, 50)
+    mutator = InstructionMutator()
+    assert mutator.token_usage == (0, 0)
+    mutator._total_prompt_tokens = 100
+    mutator._total_completion_tokens = 50
+    assert mutator.token_usage == (100, 50)
