@@ -65,11 +65,11 @@ class OptimizationConfig:
     max_merge_context_tasks: int = 5
     """Max tasks included in merge LLM context."""
 
-    max_state_chars: int = 2000
-    """Max characters of pipeline state passed to scorer."""
+    max_state_chars: int | None = None
+    """Max characters of pipeline state passed to scorer. None = no limit."""
 
-    max_output_chars: int = 3000
-    """Max characters of agent output in reflection examples."""
+    max_output_chars: int | None = None
+    """Max characters of agent output in reflection examples. None = no limit."""
 
     # Mutation types (toggle which aspects of the graph to optimize)
     mutate_instructions: bool = True

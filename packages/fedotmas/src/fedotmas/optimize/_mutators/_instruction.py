@@ -97,12 +97,12 @@ def _build_reflection_examples(
 
 
 def _format_reflection_examples(
-    examples: list[ReflectionExample], max_output_chars: int = 3000
+    examples: list[ReflectionExample], max_output_chars: int | None = None
 ) -> str:
     parts: list[str] = []
     for i, ex in enumerate(examples, 1):
         agent_out = ex.agent_output or "(no output)"
-        if len(agent_out) > max_output_chars:
+        if max_output_chars is not None and len(agent_out) > max_output_chars:
             agent_out = agent_out[:max_output_chars] + "... (truncated)"
 
         pipeline_ctx = _format_pipeline_context(ex.pipeline_output, max_output_chars)
@@ -118,19 +118,25 @@ def _format_reflection_examples(
     return "\n\n".join(parts)
 
 
-def _format_pipeline_context(state: dict[str, Any], max_chars: int = 3000) -> str:
+def _format_pipeline_context(
+    state: dict[str, Any], max_chars: int | None = None
+) -> str:
     if not state:
         return "(no pipeline context)"
     parts: list[str] = []
-    budget = max_chars
-    for key, value in state.items():
-        text = str(value)
-        if len(text) > budget // max(len(state), 1):
-            text = text[: budget // max(len(state), 1)] + "... (truncated)"
-        parts.append(f"- **{key}:** {text}")
-        budget -= len(text)
-        if budget <= 0:
-            break
+    if max_chars is not None:
+        budget = max_chars
+        for key, value in state.items():
+            text = str(value)
+            if len(text) > budget // max(len(state), 1):
+                text = text[: budget // max(len(state), 1)] + "... (truncated)"
+            parts.append(f"- **{key}:** {text}")
+            budget -= len(text)
+            if budget <= 0:
+                break
+    else:
+        for key, value in state.items():
+            parts.append(f"- **{key}:** {str(value)}")
     return "\n".join(parts)
 
 
@@ -292,7 +298,7 @@ class InstructionMutator:
         agent_name: str,
         current_instruction: str,
         examples: list[ReflectionExample],
-        max_output_chars: int = 3000,
+        max_output_chars: int | None = None,
     ) -> str | None:
         examples_text = _format_reflection_examples(examples, max_output_chars)
         user_message = (

@@ -20,9 +20,16 @@ def test_format_state_empty():
     assert _format_state({}) == "(empty state)"
 
 
-def test_format_state_truncation():
-    state = {"key": "x" * 3000}
+def test_format_state_no_truncation_by_default():
+    state = {"key": "x" * 5000}
     result = _format_state(state)
+    assert "truncated" not in result
+    assert "x" * 5000 in result
+
+
+def test_format_state_truncation_with_limit():
+    state = {"key": "x" * 3000}
+    result = _format_state(state, max_chars=2000)
     assert "truncated" in result
     assert len(result) < 3000
 

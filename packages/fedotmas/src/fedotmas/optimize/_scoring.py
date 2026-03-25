@@ -39,7 +39,7 @@ class LLMJudge:
         *,
         criteria: str | None = None,
         model: str | ModelConfig | None = None,
-        max_state_chars: int = 2000,
+        max_state_chars: int | None = None,
         temperature: float = 0.1,
     ) -> None:
         self._criteria = criteria or "Overall quality, completeness, and correctness."
@@ -89,11 +89,11 @@ class LLMJudge:
         )
 
 
-def _format_state(state: dict[str, Any], max_chars: int = 2000) -> str:
+def _format_state(state: dict[str, Any], max_chars: int | None = None) -> str:
     parts: list[str] = []
     for key, value in state.items():
         text = str(value)
-        if len(text) > max_chars:
+        if max_chars is not None and len(text) > max_chars:
             _log.debug(
                 "State key '{}' truncated: {} -> {} chars",
                 key,

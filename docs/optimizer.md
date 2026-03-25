@@ -1,18 +1,35 @@
 # Optimizer
 
-Based on the [GEPA](https://arxiv.org/abs/2507.19457) algorithm.
+Evolutionary optimization of multi-agent pipelines. Based on the [GEPA](https://arxiv.org/abs/2507.19457) algorithm adapted for LLM-driven agent graphs.
 
-## Idea
+## How It Works
 
-Agent prompts can be optimized like "genes" in an evolutionary algorithm:
+Agent instructions are treated as "genes" in an evolutionary loop:
 
-1. **Seed** - the initial agent config (yours or generated) is evaluated on a set of tasks
-2. **Mutation** - the LLM analyzes execution results and proposes improved agent instructions. This is called "reflection": the model sees what worked, what failed, and rewrites the prompt
-3. **Selection** - the new candidate is evaluated on the same tasks. If it is better than the parent, it is accepted. Otherwise, it is rejected
-4. **Merge** - successful prompts from different candidates are combined (crossover). If two candidates share a common ancestor, genealogy-aware merge is used: take the best parts from each without duplication
-5. **Repeat** - the cycle continues until convergence or budget exhaustion
+1. **Evaluate** the initial (seed) config on a set of tasks
+2. **Select** a parent candidate from the population
+3. **Mutate** — LLM analyzes execution results and rewrites agent instructions ("reflection")
+4. **Evaluate** the mutated candidate on a minibatch of tasks
+5. **Accept or reject** — keep the child only if it outperforms the parent
+6. **Merge** (optional) — combine instructions from two successful candidates via crossover
+7. **Repeat** until convergence or budget exhaustion
 
-Instead of gradients and loss functions, LLM reflection is used. Instead of backpropagation - direct comparison of results on tasks.
+```mermaid
+graph TD
+    A[Seed config] --> B[Evaluate on trainset]
+    B --> C{Select parent}
+    C --> D[Sample minibatch]
+    D --> E[Reflect: improve instructions]
+    E --> F[Evaluate child on minibatch]
+    F --> G{child > parent?}
+    G -->|Yes| H[Accept + full eval on valset]
+    G -->|No| I[Reject]
+    H --> J{Merge scheduled?}
+    J -->|Yes| K[Merge two Pareto candidates]
+    J -->|No| C
+    K --> C
+    I --> C
+```
 
 ## Quick Start
 
@@ -59,7 +76,7 @@ async def main():
         criteria="Clarity, technical accuracy, and completeness",
         config=OptimizationConfig(
             seed=42,
-            max_iterations=5,
+            max_iterations=10,
             patience=3,
             minibatch_size=2,
         ),
@@ -71,277 +88,288 @@ async def main():
     print(f"Iterations: {result.iterations}")
     print(f"Candidates evaluated: {len(result.all_candidates)}")
 
+    # Use the optimized config
+    best_config = result.best_config
+
 asyncio.run(main())
 ```
 
-What happens here:
+- `criteria` — natural-language description of what "good output" means. Passed to the built-in LLM judge.
+- `trainset` — tasks the optimizer trains on. Each task is a string (user prompt).
+- `seed_config` — initial pipeline config. If omitted, generated automatically from the first task.
 
-* `criteria` defines the evaluation criteria for the LLM judge
-* `trainset` - tasks used to evaluate candidates
-* `seed_config` - initial agent configuration
-* The optimizer runs the pipeline on tasks, evaluates results, mutates prompts, and repeats
+## Auto-Generated Seed
 
-## How It Works
+If you don't have a config yet, skip `seed_config` — the optimizer will generate one from the first task:
 
-```mermaid
-graph TD
-    A[Seed config] --> B[Evaluate on trainset]
-    B --> C{Select parent}
-    C --> D[Sample minibatch]
-    D --> E[LLM reflection: improve prompts]
-    E --> F[Evaluate child on minibatch]
-    F --> G{child > parent?}
-    G -->|Yes| H[Accept + evaluate on valset]
-    G -->|No| I[Reject]
-    H --> J{Merge enabled?}
-    J -->|Yes| K[Merge two Pareto candidates]
-    J -->|No| L{Stop?}
-    K --> L
-    I --> L
-    L -->|No| C
-    L -->|Yes| M[Return best config]
+```python
+result = await opt.optimize(trainset)  # seed_config generated automatically
 ```
 
-At each iteration:
+## Train / Validation Split
 
-1. A parent is selected from evaluated candidates
-2. A minibatch of tasks is sampled from the trainset
-3. The proposer calls the LLM for "reflection" - analyzes execution results and proposes improved instructions
-4. The new candidate is evaluated on the same minibatch
-5. If the child's average score is higher than the parent's, it is accepted and evaluated on the full valset
-6. If merge is enabled and there are 2+ candidates on the Pareto front, crossover is attempted
+Pass a separate `valset` to avoid overfitting. Accepted candidates are re-evaluated on the full validation set:
+
+```python
+result = await opt.optimize(
+    trainset=["task1", "task2", "task3", "task4", "task5"],
+    valset=["val1", "val2", "val3"],
+    seed_config=config,
+)
+```
+
+If `valset` is not provided, `trainset` is used for both (with a warning).
 
 ## Configuration
-
-All parameters are set via `OptimizationConfig`:
 
 ```python
 from fedotmas.optimize import OptimizationConfig
 
 config = OptimizationConfig(
-    # Stopping
-    max_iterations=20,       # maximum iterations
-    patience=5,              # stop after N iterations without improvement
-    score_threshold=0.95,    # stop when score threshold is reached
-    max_evaluations=100,     # stop after N pipeline runs
+    # --- Stopping ---
+    max_iterations=20,          # hard iteration limit
+    patience=5,                 # stop after N iterations without improvement
+    score_threshold=0.95,       # stop when score is reached
+    max_evaluations=100,        # stop after N total pipeline runs
 
-    # LLM temperatures
-    temperature_reflect=0.7, # mutation creativity
-    temperature_merge=0.5,   # merge creativity
-    temperature_judge=0.1,   # evaluation consistency
+    # --- Evolution ---
+    candidate_selection="pareto",   # "pareto" | "best" | "epsilon_greedy"
+    minibatch_size=3,               # tasks per iteration
+    batch_strategy="epoch_shuffled",# "epoch_shuffled" | "random"
+    use_merge=True,                 # enable crossover
+    max_merge_attempts=5,           # max merge operations per run
 
-    # Evolution
-    candidate_selection="pareto",  # pareto | best | epsilon_greedy
-    use_merge=True,                # enable crossover
-    max_merge_attempts=5,          # maximum merge operations
-    minibatch_size=3,              # tasks per iteration
+    # --- LLM temperatures ---
+    temperature_reflect=0.7,   # mutation creativity
+    temperature_merge=0.5,     # merge creativity
+    temperature_judge=0.1,     # scoring consistency (ignored with custom scorer)
 
-    # Safety
-    llm_timeout=120.0,             # LLM call timeout in seconds
+    # --- Truncation (optional) ---
+    max_state_chars=None,      # limit pipeline state passed to judge. None = no limit
+    max_output_chars=None,     # limit agent output in reflection. None = no limit
+
+    # --- Safety ---
+    llm_timeout=120.0,             # seconds per LLM call
     max_consecutive_failures=3,    # before emergency agent reshuffle
 
-    # Infrastructure
-    checkpoint_path="opt_state.json",  # save/restore state
-    graceful_shutdown=True,            # SIGINT completes current iteration
-    seed=42,                           # reproducibility
+    # --- Infrastructure ---
+    checkpoint_path="state.json",  # save/restore state
+    graceful_shutdown=True,        # SIGINT completes current iteration
+    seed=42,                       # reproducibility
 )
 ```
 
+### Stopping Criteria
+
+Optimization stops when **any** condition is met:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `max_iterations` | `20` | Hard iteration limit |
+| `patience` | `5` | Iterations without improvement before stopping |
+| `score_threshold` | `None` | Target score (disabled by default) |
+| `max_evaluations` | `None` | Total pipeline run budget (disabled by default) |
+| `graceful_shutdown` | `False` | SIGINT/SIGTERM finishes current iteration instead of aborting |
+
+### Selection Strategies
+
+The `candidate_selection` parameter controls how the parent is chosen for mutation:
+
+| Strategy | Behavior |
+|---|---|
+| `"pareto"` (default) | Frequency-weighted selection from Pareto front. Candidates dominating more tasks are selected more often |
+| `"best"` | Always the highest mean score. Pure exploitation |
+| `"epsilon_greedy"` | 90% best, 10% random. Controlled exploration |
+
+### Batch Strategies
+
+| Strategy | Behavior |
+|---|---|
+| `"epoch_shuffled"` (default) | Shuffled trainset split into sequential minibatches. Every task appears once per epoch |
+| `"random"` | Random sample each iteration. No coverage guarantee |
+
 ## Custom Scorer
 
-By default, the optimizer uses an LLM judge (`LLMJudge`) to evaluate results based on criteria. You can implement your own scorer, for example for deterministic evaluation:
+By default, the optimizer uses `LLMJudge` — an LLM that scores pipeline output against your `criteria`. You can replace it with any callable matching the `Scorer` protocol:
 
 ```python
-import re
 from fedotmas.optimize import Scorer, ScoringResult
 
-class KeywordScorer(Scorer):
-    """Checks for the presence of keywords in the output."""
+class ExactMatchScorer:
+    """Score based on whether the output contains the expected answer."""
 
-    KEYWORDS = ["renewable", "cost", "environment", "efficiency"]
+    def __init__(self, expected: dict[str, str]):
+        self.expected = expected  # task -> expected substring
 
     async def evaluate(self, task: str, state: dict) -> ScoringResult:
-        text = " ".join(str(v) for v in state.values()).lower()
-        found = [kw for kw in self.KEYWORDS if re.search(rf"\b{kw}\b", text)]
-        score = len(found) / len(self.KEYWORDS)
-        missing = [kw for kw in self.KEYWORDS if kw not in found]
+        output = " ".join(str(v) for v in state.values()).lower()
+        expected = self.expected.get(task, "").lower()
 
-        feedback = f"Found {len(found)}/{len(self.KEYWORDS)} keywords."
-        if missing:
-            feedback += f" Missing: {', '.join(missing)}."
+        if expected and expected in output:
+            return ScoringResult(score=1.0, feedback="Correct.", reasoning="Match found")
 
-        return ScoringResult(score=score, feedback=feedback, reasoning=feedback)
+        return ScoringResult(
+            score=0.0,
+            feedback=f"Expected '{expected}' not found in output.",
+            reasoning="No match",
+        )
+
+scorer = ExactMatchScorer({"What is 2+2?": "4", "Capital of France?": "paris"})
+opt = Optimizer(maw, scorer=scorer, config=OptimizationConfig(...))
 ```
 
-`Scorer` is a Protocol. Inheriting from it is optional but helpful: IDEs provide hints and type checkers validate the contract. You only need to implement one method: `evaluate(task, state) -> ScoringResult`.
-
-Pass the scorer to `Optimizer`:
+The `Scorer` protocol requires one method:
 
 ```python
-opt = Optimizer(maw, scorer=KeywordScorer(), config=OptimizationConfig(...))
+async def evaluate(self, task: str, state: dict[str, Any]) -> ScoringResult
 ```
+
+- `task` — the input task string
+- `state` — pipeline output dict (`{agent_output_key: output_value, ...}`)
+- Returns `ScoringResult(score=..., feedback=..., reasoning=...)`
+
+`score` must be in `[0.0, 1.0]`. `feedback` is passed to the mutator for reflection. `reasoning` is for logging.
 
 ## Callbacks
 
-Callbacks allow tracking the optimization process. Inherit from `OptimizationCallback` and override the needed methods:
+Track the optimization process by implementing `OptimizationCallback`:
 
 ```python
 from fedotmas.optimize import OptimizationCallback, MetricsCallback
-from fedotmas.optimize._state import Candidate, OptimizationState
 
-class LoggingCallback(OptimizationCallback):
-    def on_iteration_start(self, iteration: int, state: OptimizationState) -> None:
-        print(f"[iter {iteration}] candidates={len(state.candidates)}")
+class PrintCallback(OptimizationCallback):
+    def on_iteration_start(self, iteration, state):
+        print(f"--- Iteration {iteration} ({len(state.candidates)} candidates) ---")
 
-    def on_candidate_accepted(self, child: Candidate, parent: Candidate) -> None:
-        print(f"  ACCEPTED #{child.index} score={child.mean_score or 0:.3f}")
+    def on_candidate_accepted(self, child, parent):
+        print(f"  Accepted #{child.index} (score={child.mean_score:.3f})")
 
-    def on_candidate_rejected(self, child: Candidate, parent: Candidate) -> None:
-        print(f"  rejected #{child.index} score={child.mean_score or 0:.3f}")
-```
+    def on_candidate_rejected(self, child, parent):
+        print(f"  Rejected #{child.index} (score={child.mean_score:.3f})")
 
-Built-in `MetricsCallback` collects statistics:
-
-```python
+# MetricsCallback collects aggregate statistics
 metrics_cb = MetricsCallback()
 
 opt = Optimizer(
     maw,
     criteria="...",
-    callbacks=[LoggingCallback(), metrics_cb],
+    callbacks=[PrintCallback(), metrics_cb],
     config=OptimizationConfig(...),
 )
-
 result = await opt.optimize(trainset, seed_config=config)
 
+# Access metrics
 m = metrics_cb.metrics
 print(f"Accepted: {m.accepted}, Rejected: {m.rejected}")
 print(f"Acceptance rate: {m.acceptance_rate:.1%}")
-print(f"Cache hits: {m.cache_hits}, misses: {m.cache_misses}")
-print(f"Best score history: {m.best_score_history}")
+print(f"Cache hit rate: {m.cache_hit_rate:.1%}")
+print(f"Score history: {m.best_score_history}")
 ```
 
-Available callback methods:
+### Available Hooks
 
-| Method                                     | When it is called               |
-| ------------------------------------------ | ------------------------------- |
-| `on_iteration_start(iteration, state)`     | Start of iteration              |
-| `on_candidate_evaluated(candidate, tasks)` | Candidate evaluated             |
-| `on_candidate_accepted(child, parent)`     | Child is better than parent     |
-| `on_candidate_rejected(child, parent)`     | Child is not better than parent |
-| `on_merge_attempted(pair)`                 | Attempt to merge two candidates |
-| `on_iteration_end(iteration, state)`       | End of iteration                |
-| `on_optimization_end(result)`              | Optimization finished           |
+| Method | Trigger |
+|---|---|
+| `on_iteration_start(iteration, state)` | Start of iteration |
+| `on_candidate_evaluated(candidate, tasks)` | After candidate evaluation |
+| `on_candidate_accepted(child, parent)` | Child outperforms parent |
+| `on_candidate_rejected(child, parent)` | Child does not improve |
+| `on_merge_attempted(pair)` | Merge crossover attempted |
+| `on_iteration_end(iteration, state)` | End of iteration |
+| `on_optimization_end(result)` | Optimization complete |
 
-## Selection Strategies
+All methods are optional — override only what you need.
 
-The `candidate_selection` parameter determines how the parent is chosen for mutation:
+## Merge (Crossover)
 
-| Strategy             | Behavior                                                              |
-| -------------------- | --------------------------------------------------------------------- |
-| `"pareto"` (default) | Random selection from Pareto front. Balances exploration/exploitation |
-| `"best"`             | Always the best by mean score. Pure exploitation                      |
-| `"epsilon_greedy"`   | 90% best, 10% random. Controlled exploration                          |
+When a new candidate is accepted, the optimizer may attempt to merge instructions from two Pareto-front candidates. This is the crossover operator.
 
-```python
-config = OptimizationConfig(candidate_selection="epsilon_greedy")
-```
+Two modes are used automatically:
 
-## Merge
+- **Genealogy merge** — if candidates share a common ancestor, per-agent diff is computed: unchanged instructions are kept as-is, divergent instructions are merged by LLM. More efficient and precise.
+- **Direct merge** — if no common ancestor, LLM combines instructions directly.
 
-When a candidate is accepted and there are 2+ candidates on the Pareto front, the optimizer attempts to merge their prompts.
-
-Two modes:
-
-* **Genealogy merge** - if candidates share a common ancestor, for each agent we check: which descendant modified the instruction? If only one did, take that version. If both did, call the LLM to merge. This is more efficient than direct merge.
-* **Direct merge** - if there is no common ancestor, the LLM combines instructions directly.
+The merged candidate is accepted only if it scores at least as well as both parents.
 
 ```python
 config = OptimizationConfig(
-    use_merge=True,           # enable (default)
-    max_merge_attempts=5,     # maximum merge operations per optimization
+    use_merge=True,           # enabled by default
+    max_merge_attempts=5,     # max merges per run
+    temperature_merge=0.5,    # LLM creativity for merge
 )
 ```
 
-## Checkpoint/Resume
+If merge can't find a valid candidate pair (e.g. all pairs are ancestors of each other), the iteration falls through to mutation instead of being wasted.
 
-For long optimizations, you can save state to disk and resume later:
+## Checkpoint / Resume
+
+Save optimization state to resume later:
 
 ```python
-import asyncio
-from fedotmas import MAW, Optimizer
-from fedotmas.optimize import OptimizationConfig
+# Run 1: 5 iterations
+opt = Optimizer(
+    maw,
+    criteria="Quality",
+    config=OptimizationConfig(
+        checkpoint_path="opt_state.json",
+        max_iterations=5,
+    ),
+)
+result = await opt.optimize(trainset, seed_config=config)
+print(f"Score after 5 iters: {result.best_score:.3f}")
 
-async def main():
-    maw = MAW()
-    trainset = ["task 1", "task 2", "task 3"]
-
-    # Phase 1: run 3 iterations
-    opt1 = Optimizer(
-        maw,
-        criteria="Quality",
-        config=OptimizationConfig(
-            seed=42,
-            checkpoint_path="optimizer_state.json",
-            max_iterations=3,
-            patience=10,
-        ),
-    )
-    result1 = await opt1.optimize(trainset, seed_config=config)
-    print(f"Phase 1: {result1.iterations} iterations, score={result1.best_score:.3f}")
-
-    # Phase 2: resume from checkpoint, run 3 more
-    opt2 = Optimizer(
-        maw,
-        criteria="Quality",
-        config=OptimizationConfig(
-            seed=42,
-            checkpoint_path="optimizer_state.json",  # same file
-            max_iterations=6,                         # total limit
-            patience=10,
-        ),
-    )
-    result2 = await opt2.optimize(trainset, seed_config=config)
-    print(f"Phase 2: {result2.iterations} iterations, score={result2.best_score:.3f}")
-
-asyncio.run(main())
+# Run 2: resume, run up to 15 total
+opt = Optimizer(
+    maw,
+    criteria="Quality",
+    config=OptimizationConfig(
+        checkpoint_path="opt_state.json",  # same file
+        max_iterations=15,
+    ),
+)
+result = await opt.optimize(trainset, seed_config=config)
+print(f"Score after 15 iters: {result.best_score:.3f}")
 ```
 
-The state includes all candidates, their scores, genealogy, and iteration number.
-
-## Stopping Criteria
-
-Optimization stops when the first condition is met:
-
-| Parameter                | Description                                                       |
-| ------------------------ | ----------------------------------------------------------------- |
-| `max_iterations=20`      | Hard iteration limit                                              |
-| `patience=5`             | Stop after N iterations without improvement                       |
-| `score_threshold=0.95`   | Stop when threshold is reached                                    |
-| `max_evaluations=100`    | Stop after N pipeline runs                                        |
-| `graceful_shutdown=True` | SIGINT/SIGTERM completes current iteration instead of abrupt exit |
+The checkpoint includes all candidates, scores, genealogy, and iteration counter.
 
 ## Result
-
-`OptimizationResult` contains all optimization data:
 
 ```python
 result = await opt.optimize(trainset, seed_config=config)
 
-# Best configuration - ready to use
+# Best config — ready to use
 best_config: MAWConfig = result.best_config
 best_score: float = result.best_score
 
+# Iteration stats
+result.iterations            # number of iterations completed
+result.total_evaluation_runs # total pipeline executions
+
+# Token usage (across judge + mutator + merge)
+result.total_prompt_tokens
+result.total_completion_tokens
+
 # All candidates with genealogy
 for c in result.all_candidates:
-    print(f"#{c.index} origin={c.origin} parent={c.parent_index} score={c.mean_score}")
+    print(f"#{c.index} origin={c.origin} parent={c.parent_index} "
+          f"score={c.mean_score:.3f}")
 
-# Pareto front - set of non-dominated candidates
+# Pareto front
 for c in result.pareto_front():
-    print(f"#{c.index} score={c.mean_score:.3f}")
-
-# Stats
-print(f"Iterations: {result.iterations}")
-print(f"Total pipeline runs: {result.total_evaluation_runs}")
-print(f"Tokens: {result.total_prompt_tokens} prompt / {result.total_completion_tokens} completion")
+    print(f"#{c.index} scores={c.scores}")
 ```
+
+### `Candidate` Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `index` | `int` | Unique candidate ID |
+| `config` | `MAWConfig` | Pipeline configuration |
+| `scores` | `dict[str, float]` | Per-task scores |
+| `mean_score` | `float \| None` | Average across all scored tasks |
+| `parent_index` | `int \| None` | Parent candidate (mutation) |
+| `merge_parent_indices` | `tuple[int, int] \| None` | Parent candidates (merge) |
+| `origin` | `str` | `"seed"`, `"mutation"`, or `"merge"` |
+| `on_pareto_front` | `bool` | Whether on the Pareto front |
+| `feedbacks` | `dict[str, str]` | Per-task judge feedback |

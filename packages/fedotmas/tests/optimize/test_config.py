@@ -13,8 +13,8 @@ class TestOptimizationConfig:
         assert cfg.temperature_judge == 0.1
         assert cfg.improvement_epsilon == 1e-6
         assert cfg.max_merge_context_tasks == 5
-        assert cfg.max_state_chars == 2000
-        assert cfg.max_output_chars == 3000
+        assert cfg.max_state_chars is None
+        assert cfg.max_output_chars is None
         assert cfg.max_consecutive_failures == 3
         assert cfg.seed is None
         assert cfg.use_merge is True

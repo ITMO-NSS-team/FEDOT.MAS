@@ -49,7 +49,7 @@ class _MergeResult:
 
 @dataclass
 class _MergeSchedule:
-    """Tracks merge scheduling state (GEPA merge scheduling logic)."""
+    """Tracks merge scheduling state."""
 
     merges_due: int = 0
     total_tested: int = 0
@@ -355,7 +355,7 @@ async def _try_merge(ctx: _LoopContext) -> _MergeResult:
     if len(pareto) < 2:
         return _MergeResult()
 
-    # Select a valid pair with filtering (like GEPA merge.py:69-116)
+    # Select a valid pair with filtering
     pair: list[Candidate] | None = None
     for _ in range(10):
         sample = ctx.rng.sample(pareto, 2)
@@ -423,7 +423,7 @@ async def _try_merge(ctx: _LoopContext) -> _MergeResult:
     eval_runs += runs
     ctx.dispatcher.on_candidate_evaluated(merged, ctx.valset)
 
-    # Acceptance check: merged must be >= max(parents) (GEPA engine.py:479)
+    # Acceptance check: merged must be >= max(parents)
     parent_best = max(pair[0].mean_score or 0.0, pair[1].mean_score or 0.0)
     merged_score = merged.mean_score or 0.0
 
