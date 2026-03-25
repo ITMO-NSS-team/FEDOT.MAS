@@ -38,6 +38,16 @@ _log = get_logger("fedotmas.optimize._engine")
 
 
 @dataclass
+class _MergeResult:
+    """Result of a merge attempt."""
+
+    eval_runs: int = 0
+    accepted: bool = False
+    attempted: bool = False
+    """False when no valid pair could be found - caller should fall through to mutation."""
+
+
+@dataclass
 class _MergeSchedule:
     """Tracks merge scheduling state (GEPA merge scheduling logic)."""
 
@@ -182,6 +192,7 @@ async def _run_loop_step(
     """Run one loop step: merge OR mutation. Returns (eval_runs, consecutive_failures)."""
     cfg = ctx.cfg
     ms = ctx.merge
+    extra_eval = 0
 
     # 1) Merge first if scheduled (replaces mutation this iteration)
     if (
@@ -190,12 +201,16 @@ async def _run_loop_step(
         and ms.last_found_new
         and len(ctx.state.get_pareto_candidates()) >= 2
     ):
-        merge_eval, merge_accepted = await _try_merge(ctx)
+        mr = await _try_merge(ctx)
         ms.last_found_new = False
-        if merge_accepted:
-            ms.merges_due -= 1
-            ms.total_tested += 1
-        return merge_eval, consecutive_failures
+        if mr.attempted:
+            # Merge was actually executed - skip mutation
+            if mr.accepted:
+                ms.merges_due -= 1
+                ms.total_tested += 1
+            return mr.eval_runs, consecutive_failures
+        # No valid pair found -> fall through to mutation
+        extra_eval = mr.eval_runs
 
     # 2) Mutation
     eval_runs, accepted, fail_count = await _run_iteration(
@@ -207,7 +222,7 @@ async def _run_loop_step(
     if accepted and cfg.use_merge and ms.total_tested < cfg.max_merge_attempts:
         ms.merges_due += 1
 
-    return eval_runs, fail_count
+    return eval_runs + extra_eval, fail_count
 
 
 def _setup_state(
@@ -330,15 +345,15 @@ async def _run_iteration(
         return eval_runs, False, consecutive_failures
 
 
-async def _try_merge(ctx: _LoopContext) -> tuple[int, bool]:
-    """Attempt a merge. Returns (eval_runs, accepted)."""
+async def _try_merge(ctx: _LoopContext) -> _MergeResult:
+    """Attempt a merge."""
     state = ctx.state
     cfg = ctx.cfg
     eval_runs = 0
 
     pareto = state.get_pareto_candidates()
     if len(pareto) < 2:
-        return 0, False
+        return _MergeResult()
 
     # Select a valid pair with filtering (like GEPA merge.py:69-116)
     pair: list[Candidate] | None = None
@@ -362,7 +377,7 @@ async def _try_merge(ctx: _LoopContext) -> tuple[int, bool]:
 
     if pair is None:
         _log.info("No valid merge pair found after filtering")
-        return 0, False
+        return _MergeResult()
 
     ctx.dispatcher.on_merge_attempted((pair[0], pair[1]))
 
@@ -378,7 +393,7 @@ async def _try_merge(ctx: _LoopContext) -> tuple[int, bool]:
                 ancestor.index,
                 anc_score,
             )
-            return 0, False
+            return _MergeResult(attempted=True)
         _log.info(
             "Genealogy merge: ancestor #{} for pair ({}, {})",
             ancestor.index,
@@ -394,7 +409,7 @@ async def _try_merge(ctx: _LoopContext) -> tuple[int, bool]:
     merged_hash = config_hash(merged_config)
     if merged_hash == pair[0].config_hash or merged_hash == pair[1].config_hash:
         _log.info("Merge produced config identical to a parent, skipping")
-        return 0, False
+        return _MergeResult(attempted=True)
 
     merged = state.add_candidate(
         merged_config,
@@ -420,7 +435,7 @@ async def _try_merge(ctx: _LoopContext) -> tuple[int, bool]:
             parent_best,
         )
         state.update_pareto_front()
-        return eval_runs, True
+        return _MergeResult(eval_runs=eval_runs, accepted=True, attempted=True)
     else:
         _log.info(
             "Merge rejected #{} | score={:.3f} < max parent {:.3f}",
@@ -429,7 +444,7 @@ async def _try_merge(ctx: _LoopContext) -> tuple[int, bool]:
             parent_best,
         )
         ctx.dispatcher.on_candidate_rejected(merged, pair[0])
-        return eval_runs, False
+        return _MergeResult(eval_runs=eval_runs, attempted=True)
 
 
 def _build_result(

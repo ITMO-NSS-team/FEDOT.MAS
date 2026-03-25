@@ -9,7 +9,7 @@ import pytest
 from fedotmas.control._run import ControlledRun
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.optimize._config import OptimizationConfig
-from fedotmas.optimize._engine import run_optimization, _evaluate_candidate, _mean_score_on
+from fedotmas.optimize._engine import run_optimization, _evaluate_candidate, _mean_score_on, _try_merge, _LoopContext, _MergeResult, _MergeSchedule
 from fedotmas.optimize._mutators._instruction import InstructionMutator
 from fedotmas.optimize._scoring import ScoringResult
 from fedotmas.optimize._state import Candidate, OptimizationState
@@ -25,8 +25,9 @@ def _agent(name: str, instruction: str = "Do stuff") -> MAWAgentConfig:
     return MAWAgentConfig(name=name, instruction=instruction, output_key=name)
 
 
-def _config(*names: str) -> MAWConfig:
-    agents = [_agent(n) for n in names]
+def _config(*names: str, instructions: dict[str, str] | None = None) -> MAWConfig:
+    instr = instructions or {}
+    agents = [_agent(n, instr.get(n, f"Do {n}")) for n in names]
     pipeline = MAWStepConfig(
         type="sequential",
         children=[MAWStepConfig(agent_name=n) for n in names],
@@ -225,3 +226,76 @@ async def test_run_optimization_rejects_identical_mutation():
 
     # Only seed candidate should exist
     assert len(result.all_candidates) == 1
+
+
+@pytest.mark.asyncio
+async def test_try_merge_returns_not_attempted_when_too_few_pareto():
+    """_try_merge returns attempted=False when <2 Pareto candidates."""
+    import random
+    from fedotmas.optimize._callbacks import CallbackDispatcher, MetricsCallback
+
+    maw = _mock_maw()
+    state = OptimizationState()
+    # Only 1 candidate on Pareto front
+    c = state.add_candidate(_config("a"))
+    c.scores = {"t1": 0.5}
+    c.on_pareto_front = True
+
+    ctx = _LoopContext(
+        maw=maw,
+        scorer=_mock_scorer(),
+        mutator=_mock_mutator(_config("a")),
+        candidate_selector=BestCandidateSelector(),
+        batch_sampler=ShuffledBatchSampler(),
+        component_selector=AllComponentSelector(),
+        dispatcher=CallbackDispatcher(),
+        metrics_cb=MetricsCallback(),
+        state=state,
+        cfg=OptimizationConfig(),
+        rng=random.Random(42),
+        trainset=["t1"],
+        valset=["t1"],
+        seed=c,
+    )
+
+    mr = await _try_merge(ctx)
+    assert mr == _MergeResult()
+
+
+@pytest.mark.asyncio
+async def test_try_merge_returns_not_attempted_when_no_valid_pair():
+    """_try_merge returns attempted=False when all pairs are filtered out."""
+    import random
+    from fedotmas.optimize._callbacks import CallbackDispatcher, MetricsCallback
+
+    maw = _mock_maw()
+    state = OptimizationState()
+    # Two candidates, but one is ancestor of the other
+    c0 = state.add_candidate(_config("a", instructions={"a": "v1"}))
+    c0.scores = {"t1": 0.5}
+    c0.on_pareto_front = True
+    c1 = state.add_candidate(
+        _config("a", instructions={"a": "v2"}), parent_index=0, origin="mutation"
+    )
+    c1.scores = {"t1": 0.8}
+    c1.on_pareto_front = True
+
+    ctx = _LoopContext(
+        maw=maw,
+        scorer=_mock_scorer(),
+        mutator=_mock_mutator(_config("a")),
+        candidate_selector=BestCandidateSelector(),
+        batch_sampler=ShuffledBatchSampler(),
+        component_selector=AllComponentSelector(),
+        dispatcher=CallbackDispatcher(),
+        metrics_cb=MetricsCallback(),
+        state=state,
+        cfg=OptimizationConfig(),
+        rng=random.Random(42),
+        trainset=["t1"],
+        valset=["t1"],
+        seed=c0,
+    )
+
+    mr = await _try_merge(ctx)
+    assert mr.attempted is False

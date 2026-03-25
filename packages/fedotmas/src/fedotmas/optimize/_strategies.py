@@ -26,6 +26,13 @@ class BestCandidateSelector:
 
 
 class ParetoCandidateSelector:
+    """Frequency-weighted Pareto selection (GEPA behavior).
+
+    Counts how many per-task Pareto fronts each candidate appears on
+    and samples proportionally.  Candidates that are best across more
+    tasks are selected more often.
+    """
+
     def __init__(self, rng: random.Random | None = None) -> None:
         self._rng = rng or random.Random()
 
@@ -33,7 +40,31 @@ class ParetoCandidateSelector:
         pareto = [c for c in candidates if c.on_pareto_front]
         if not pareto:
             pareto = candidates
-        return self._rng.choice(pareto)
+
+        all_tasks: set[str] = set()
+        for c in pareto:
+            all_tasks.update(c.scores.keys())
+
+        if not all_tasks:
+            return self._rng.choice(pareto)
+
+        task_wins: dict[int, int] = {}
+        for task in all_tasks:
+            scored = [(c, c.scores[task]) for c in pareto if task in c.scores]
+            if not scored:
+                continue
+            best = max(s for _, s in scored)
+            for c, s in scored:
+                if s == best:
+                    task_wins[c.index] = task_wins.get(c.index, 0) + 1
+
+        sampling_list: list[Candidate] = []
+        for c in pareto:
+            freq = task_wins.get(c.index, 1)
+            for _ in range(freq):
+                sampling_list.append(c)
+
+        return self._rng.choice(sampling_list)
 
 
 class EpsilonGreedySelector:

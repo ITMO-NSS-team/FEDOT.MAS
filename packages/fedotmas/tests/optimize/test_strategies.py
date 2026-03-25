@@ -68,6 +68,30 @@ class TestParetoCandidateSelector:
         result = sel.select(candidates)
         assert result.index in (0, 1)
 
+    def test_frequency_weighted_selection(self):
+        """Candidate winning more tasks should be selected more often."""
+        import random
+        from collections import Counter
+
+        # c0 wins on 3 tasks, c1 wins on 1 task
+        c0 = Candidate(index=0, config=_config("a"), config_hash="h0")
+        c0.scores = {"t1": 0.9, "t2": 0.8, "t3": 0.7}
+        c0.on_pareto_front = True
+
+        c1 = Candidate(
+            index=1,
+            config=_config("a"),
+            config_hash="h1",
+        )
+        c1.scores = {"t1": 0.3, "t2": 0.3, "t3": 0.3, "t4": 0.99}
+        c1.on_pareto_front = True
+
+        sel = ParetoCandidateSelector(rng=random.Random(42))
+        counts = Counter(sel.select([c0, c1]).index for _ in range(400))
+
+        # c0 wins t1, t2, t3 (freq=3), c1 wins t4 (freq=1) → ratio ~3:1
+        assert counts[0] > counts[1] * 1.5  # conservative check
+
 
 class TestEpsilonGreedySelector:
     def test_greedy_picks_best(self):
