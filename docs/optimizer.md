@@ -14,23 +14,6 @@ Agent instructions are treated as "genes" in an evolutionary loop:
 6. **Merge** (optional) — combine instructions from two successful candidates via crossover
 7. **Repeat** until convergence or budget exhaustion
 
-```mermaid
-graph TD
-    A[Seed config] --> B[Evaluate on trainset]
-    B --> C{Select parent}
-    C --> D[Sample minibatch]
-    D --> E[Reflect: improve instructions]
-    E --> F[Evaluate child on minibatch]
-    F --> G{child > parent?}
-    G -->|Yes| H[Accept + full eval on valset]
-    G -->|No| I[Reject]
-    H --> J{Merge scheduled?}
-    J -->|Yes| K[Merge two Pareto candidates]
-    J -->|No| C
-    K --> C
-    I --> C
-```
-
 ## Quick Start
 
 ```python

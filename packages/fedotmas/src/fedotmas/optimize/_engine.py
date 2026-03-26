@@ -159,7 +159,7 @@ async def run_optimization(
         while not _should_stop():
             iteration += 1
             state.iteration = iteration
-            _log.info("=== Iteration {} ===", iteration)
+            _log.info("--- Iteration {} ---", iteration)
             dispatcher.on_iteration_start(iteration, state)
 
             eval_runs, consecutive_failures = await _run_loop_step(

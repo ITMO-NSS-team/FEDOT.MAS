@@ -26,7 +26,7 @@ class BestCandidateSelector:
 
 
 class ParetoCandidateSelector:
-    """Frequency-weighted Pareto selection (GEPA behavior).
+    """Frequency-weighted Pareto selection.
 
     Counts how many per-task Pareto fronts each candidate appears on
     and samples proportionally.  Candidates that are best across more
@@ -97,7 +97,7 @@ class ShuffledBatchSampler:
 class EpochShuffledBatchSampler:
     """Sequential minibatches from a shuffled trainset.
 
-    Guarantees full coverage of all tasks per epoch (GEPA default).
+    Guarantees full coverage of all tasks per epoch.
     When the epoch is exhausted, reshuffles for the next epoch.
     """
 
@@ -160,8 +160,7 @@ def make_candidate_selector(
     if name == "epsilon_greedy":
         return EpsilonGreedySelector(rng=rng)
     raise ValueError(
-        f"Unknown candidate selector '{name}'. "
-        f"Available: pareto, best, epsilon_greedy"
+        f"Unknown candidate selector '{name}'. Available: pareto, best, epsilon_greedy"
     )
 
 
@@ -171,7 +170,7 @@ def make_batch_sampler(name: str, rng: random.Random | None = None) -> BatchSamp
     if name == "random":
         return ShuffledBatchSampler(rng=rng)
     raise ValueError(
-        f"Unknown batch strategy '{name}'. " f"Available: epoch_shuffled, random"
+        f"Unknown batch strategy '{name}'. Available: epoch_shuffled, random"
     )
 
 
