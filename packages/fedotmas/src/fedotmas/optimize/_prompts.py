@@ -6,7 +6,8 @@ You are an expert evaluator of multi-agent pipeline outputs.
 You will receive:
 1. The original task that the pipeline was asked to solve.
 2. The pipeline output (all agent outputs in the final state).
-3. Evaluation criteria specified by the user.
+3. (Optional) The expected answer — use it as a reference for correctness.
+4. Evaluation criteria specified by the user.
 
 Your job is to evaluate the quality of the pipeline output against the criteria.
 

@@ -10,7 +10,7 @@ from fedotmas.optimize._callbacks import (
     OptimizationMetrics,
 )
 from fedotmas.optimize._result import OptimizationResult
-from fedotmas.optimize._state import Candidate, OptimizationState
+from fedotmas.optimize._state import Candidate, OptimizationState, Task
 
 
 def _config() -> MAWConfig:
@@ -33,7 +33,7 @@ class TestOptimizationCallback:
         child = _candidate(1, 0.6)
 
         cb.on_iteration_start(1, state)
-        cb.on_candidate_evaluated(child, ["t"])
+        cb.on_candidate_evaluated(child, [Task("t")])
         cb.on_candidate_accepted(child, parent)
         cb.on_candidate_rejected(child, parent)
         cb.on_merge_attempted((parent, child))

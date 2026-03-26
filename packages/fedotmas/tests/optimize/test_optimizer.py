@@ -11,6 +11,7 @@ from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.optimize import Optimizer, OptimizationResult
 from fedotmas.optimize._config import OptimizationConfig
 from fedotmas.optimize._scoring import LLMJudge, ScoringResult
+from fedotmas.optimize._state import Task
 
 
 def _agent(name: str) -> MAWAgentConfig:
@@ -74,7 +75,7 @@ async def test_optimizer_generates_seed_config():
                 best_score=0.5,
                 iterations=1,
             )
-            result = await opt.optimize(["task1"])
+            result = await opt.optimize([Task("task1")])
 
     maw.generate_config.assert_called_once_with("task1")
     assert result.best_score == 0.5
@@ -101,7 +102,7 @@ async def test_optimizer_uses_provided_seed():
             best_score=0.8,
             iterations=1,
         )
-        result = await opt.optimize(["task1"], seed_config=seed)
+        result = await opt.optimize([Task("task1")], seed_config=seed)
 
     maw.generate_config.assert_not_called()
     assert mock_engine.call_args.kwargs["seed_config"] is seed
@@ -123,7 +124,7 @@ async def test_optimizer_last_result():
             best_score=0.9,
             iterations=5,
         )
-        await opt.optimize(["task1"])
+        await opt.optimize([Task("task1")])
 
     assert opt.last_result is not None
     assert opt.last_result.best_score == 0.9
@@ -164,7 +165,7 @@ async def test_optimizer_token_usage_via_public_api():
             total_prompt_tokens=50,
             total_completion_tokens=25,
         )
-        result = await opt.optimize(["task1"], seed_config=_config("a"))
+        result = await opt.optimize([Task("task1")], seed_config=_config("a"))
 
     assert result.total_prompt_tokens >= 200
     assert result.total_completion_tokens >= 100
@@ -195,6 +196,6 @@ async def test_optimizer_accepts_custom_mutator():
             best_score=0.5,
             iterations=1,
         )
-        await opt.optimize(["task1"], seed_config=_config("a"))
+        await opt.optimize([Task("task1")], seed_config=_config("a"))
 
     assert mock_engine.call_args.kwargs["mutator"] is custom_mutator

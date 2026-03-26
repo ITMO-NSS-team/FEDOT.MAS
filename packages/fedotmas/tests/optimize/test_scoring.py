@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from fedotmas.optimize._scoring import LLMJudge, ScoringResult, _format_state
+from fedotmas.optimize._state import Task
 
 
 def test_scoring_result_fields():
@@ -63,7 +64,7 @@ async def test_llm_judge_evaluate():
             completion_tokens=50,
             elapsed=1.0,
         )
-        result = await judge.evaluate("test task", {"output": "some result"})
+        result = await judge.evaluate(Task("test task"), {"output": "some result"})
 
     assert isinstance(result, ScoringResult)
     assert result.score == 0.75
@@ -86,7 +87,7 @@ async def test_llm_judge_clamps_score():
             completion_tokens=5,
             elapsed=0.5,
         )
-        result = await judge.evaluate("task", {})
+        result = await judge.evaluate(Task("task"), {})
 
     assert result.score == 1.0
 
@@ -105,7 +106,7 @@ async def test_llm_judge_clamps_negative_score():
             completion_tokens=5,
             elapsed=0.5,
         )
-        result = await judge.evaluate("task", {})
+        result = await judge.evaluate(Task("task"), {})
 
     assert result.score == 0.0
 

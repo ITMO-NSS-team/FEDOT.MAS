@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fedotmas.maw.models import MAWConfig
-from fedotmas.optimize._state import Candidate
+from fedotmas.optimize._state import Candidate, Task
 
 
 class StructureMutator:
@@ -15,7 +15,7 @@ class StructureMutator:
         self,
         candidate: Candidate,
         agent_names: list[str],
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         raise NotImplementedError("StructureMutator is not yet implemented")
 
@@ -23,7 +23,7 @@ class StructureMutator:
         self,
         candidate_a: Candidate,
         candidate_b: Candidate,
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         raise NotImplementedError("StructureMutator is not yet implemented")
 
@@ -32,6 +32,6 @@ class StructureMutator:
         ancestor: Candidate,
         child_a: Candidate,
         child_b: Candidate,
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         raise NotImplementedError("StructureMutator is not yet implemented")

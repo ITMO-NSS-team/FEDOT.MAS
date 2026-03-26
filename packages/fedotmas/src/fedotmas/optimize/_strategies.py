@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Protocol, runtime_checkable
 
 from fedotmas.maw.models import MAWConfig
-from fedotmas.optimize._state import Candidate
+from fedotmas.optimize._state import Candidate, Task
 
 
 class MutationType(Enum):
@@ -80,7 +80,7 @@ class EpsilonGreedySelector:
 
 @runtime_checkable
 class BatchSampler(Protocol):
-    def sample(self, tasks: list[str], batch_size: int) -> list[str]: ...
+    def sample(self, tasks: list[Task], batch_size: int) -> list[Task]: ...
 
 
 class ShuffledBatchSampler:
@@ -89,7 +89,7 @@ class ShuffledBatchSampler:
     def __init__(self, rng: random.Random | None = None) -> None:
         self._rng = rng or random.Random()
 
-    def sample(self, tasks: list[str], batch_size: int) -> list[str]:
+    def sample(self, tasks: list[Task], batch_size: int) -> list[Task]:
         k = min(batch_size, len(tasks))
         return self._rng.sample(tasks, k)
 
@@ -103,11 +103,11 @@ class EpochShuffledBatchSampler:
 
     def __init__(self, rng: random.Random | None = None) -> None:
         self._rng = rng or random.Random()
-        self._shuffled: list[str] = []
+        self._shuffled: list[Task] = []
         self._position: int = 0
         self._last_size: int = 0
 
-    def sample(self, tasks: list[str], batch_size: int) -> list[str]:
+    def sample(self, tasks: list[Task], batch_size: int) -> list[Task]:
         if not tasks:
             raise ValueError("Cannot sample from empty task list")
 

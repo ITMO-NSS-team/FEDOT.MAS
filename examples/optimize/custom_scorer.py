@@ -1,15 +1,9 @@
-"""Example: custom Scorer using deterministic regex/keyword matching.
-
-Demonstrates that Optimizer accepts any object implementing the Scorer protocol
-(async evaluate(task, state) -> ScoringResult).
-"""
-
 import asyncio
 import re
 
 from fedotmas import MAW, Optimizer
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.optimize import OptimizationConfig, Scorer, ScoringResult
+from fedotmas.optimize import OptimizationConfig, Scorer, ScoringResult, Task
 
 
 class KeywordScorer(Scorer):
@@ -36,8 +30,8 @@ class KeywordScorer(Scorer):
         ],
     }
 
-    async def evaluate(self, task: str, state: dict) -> ScoringResult:
-        keywords = self.KEYWORDS_BY_TASK.get(task, [])
+    async def evaluate(self, task: Task, state: dict) -> ScoringResult:
+        keywords = self.KEYWORDS_BY_TASK.get(task.input, [])
         if not keywords:
             return ScoringResult(
                 score=0.5, feedback="No keywords defined", reasoning=""
@@ -82,8 +76,6 @@ SEED_CONFIG = MAWConfig(
 async def main() -> None:
     maw = MAW()
 
-    trainset = list(KeywordScorer.KEYWORDS_BY_TASK.keys())
-
     opt = Optimizer(
         maw,
         scorer=KeywordScorer(),
@@ -95,6 +87,10 @@ async def main() -> None:
             patience=3,
         ),
     )
+
+    trainset = [
+        Task(input=topic) for topic in list(KeywordScorer.KEYWORDS_BY_TASK.keys())
+    ]
 
     result = await opt.optimize(trainset, seed_config=SEED_CONFIG)
 

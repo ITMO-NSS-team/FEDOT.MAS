@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.optimize._state import Candidate
+from fedotmas.optimize._state import Candidate, Task
 from fedotmas.optimize._strategies import (
     AllComponentSelector,
     BestCandidateSelector,
@@ -109,14 +109,14 @@ class TestEpsilonGreedySelector:
 class TestShuffledBatchSampler:
     def test_sample_size(self):
         sampler = ShuffledBatchSampler()
-        tasks = ["t1", "t2", "t3", "t4", "t5"]
+        tasks = [Task("t1"), Task("t2"), Task("t3"), Task("t4"), Task("t5")]
         batch = sampler.sample(tasks, 3)
         assert len(batch) == 3
         assert all(t in tasks for t in batch)
 
     def test_sample_larger_than_pool(self):
         sampler = ShuffledBatchSampler()
-        tasks = ["t1", "t2"]
+        tasks = [Task("t1"), Task("t2")]
         batch = sampler.sample(tasks, 5)
         assert len(batch) == 2
 
@@ -184,8 +184,8 @@ class TestEpochShuffledBatchSampler:
         import random
 
         sampler = EpochShuffledBatchSampler(rng=random.Random(42))
-        tasks = ["t1", "t2", "t3", "t4", "t5"]
-        seen: set[str] = set()
+        tasks = [Task("t1"), Task("t2"), Task("t3"), Task("t4"), Task("t5")]
+        seen: set[Task] = set()
         # With batch_size=2, need ceil(5/2)=3 batches to cover all
         for _ in range(3):
             batch = sampler.sample(tasks, 2)
@@ -198,7 +198,7 @@ class TestEpochShuffledBatchSampler:
         import random
 
         sampler = EpochShuffledBatchSampler(rng=random.Random(42))
-        tasks = ["t1", "t2", "t3"]  # 3 tasks, batch=2 → pad to 4
+        tasks = [Task("t1"), Task("t2"), Task("t3")]  # 3 tasks, batch=2 → pad to 4
         batch1 = sampler.sample(tasks, 2)
         batch2 = sampler.sample(tasks, 2)
         assert len(batch1) == 2
@@ -212,7 +212,7 @@ class TestEpochShuffledBatchSampler:
         import random
 
         sampler = EpochShuffledBatchSampler(rng=random.Random(42))
-        tasks = ["t1", "t2"]
+        tasks = [Task("t1"), Task("t2")]
         # Epoch 1
         batch1 = sampler.sample(tasks, 2)
         # Epoch 2 (should reshuffle)
@@ -225,9 +225,9 @@ class TestEpochShuffledBatchSampler:
         import random
 
         sampler = EpochShuffledBatchSampler(rng=random.Random(42))
-        batch1 = sampler.sample(["t1", "t2"], 2)
+        batch1 = sampler.sample([Task("t1"), Task("t2")], 2)
         assert len(batch1) == 2
-        batch2 = sampler.sample(["t1", "t2", "t3"], 2)
+        batch2 = sampler.sample([Task("t1"), Task("t2"), Task("t3")], 2)
         assert len(batch2) == 2
 
     def test_empty_raises(self):

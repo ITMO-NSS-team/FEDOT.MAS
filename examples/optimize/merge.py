@@ -8,7 +8,7 @@ import asyncio
 
 from fedotmas import MAW, Optimizer
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.optimize import OptimizationCallback, OptimizationConfig
+from fedotmas.optimize import OptimizationCallback, OptimizationConfig, Task
 from fedotmas.optimize._state import Candidate
 
 SEED_CONFIG = MAWConfig(
@@ -43,10 +43,10 @@ SEED_CONFIG = MAWConfig(
 )
 
 TRAINSET = [
-    "Evaluate the impact of AI on healthcare diagnostics",
-    "Analyze the economic effects of remote work",
-    "Assess cybersecurity risks in IoT devices",
-    "Compare electric vs hydrogen fuel cell vehicles",
+    Task("Evaluate the impact of AI on healthcare diagnostics"),
+    Task("Analyze the economic effects of remote work"),
+    Task("Assess cybersecurity risks in IoT devices"),
+    Task("Compare electric vs hydrogen fuel cell vehicles"),
 ]
 
 

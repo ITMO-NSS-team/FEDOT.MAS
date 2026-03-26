@@ -71,3 +71,10 @@ uv run ty check
 ```sh
 just test-unit
 ```
+
+### Docs
+
+```sh
+uv sync --group docs
+zensical serve
+```

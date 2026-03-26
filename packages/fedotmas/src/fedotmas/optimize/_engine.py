@@ -22,6 +22,7 @@ from fedotmas.optimize._scoring import Scorer, ScoringResult
 from fedotmas.optimize._state import (
     Candidate,
     OptimizationState,
+    Task,
     TaskResult,
     config_hash,
     find_common_ancestor,
@@ -69,8 +70,8 @@ class _LoopContext:
     state: OptimizationState
     cfg: OptimizationConfig
     rng: random.Random
-    trainset: list[str]
-    valset: list[str]
+    trainset: list[Task]
+    valset: list[Task]
     seed: Candidate | None
     merge: _MergeSchedule = field(default_factory=_MergeSchedule)
     merged_pairs: set[tuple[int, int]] = field(default_factory=set)
@@ -80,8 +81,8 @@ async def run_optimization(
     *,
     maw: MAW,
     seed_config: MAWConfig,
-    trainset: list[str],
-    valset: list[str],
+    trainset: list[Task],
+    valset: list[Task],
     scorer: Scorer,
     mutator: Mutator,
     candidate_selector: CandidateSelector,
@@ -314,9 +315,9 @@ async def _run_iteration(
     eval_runs += runs
     ctx.dispatcher.on_candidate_evaluated(child, batch)
 
-    batch_tasks = set(batch)
-    parent_batch_score = _mean_score_on(parent, batch_tasks)
-    child_batch_score = _mean_score_on(child, batch_tasks)
+    batch_inputs = {t.input for t in batch}
+    parent_batch_score = _mean_score_on(parent, batch_inputs)
+    child_batch_score = _mean_score_on(child, batch_inputs)
 
     if child_batch_score > parent_batch_score:
         _log.info(
@@ -487,15 +488,15 @@ async def _evaluate_candidate(
     maw: MAW,
     scorer: Scorer,
     candidate: Candidate,
-    tasks: list[str],
+    tasks: list[Task],
     state: OptimizationState,
     config: OptimizationConfig,
     metrics_cb: MetricsCallback | None = None,
 ) -> int:
     """Returns number of new evaluation runs performed."""
-    tasks_to_run: list[str] = []
+    tasks_to_run: list[Task] = []
     for task in tasks:
-        cached = state.cache.get(candidate.config_hash, task)
+        cached = state.cache.get(candidate.config_hash, task.input)
         if cached is not None:
             state.record_task_result(candidate, cached)
             if metrics_cb is not None:
@@ -509,7 +510,10 @@ async def _evaluate_candidate(
         return 0
 
     runs: list[ControlledRun | BaseException] = await asyncio.gather(
-        *[Controller(maw).run(task, config=candidate.config) for task in tasks_to_run],
+        *[
+            Controller(maw).run(task.input, config=candidate.config)
+            for task in tasks_to_run
+        ],
         return_exceptions=True,
     )
 
@@ -520,10 +524,11 @@ async def _evaluate_candidate(
         if isinstance(run, BaseException):
             consecutive_errors += 1
             result = TaskResult(
-                task=task,
+                task=task.input,
                 state={},
                 score=0.0,
                 feedback=f"Pipeline failed: {run}",
+                expected=task.expected,
                 error=True,
             )
             state.record_task_result(candidate, result)
@@ -539,18 +544,20 @@ async def _evaluate_candidate(
             try:
                 scoring: ScoringResult = await scorer.evaluate(task, run.state)
                 result = TaskResult(
-                    task=task,
+                    task=task.input,
                     state=run.state,
                     score=scoring.score,
                     feedback=scoring.feedback,
+                    expected=task.expected,
                 )
             except Exception as e:
-                _log.warning("Scoring failed for task '{}': {}", task, e)
+                _log.warning("Scoring failed for task '{}': {}", task.input, e)
                 result = TaskResult(
-                    task=task,
+                    task=task.input,
                     state=run.state,
                     score=0.0,
                     feedback=f"Scoring failed: {e}",
+                    expected=task.expected,
                     error=True,
                 )
         state.record_task_result(candidate, result)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from fedotmas.maw.models import MAWConfig
-from fedotmas.optimize._state import Candidate
+from fedotmas.optimize._state import Candidate, Task
 
 
 @runtime_checkable
@@ -18,7 +18,7 @@ class Mutator(Protocol):
         self,
         candidate: Candidate,
         agent_names: list[str],
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         """Produce a mutated config from the given candidate.
 
@@ -36,7 +36,7 @@ class Mutator(Protocol):
         self,
         candidate_a: Candidate,
         candidate_b: Candidate,
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         """Merge two candidates into one.
 
@@ -55,7 +55,7 @@ class Mutator(Protocol):
         ancestor: Candidate,
         child_a: Candidate,
         child_b: Candidate,
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         """Merge using common ancestor for smarter crossover."""
         ...

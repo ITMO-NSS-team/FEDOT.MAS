@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from fedotmas.maw.models import MAWConfig
 from fedotmas.optimize._mutators._protocol import Mutator
-from fedotmas.optimize._state import Candidate
+from fedotmas.optimize._state import Candidate, Task
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class CompositeMutator:
         self,
         candidate: Candidate,
         agent_names: list[str],
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         chosen = self._weighted_choice()
         return await chosen.mutator.mutate(candidate, agent_names, tasks)
@@ -45,7 +45,7 @@ class CompositeMutator:
         self,
         candidate_a: Candidate,
         candidate_b: Candidate,
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         config = candidate_a.config
         for wm in self._mutators:
@@ -57,7 +57,7 @@ class CompositeMutator:
         ancestor: Candidate,
         child_a: Candidate,
         child_b: Candidate,
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         config = child_a.config
         for wm in self._mutators:

@@ -19,7 +19,7 @@ from fedotmas.optimize._mutators import (
 from fedotmas.optimize._optimizer import Optimizer
 from fedotmas.optimize._result import OptimizationResult
 from fedotmas.optimize._scoring import LLMJudge, Scorer, ScoringResult
-from fedotmas.optimize._state import Candidate
+from fedotmas.optimize._state import Candidate, Task
 from fedotmas.optimize._stopping import SignalStopper
 
 __all__ = [
@@ -33,6 +33,7 @@ __all__ = [
     "ScoringResult",
     "LLMJudge",
     "Candidate",
+    "Task",
     "SignalStopper",
     "CallbackDispatcher",
     "Mutator",

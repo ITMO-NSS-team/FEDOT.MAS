@@ -9,7 +9,7 @@ from typing import Literal
 
 from fedotmas import MAW, Optimizer
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.optimize import OptimizationConfig
+from fedotmas.optimize import OptimizationConfig, Task
 
 SEED_CONFIG = MAWConfig(
     agents=[
@@ -36,9 +36,9 @@ SEED_CONFIG = MAWConfig(
 )
 
 TRAINSET = [
-    "Compare Python and Rust for systems programming",
-    "Evaluate pros and cons of microservices architecture",
-    "Analyze trade-offs of eventual vs strong consistency",
+    Task("Compare Python and Rust for systems programming"),
+    Task("Evaluate pros and cons of microservices architecture"),
+    Task("Analyze trade-offs of eventual vs strong consistency"),
 ]
 
 

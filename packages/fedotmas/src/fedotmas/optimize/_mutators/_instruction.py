@@ -12,7 +12,7 @@ from fedotmas.meta._adk_runner import run_meta_agent_call
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig
 from fedotmas.optimize._config import OptimizationConfig
 from fedotmas.optimize._prompts import REFLECTION_SYSTEM_PROMPT, MERGE_SYSTEM_PROMPT
-from fedotmas.optimize._state import Candidate
+from fedotmas.optimize._state import Candidate, Task
 
 _log = get_logger("fedotmas.optimize._mutators._instruction")
 
@@ -75,22 +75,22 @@ def _unique_agent_names(*configs: MAWConfig) -> list[str]:
 
 
 def _build_reflection_examples(
-    candidate: Candidate, agent: MAWAgentConfig, tasks: list[str]
+    candidate: Candidate, agent: MAWAgentConfig, tasks: list[Task]
 ) -> list[ReflectionExample]:
     examples: list[ReflectionExample] = []
     for task in tasks:
-        if task not in candidate.scores:
+        if task.input not in candidate.scores:
             continue
-        state = candidate.states.get(task, {})
+        state = candidate.states.get(task.input, {})
         agent_output = state.get(agent.output_key)
         examples.append(
             ReflectionExample(
-                task=task,
+                task=task.input,
                 agent_instruction=agent.instruction,
                 agent_output=str(agent_output) if agent_output is not None else None,
                 pipeline_output=state,
-                score=candidate.scores[task],
-                feedback=candidate.feedbacks.get(task, ""),
+                score=candidate.scores[task.input],
+                feedback=candidate.feedbacks.get(task.input, ""),
             )
         )
     return examples
@@ -171,7 +171,7 @@ class InstructionMutator:
         self,
         candidate: Candidate,
         agent_names: list[str],
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         config = candidate.config
 
@@ -198,7 +198,7 @@ class InstructionMutator:
         self,
         candidate_a: Candidate,
         candidate_b: Candidate,
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         config_a = candidate_a.config
         config_b = candidate_b.config
@@ -215,7 +215,7 @@ class InstructionMutator:
                     continue
 
                 task_context = "\n".join(
-                    f"- {t}" for t in tasks[: self._max_merge_context_tasks]
+                    f"- {t.input}" for t in tasks[: self._max_merge_context_tasks]
                 )
                 merged = await self._llm_merge(
                     name,
@@ -240,7 +240,7 @@ class InstructionMutator:
         ancestor: Candidate,
         child_a: Candidate,
         child_b: Candidate,
-        tasks: list[str],
+        tasks: list[Task],
     ) -> MAWConfig:
         config_anc = ancestor.config
         config_a = child_a.config
@@ -277,7 +277,9 @@ class InstructionMutator:
                     name,
                     agent_a.instruction,
                     agent_b.instruction,
-                    "\n".join(f"- {t}" for t in tasks[: self._max_merge_context_tasks]),
+                    "\n".join(
+                        f"- {t.input}" for t in tasks[: self._max_merge_context_tasks]
+                    ),
                 )
                 if merged:
                     chosen = _with_instruction(agent_a, merged)

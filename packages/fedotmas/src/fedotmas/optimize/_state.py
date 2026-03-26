@@ -5,9 +5,16 @@ import json
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from fedotmas.maw.models import MAWConfig
+
+
+class Task(NamedTuple):
+    """A single optimization task with optional expected answer."""
+
+    input: str
+    expected: str | None = None
 
 
 @dataclass
@@ -16,6 +23,7 @@ class TaskResult:
     state: dict[str, Any]
     score: float
     feedback: str
+    expected: str | None = None
     error: bool = False
 
 
@@ -131,27 +139,36 @@ class OptimizationState:
 
     def save(self, path: str | Path) -> None:
         path = Path(path)
+        candidates_data = []
+        for c in self.candidates:
+            expected_answers: dict[str, str] = {}
+            for task_key in c.scores:
+                cached = self.cache.get(c.config_hash, task_key)
+                if cached is not None and cached.expected is not None:
+                    expected_answers[task_key] = cached.expected
+            entry: dict[str, Any] = {
+                "index": c.index,
+                "config": json.loads(c.config.model_dump_json()),
+                "config_hash": c.config_hash,
+                "scores": c.scores,
+                "feedbacks": c.feedbacks,
+                "states": c.states,
+                "parent_index": c.parent_index,
+                "origin": c.origin,
+                "on_pareto_front": c.on_pareto_front,
+                "merge_parent_indices": list(c.merge_parent_indices)
+                if c.merge_parent_indices
+                else None,
+            }
+            if expected_answers:
+                entry["expected_answers"] = expected_answers
+            candidates_data.append(entry)
+
         data = {
             "next_index": self._next_index,
             "total_evaluations": self.total_evaluations,
             "iteration": self.iteration,
-            "candidates": [
-                {
-                    "index": c.index,
-                    "config": json.loads(c.config.model_dump_json()),
-                    "config_hash": c.config_hash,
-                    "scores": c.scores,
-                    "feedbacks": c.feedbacks,
-                    "states": c.states,
-                    "parent_index": c.parent_index,
-                    "origin": c.origin,
-                    "on_pareto_front": c.on_pareto_front,
-                    "merge_parent_indices": list(c.merge_parent_indices)
-                    if c.merge_parent_indices
-                    else None,
-                }
-                for c in self.candidates
-            ],
+            "candidates": candidates_data,
         }
         path.write_text(json.dumps(data, indent=2))
 
@@ -179,12 +196,14 @@ class OptimizationState:
                 merge_parent_indices=tuple(mpi) if mpi else None,
             )
             state.candidates.append(c)
+            expected_answers = cd.get("expected_answers", {})
             for task, score_val in c.scores.items():
                 result = TaskResult(
                     task=task,
                     state=c.states.get(task, {}),
                     score=score_val,
                     feedback=c.feedbacks.get(task, ""),
+                    expected=expected_answers.get(task),
                 )
                 state.cache.put(c.config_hash, task, result)
         return state

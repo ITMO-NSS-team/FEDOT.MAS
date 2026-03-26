@@ -1,9 +1,3 @@
-"""Example: custom callbacks and MetricsCallback.
-
-Demonstrates how to implement a callback for logging and how to use the
-built-in MetricsCallback to collect optimization statistics.
-"""
-
 import asyncio
 
 from fedotmas import MAW, Optimizer
@@ -12,6 +6,7 @@ from fedotmas.optimize import (
     MetricsCallback,
     OptimizationCallback,
     OptimizationConfig,
+    Task,
 )
 from fedotmas.optimize._result import OptimizationResult
 from fedotmas.optimize._state import Candidate, OptimizationState
@@ -41,9 +36,9 @@ SEED_CONFIG = MAWConfig(
 )
 
 TRAINSET = [
-    "Design a REST API for a todo application",
-    "Plan a database migration strategy for a legacy system",
-    "Outline a CI/CD pipeline for a Python monorepo",
+    Task("Design a REST API for a todo application"),
+    Task("Plan a database migration strategy for a legacy system"),
+    Task("Outline a CI/CD pipeline for a Python monorepo"),
 ]
 
 

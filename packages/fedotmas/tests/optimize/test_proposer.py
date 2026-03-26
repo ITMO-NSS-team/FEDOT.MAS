@@ -16,7 +16,7 @@ from fedotmas.optimize._mutators._instruction import (
     _format_reflection_examples,
     _mean_score_on_common,
 )
-from fedotmas.optimize._state import Candidate
+from fedotmas.optimize._state import Candidate, Task
 
 
 def _agent(name: str, instruction: str = "Do stuff") -> MAWAgentConfig:
@@ -53,7 +53,7 @@ def test_build_reflection_examples():
     config = _config(_agent("a"), _agent("b"))
     candidate = _candidate_with_scores(config)
     agent = _find_agent(config, "a")
-    examples = _build_reflection_examples(candidate, agent, ["t1", "t2"])
+    examples = _build_reflection_examples(candidate, agent, [Task("t1"), Task("t2")])
     assert len(examples) == 2
     assert examples[0].task == "t1"
     assert examples[0].score == 0.5
@@ -64,7 +64,7 @@ def test_build_reflection_examples_missing_task():
     config = _config(_agent("a"))
     candidate = _candidate_with_scores(config)
     agent = _find_agent(config, "a")
-    examples = _build_reflection_examples(candidate, agent, ["t1", "nonexistent"])
+    examples = _build_reflection_examples(candidate, agent, [Task("t1"), Task("nonexistent")])
     assert len(examples) == 1
 
 
@@ -118,7 +118,7 @@ async def test_mutate():
             completion_tokens=50,
             elapsed=1.0,
         )
-        new_config = await mutator.mutate(candidate, ["a"], ["t1"])
+        new_config = await mutator.mutate(candidate, ["a"], [Task("t1")])
 
     assert new_config.agents[0].name == "a"
     assert "Better instruction" in new_config.agents[0].instruction
@@ -148,7 +148,7 @@ async def test_mutate_preserves_invariants():
             completion_tokens=25,
             elapsed=0.5,
         )
-        new_config = await mutator.mutate(candidate, ["researcher"], ["t1"])
+        new_config = await mutator.mutate(candidate, ["researcher"], [Task("t1")])
 
     agent = new_config.agents[0]
     assert agent.name == "researcher"
@@ -174,7 +174,7 @@ async def test_merge():
             completion_tokens=40,
             elapsed=0.8,
         )
-        merged = await mutator.merge(ca, cb, ["t1"])
+        merged = await mutator.merge(ca, cb, [Task("t1")])
 
     assert "Combined approach" in merged.agents[0].instruction
 
@@ -190,7 +190,7 @@ async def test_merge_skips_identical():
 
     mutator = InstructionMutator()
     with patch("fedotmas.optimize._mutators._instruction.run_meta_agent_call") as mock_call:
-        merged = await mutator.merge(ca, cb, ["t1"])
+        merged = await mutator.merge(ca, cb, [Task("t1")])
 
     mock_call.assert_not_called()
     assert merged.agents[0].instruction == config.agents[0].instruction
@@ -221,7 +221,7 @@ async def test_merge_union_agents():
             completion_tokens=40,
             elapsed=0.8,
         )
-        merged = await mutator.merge(ca, cb, ["t1"])
+        merged = await mutator.merge(ca, cb, [Task("t1")])
 
     agent_names = [ag.name for ag in merged.agents]
     assert "a" in agent_names
@@ -270,7 +270,7 @@ async def test_genealogy_merge_fallback_uses_common_tasks():
     with patch("fedotmas.optimize._mutators._instruction.run_meta_agent_call") as mock_call:
         mock_call.side_effect = RuntimeError("LLM unavailable")
         merged = await mutator.genealogy_merge(
-            ancestor, child_a, child_b, ["t1"]
+            ancestor, child_a, child_b, [Task("t1")]
         )
 
     # Should pick child_b's instruction (higher on common task t2)

@@ -9,7 +9,7 @@ import pytest
 
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.optimize._mutators._composite import CompositeMutator, WeightedMutator
-from fedotmas.optimize._state import Candidate
+from fedotmas.optimize._state import Candidate, Task
 
 
 def _agent(name: str, instruction: str = "Do stuff") -> MAWAgentConfig:
@@ -64,7 +64,7 @@ async def test_mutate_delegates_to_one():
         [WeightedMutator(m1, 1.0), WeightedMutator(m2, 0.0)],
         rng=random.Random(42),
     )
-    await composite.mutate(candidate, ["a"], ["t1"])
+    await composite.mutate(candidate, ["a"], [Task("t1")])
 
     # With weight 0.0 for m2, only m1 should be called
     m1.mutate.assert_called_once()
@@ -82,7 +82,7 @@ async def test_mutate_weighted_selection():
         [WeightedMutator(m1, 0.0), WeightedMutator(m2, 1.0)],
         rng=random.Random(42),
     )
-    await composite.mutate(candidate, ["a"], ["t1"])
+    await composite.mutate(candidate, ["a"], [Task("t1")])
 
     m1.mutate.assert_not_called()
     m2.mutate.assert_called_once()
@@ -99,7 +99,7 @@ async def test_merge_calls_all_mutators():
     composite = CompositeMutator(
         [WeightedMutator(m1), WeightedMutator(m2)]
     )
-    await composite.merge(ca, cb, ["t1"])
+    await composite.merge(ca, cb, [Task("t1")])
 
     m1.merge.assert_called_once()
     m2.merge.assert_called_once()
@@ -117,7 +117,7 @@ async def test_genealogy_merge_calls_all_mutators():
     composite = CompositeMutator(
         [WeightedMutator(m1), WeightedMutator(m2)]
     )
-    await composite.genealogy_merge(anc, ca, cb, ["t1"])
+    await composite.genealogy_merge(anc, ca, cb, [Task("t1")])
 
     m1.genealogy_merge.assert_called_once()
     m2.genealogy_merge.assert_called_once()
@@ -142,7 +142,7 @@ async def test_single_mutator_composite():
     candidate = Candidate(index=0, config=_config("a"), config_hash="h")
 
     composite = CompositeMutator([WeightedMutator(m)])
-    await composite.mutate(candidate, ["a"], ["t1"])
+    await composite.mutate(candidate, ["a"], [Task("t1")])
 
     m.mutate.assert_called_once()
     assert composite.token_usage == m.token_usage

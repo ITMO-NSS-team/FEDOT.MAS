@@ -9,6 +9,7 @@ from fedotmas._settings import ModelConfig, resolve_model_config, get_meta_model
 from fedotmas.common.logging import get_logger
 from fedotmas.meta._adk_runner import LLMCallResult, run_meta_agent_call
 from fedotmas.optimize._prompts import JUDGE_SYSTEM_PROMPT
+from fedotmas.optimize._state import Task
 
 _log = get_logger("fedotmas.optimize._scoring")
 
@@ -22,7 +23,7 @@ class ScoringResult:
 
 @runtime_checkable
 class Scorer(Protocol):
-    async def evaluate(self, task: str, state: dict[str, Any]) -> ScoringResult: ...
+    async def evaluate(self, task: Task, state: dict[str, Any]) -> ScoringResult: ...
 
 
 class _JudgeOutput(BaseModel):
@@ -57,12 +58,15 @@ class LLMJudge:
     def token_usage(self) -> tuple[int, int]:
         return (self._total_prompt_tokens, self._total_completion_tokens)
 
-    async def evaluate(self, task: str, state: dict[str, Any]) -> ScoringResult:
-        user_message = (
-            f"## Task\n{task}\n\n"
-            f"## Pipeline output\n{_format_state(state, self._max_state_chars)}\n\n"
-            f"## Evaluation criteria\n{self._criteria}"
-        )
+    async def evaluate(self, task: Task, state: dict[str, Any]) -> ScoringResult:
+        sections = [
+            f"## Task\n{task.input}",
+            f"## Pipeline output\n{_format_state(state, self._max_state_chars)}",
+        ]
+        if task.expected is not None:
+            sections.append(f"## Expected answer\n{task.expected}")
+        sections.append(f"## Evaluation criteria\n{self._criteria}")
+        user_message = "\n\n".join(sections)
 
         result: LLMCallResult = await run_meta_agent_call(
             agent_name="judge",

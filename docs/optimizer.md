@@ -37,7 +37,7 @@ graph TD
 import asyncio
 from fedotmas import MAW, Optimizer
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.optimize import OptimizationConfig
+from fedotmas.optimize import OptimizationConfig, Task
 
 config = MAWConfig(
     agents=[
@@ -64,9 +64,9 @@ config = MAWConfig(
 )
 
 trainset = [
-    "Explain quantum computing basics",
-    "Describe how neural networks learn",
-    "Summarize the history of the internet",
+    Task("Explain quantum computing basics"),
+    Task("Describe how neural networks learn"),
+    Task("Summarize the history of the internet"),
 ]
 
 async def main():
@@ -95,7 +95,7 @@ asyncio.run(main())
 ```
 
 - `criteria` — natural-language description of what "good output" means. Passed to the built-in LLM judge.
-- `trainset` — tasks the optimizer trains on. Each task is a string (user prompt).
+- `trainset` — tasks the optimizer trains on. Each task is a `Task(input, expected)` named tuple.
 - `seed_config` — initial pipeline config. If omitted, generated automatically from the first task.
 
 ## Auto-Generated Seed
@@ -112,8 +112,8 @@ Pass a separate `valset` to avoid overfitting. Accepted candidates are re-evalua
 
 ```python
 result = await opt.optimize(
-    trainset=["task1", "task2", "task3", "task4", "task5"],
-    valset=["val1", "val2", "val3"],
+    trainset=[Task("task1"), Task("task2"), Task("task3"), Task("task4"), Task("task5")],
+    valset=[Task("val1"), Task("val2"), Task("val3")],
     seed_config=config,
 )
 ```
@@ -188,24 +188,44 @@ The `candidate_selection` parameter controls how the parent is chosen for mutati
 | `"epoch_shuffled"` (default) | Shuffled trainset split into sequential minibatches. Every task appears once per epoch |
 | `"random"` | Random sample each iteration. No coverage guarantee |
 
+## Expected Answers
+
+Each `Task` can carry an optional expected answer. When provided, the LLM judge uses it as a reference for correctness — no regex parsing needed:
+
+```python
+trainset = [
+    Task("What is 2+2?", expected="4"),
+    Task("Capital of France?", expected="Paris"),
+    Task("Explain gravity"),  # no expected — judged by criteria only
+]
+
+opt = Optimizer(
+    maw,
+    criteria="Accuracy and clarity",
+    config=OptimizationConfig(max_iterations=10),
+)
+result = await opt.optimize(trainset, seed_config=config)
+```
+
+Tasks **with** `expected` are scored more precisely (the judge sees the reference answer). Tasks **without** `expected` rely on the `criteria` prompt alone.
+
+You can mix both in the same trainset.
+
 ## Custom Scorer
 
 By default, the optimizer uses `LLMJudge` — an LLM that scores pipeline output against your `criteria`. You can replace it with any callable matching the `Scorer` protocol:
 
 ```python
-from fedotmas.optimize import Scorer, ScoringResult
+from fedotmas.optimize import Scorer, ScoringResult, Task
 
 class ExactMatchScorer:
     """Score based on whether the output contains the expected answer."""
 
-    def __init__(self, expected: dict[str, str]):
-        self.expected = expected  # task -> expected substring
-
-    async def evaluate(self, task: str, state: dict) -> ScoringResult:
+    async def evaluate(
+        self, task: Task, state: dict) -> ScoringResult:
         output = " ".join(str(v) for v in state.values()).lower()
-        expected = self.expected.get(task, "").lower()
 
-        if expected and expected in output:
+        if task.expected and task.expected.lower() in output:
             return ScoringResult(score=1.0, feedback="Correct.", reasoning="Match found")
 
         return ScoringResult(
@@ -214,17 +234,22 @@ class ExactMatchScorer:
             reasoning="No match",
         )
 
-scorer = ExactMatchScorer({"What is 2+2?": "4", "Capital of France?": "paris"})
-opt = Optimizer(maw, scorer=scorer, config=OptimizationConfig(...))
+trainset = [
+    Task("What is 2+2?", expected="4"),
+    Task("Capital of France?", expected="paris"),
+]
+
+opt = Optimizer(maw, scorer=ExactMatchScorer(), config=OptimizationConfig(...))
+result = await opt.optimize(trainset, seed_config=config)
 ```
 
 The `Scorer` protocol requires one method:
 
 ```python
-async def evaluate(self, task: str, state: dict[str, Any]) -> ScoringResult
+async def evaluate(self, task: Task, state: dict[str, Any]) -> ScoringResult
 ```
 
-- `task` — the input task string
+- `task` — the input task with optional expected answer
 - `state` — pipeline output dict (`{agent_output_key: output_value, ...}`)
 - Returns `ScoringResult(score=..., feedback=..., reasoning=...)`
 
@@ -366,7 +391,7 @@ for c in result.pareto_front():
 |---|---|---|
 | `index` | `int` | Unique candidate ID |
 | `config` | `MAWConfig` | Pipeline configuration |
-| `scores` | `dict[str, float]` | Per-task scores |
+| `scores` | `dict[str, float]` | Per-task scores (keyed by `task.input`) |
 | `mean_score` | `float \| None` | Average across all scored tasks |
 | `parent_index` | `int \| None` | Parent candidate (mutation) |
 | `merge_parent_indices` | `tuple[int, int] \| None` | Parent candidates (merge) |

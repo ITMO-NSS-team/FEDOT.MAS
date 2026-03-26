@@ -2,7 +2,7 @@ import asyncio
 
 from fedotmas import MAW, MAWConfig, Optimizer
 from fedotmas.maw.models import MAWAgentConfig, MAWStepConfig
-from fedotmas.optimize import OptimizationConfig
+from fedotmas.optimize import OptimizationConfig, Task
 
 SEED_CONFIG = MAWConfig(
     agents=[
@@ -34,9 +34,9 @@ async def main() -> None:
 
     # Define training tasks
     trainset = [
-        "Analyze the current state of renewable energy adoption globally",
-        "Compare cloud computing providers for a startup",
-        "Research best practices for remote team management",
+        Task("Analyze the current state of renewable energy adoption globally"),
+        Task("Compare cloud computing providers for a startup"),
+        Task("Research best practices for remote team management"),
     ]
 
     # Create optimizer with evaluation criteria

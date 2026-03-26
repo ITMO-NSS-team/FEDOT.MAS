@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fedotmas import MAW, Optimizer
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.optimize import OptimizationConfig
+from fedotmas.optimize import OptimizationConfig, Task
 
 SEED_CONFIG = MAWConfig(
     agents=[
@@ -37,9 +37,9 @@ SEED_CONFIG = MAWConfig(
 )
 
 TRAINSET = [
-    "Explain quantum computing basics",
-    "Describe how neural networks learn",
-    "Summarize the history of the internet",
+    Task("Explain quantum computing basics"),
+    Task("Describe how neural networks learn"),
+    Task("Summarize the history of the internet"),
 ]
 
 

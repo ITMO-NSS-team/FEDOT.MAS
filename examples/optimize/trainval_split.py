@@ -1,15 +1,8 @@
-"""Example: separate training and validation sets.
-
-Demonstrates how to use a distinct valset to prevent overfitting.
-The optimizer mutates on minibatches from trainset, and accepted candidates
-are evaluated on the full valset before joining the Pareto front.
-"""
-
 import asyncio
 
 from fedotmas import MAW, Optimizer
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.optimize import OptimizationConfig
+from fedotmas.optimize import OptimizationConfig, Task
 
 SEED_CONFIG = MAWConfig(
     agents=[
@@ -35,20 +28,18 @@ SEED_CONFIG = MAWConfig(
     ),
 )
 
-# Training tasks: used for minibatch mutation and reflection
 TRAINSET = [
-    "Explain the impact of quantum computing on cryptography",
-    "Analyze the pros and cons of nuclear energy",
-    "Discuss the role of microbiomes in human health",
-    "Compare REST and GraphQL API design approaches",
-    "Evaluate the effectiveness of carbon offset programs",
+    Task("Explain the impact of quantum computing on cryptography"),
+    Task("Analyze the pros and cons of nuclear energy"),
+    Task("Discuss the role of microbiomes in human health"),
+    Task("Compare REST and GraphQL API design approaches"),
+    Task("Evaluate the effectiveness of carbon offset programs"),
 ]
 
-# Validation tasks: used to score accepted candidates on unseen tasks
 VALSET = [
-    "Assess the future of autonomous vehicles in urban areas",
-    "Analyze the economic impact of open-source software",
-    "Discuss ethical implications of gene editing in humans",
+    Task("Assess the future of autonomous vehicles in urban areas"),
+    Task("Analyze the economic impact of open-source software"),
+    Task("Discuss ethical implications of gene editing in humans"),
 ]
 
 
@@ -59,7 +50,7 @@ async def main() -> None:
         maw,
         criteria="Factual accuracy, depth of analysis, clear structure, and balanced perspective",
         config=OptimizationConfig(
-            max_iterations=6,
+            max_iterations=3,
             patience=4,
             minibatch_size=2,
             seed=42,
@@ -69,7 +60,7 @@ async def main() -> None:
     result = await opt.optimize(
         TRAINSET,
         seed_config=SEED_CONFIG,
-        valset=VALSET,  # separate validation set
+        valset=VALSET,
     )
 
     print(f"Best score: {result.best_score:.3f}")

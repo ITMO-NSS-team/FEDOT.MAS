@@ -12,7 +12,7 @@ from fedotmas.optimize._config import OptimizationConfig
 from fedotmas.optimize._engine import run_optimization, _evaluate_candidate, _mean_score_on, _try_merge, _LoopContext, _MergeResult, _MergeSchedule
 from fedotmas.optimize._mutators._instruction import InstructionMutator
 from fedotmas.optimize._scoring import ScoringResult
-from fedotmas.optimize._state import Candidate, OptimizationState
+from fedotmas.optimize._state import Candidate, OptimizationState, Task
 from fedotmas.optimize._stopping import MaxIterations
 from fedotmas.optimize._strategies import (
     BestCandidateSelector,
@@ -92,7 +92,7 @@ async def test_evaluate_candidate_creates_controller_per_task():
 
         MockCtrl.side_effect = make_ctrl
 
-        await _evaluate_candidate(maw, scorer, candidate, ["t1", "t2"], state, OptimizationConfig())
+        await _evaluate_candidate(maw, scorer, candidate, [Task("t1"), Task("t2")], state, OptimizationConfig())
 
     # Should create 2 Controller instances (one per task)
     assert len(controller_instances) == 2
@@ -113,13 +113,13 @@ async def test_evaluate_candidate_caches():
         )
         MockCtrl.return_value = ctrl_instance
 
-        runs = await _evaluate_candidate(maw, scorer, candidate, ["t1"], state, OptimizationConfig())
+        runs = await _evaluate_candidate(maw, scorer, candidate, [Task("t1")], state, OptimizationConfig())
         assert runs == 1
         assert candidate.scores["t1"] == 0.8
 
         # Second eval should use cache
         candidate2 = state.add_candidate(config, origin="mutation")
-        runs2 = await _evaluate_candidate(maw, scorer, candidate2, ["t1"], state, OptimizationConfig())
+        runs2 = await _evaluate_candidate(maw, scorer, candidate2, [Task("t1")], state, OptimizationConfig())
         assert runs2 == 0
         assert candidate2.scores["t1"] == 0.8
 
@@ -137,7 +137,7 @@ async def test_evaluate_candidate_handles_error():
         ctrl_instance.run = AsyncMock(side_effect=RuntimeError("boom"))
         MockCtrl.return_value = ctrl_instance
 
-        runs = await _evaluate_candidate(maw, scorer, candidate, ["t1"], state, OptimizationConfig())
+        runs = await _evaluate_candidate(maw, scorer, candidate, [Task("t1")], state, OptimizationConfig())
         assert runs == 1
         assert candidate.scores["t1"] == 0.0
         assert "boom" in candidate.feedbacks["t1"]
@@ -173,8 +173,8 @@ async def test_run_optimization_basic():
         result = await run_optimization(
             maw=maw,
             seed_config=seed,
-            trainset=["t1", "t2"],
-            valset=["t1", "t2"],
+            trainset=[Task("t1"), Task("t2")],
+            valset=[Task("t1"), Task("t2")],
             scorer=scorer,
             mutator=mutator,
             candidate_selector=BestCandidateSelector(),
@@ -213,8 +213,8 @@ async def test_run_optimization_rejects_identical_mutation():
         result = await run_optimization(
             maw=maw,
             seed_config=seed,
-            trainset=["t1"],
-            valset=["t1"],
+            trainset=[Task("t1")],
+            valset=[Task("t1")],
             scorer=scorer,
             mutator=mutator,
             candidate_selector=BestCandidateSelector(),
@@ -253,8 +253,8 @@ async def test_try_merge_returns_not_attempted_when_too_few_pareto():
         state=state,
         cfg=OptimizationConfig(),
         rng=random.Random(42),
-        trainset=["t1"],
-        valset=["t1"],
+        trainset=[Task("t1")],
+        valset=[Task("t1")],
         seed=c,
     )
 
@@ -292,8 +292,8 @@ async def test_try_merge_returns_not_attempted_when_no_valid_pair():
         state=state,
         cfg=OptimizationConfig(),
         rng=random.Random(42),
-        trainset=["t1"],
-        valset=["t1"],
+        trainset=[Task("t1")],
+        valset=[Task("t1")],
         seed=c0,
     )
 

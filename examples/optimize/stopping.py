@@ -1,14 +1,8 @@
-"""Example: stopping criteria.
-
-Demonstrates the various stopping strategies: patience (NoImprovement),
-ScoreThreshold, MaxEvaluations, and SignalStopper.
-"""
-
 import asyncio
 
 from fedotmas import MAW, Optimizer
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.optimize import OptimizationConfig
+from fedotmas.optimize import OptimizationConfig, Task
 
 SEED_CONFIG = MAWConfig(
     agents=[
@@ -35,9 +29,9 @@ SEED_CONFIG = MAWConfig(
 )
 
 TRAINSET = [
-    "Explain the CAP theorem in distributed systems",
-    "Describe how garbage collection works in JVM",
-    "Summarize the Raft consensus algorithm",
+    Task("Explain the CAP theorem in distributed systems"),
+    Task("Describe how garbage collection works in JVM"),
+    Task("Summarize the Raft consensus algorithm"),
 ]
 
 

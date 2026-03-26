@@ -7,7 +7,7 @@ from fedotmas.common.logging import get_logger
 
 if TYPE_CHECKING:
     from fedotmas.optimize._result import OptimizationResult
-    from fedotmas.optimize._state import Candidate, OptimizationState
+    from fedotmas.optimize._state import Candidate, OptimizationState, Task
 
 _log = get_logger("fedotmas.optimize._callbacks")
 
@@ -18,7 +18,7 @@ class OptimizationCallback:
     def on_iteration_start(self, iteration: int, state: OptimizationState) -> None:
         pass
 
-    def on_candidate_evaluated(self, candidate: Candidate, tasks: list[str]) -> None:
+    def on_candidate_evaluated(self, candidate: Candidate, tasks: list[Task]) -> None:
         pass
 
     def on_candidate_accepted(self, child: Candidate, parent: Candidate) -> None:
@@ -63,7 +63,7 @@ class CallbackDispatcher:
     def on_iteration_start(self, iteration: int, state: OptimizationState) -> None:
         self._dispatch("on_iteration_start", iteration, state)
 
-    def on_candidate_evaluated(self, candidate: Candidate, tasks: list[str]) -> None:
+    def on_candidate_evaluated(self, candidate: Candidate, tasks: list[Task]) -> None:
         self._dispatch("on_candidate_evaluated", candidate, tasks)
 
     def on_candidate_accepted(self, child: Candidate, parent: Candidate) -> None:

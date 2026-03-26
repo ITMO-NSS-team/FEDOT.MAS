@@ -10,6 +10,7 @@ from fedotmas.optimize._mutators._instruction import InstructionMutator
 from fedotmas.optimize._mutators._protocol import Mutator
 from fedotmas.optimize._result import OptimizationResult
 from fedotmas.optimize._scoring import LLMJudge, Scorer
+from fedotmas.optimize._state import Task
 from fedotmas.optimize._stopping import (
     CompositeStopper,
     MaxEvaluations,
@@ -61,10 +62,10 @@ class Optimizer:
 
     async def optimize(
         self,
-        trainset: list[str],
+        trainset: list[Task],
         *,
         seed_config: MAWConfig | None = None,
-        valset: list[str] | None = None,
+        valset: list[Task] | None = None,
     ) -> OptimizationResult:
         if not trainset:
             raise ValueError("trainset must not be empty")
@@ -78,7 +79,7 @@ class Optimizer:
 
         if seed_config is None:
             _log.info("Generating seed config from first task")
-            seed_config = await self._maw.generate_config(trainset[0])
+            seed_config = await self._maw.generate_config(trainset[0].input)
 
         component_selector = make_component_selector(len(seed_config.agents))
 
