@@ -25,6 +25,12 @@ dev = [
 docs = [
   "zensical>=0.0.28",
 ]
+gaia = [
+  "datasets>=3.0",
+  "huggingface-hub>=0.30",
+  "tenacity>=9.0",
+  "tqdm>=4.0",
+]
 
 [tool.uv]
 sources.fedotmas = { workspace = true }
