@@ -54,6 +54,13 @@ DEFAULT_MAX_RETRIES = 2
 DEFAULT_MODELS_URL = "https://openrouter.ai/api/v1/models"
 DEFAULT_DATASET_PATH = ROOT / "data" / "benchmark_queries"
 DEFAULT_OUTPUT_DIR = ROOT / "maw_runs"
+DEFAULT_BENCHMARK_LIMITS = {
+    "assistantbench": -1,
+    "gaia": -1,
+    "gsm8k": 200,
+    "hle": 200,
+    "math": 200,
+}
 APP_NAME = "maw_cost_estimator_schema"
 OUTPUT_KEY = "maw_config"
 MODELS_WITHOUT_OUTPUT_SCHEMA = {
@@ -352,7 +359,18 @@ def load_rows(config: RunConfig) -> list[dict[str, Any]]:
             sampled.extend(bucket[: config.questions_per_benchmark])
         result = sampled
     else:
-        result = list(rows)
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(row["dataset_name"], []).append(row)
+
+        result: list[dict[str, Any]] = []
+        for dataset_name in sorted(grouped):
+            bucket = grouped[dataset_name]
+            limit = DEFAULT_BENCHMARK_LIMITS.get(dataset_name)
+            if limit is None or limit < 0:
+                result.extend(bucket)
+            else:
+                result.extend(bucket[:limit])
 
     if config.shuffle:
         random.Random(config.seed).shuffle(result)
