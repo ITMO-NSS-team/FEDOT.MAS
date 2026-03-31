@@ -197,3 +197,6 @@ cython_debug/
 
 # ADK meta
 .adk/
+
+# Dataset generation artifacts
+maw_runs/
