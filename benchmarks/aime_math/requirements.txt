@@ -1,0 +1,2 @@
+datasets>=3.1
+pydantic-settings>=2.0
