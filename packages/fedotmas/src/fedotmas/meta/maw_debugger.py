@@ -20,6 +20,7 @@ from fedotmas.meta._helpers import (
 from fedotmas.meta.maw_debug_prompts import (
     CLASSIFIER_SYSTEM_PROMPT,
     DEBUGGER_SYSTEM_PROMPT,
+    EVALUATOR_SYSTEM_PROMPT,
 )
 
 _log = get_logger("fedotmas.meta.maw_debugger")
@@ -30,6 +31,14 @@ class ErrorClassification(BaseModel):
 
     retryable: bool
     category: str
+    reasoning: str
+
+
+class OutputEvaluation(BaseModel):
+    """Result of LLM-based output evaluation against error_hint."""
+
+    passed: bool
+    agent_name: str
     reasoning: str
 
 
@@ -91,6 +100,53 @@ async def classify_error(
         classification.reasoning,
     )
     return classification
+
+
+async def evaluate_output(
+    *,
+    state: dict[str, Any],
+    config: MAWConfig,
+    error_hint: str,
+    meta_model: str | ModelConfig | None = None,
+    session_service: BaseSessionService | None = None,
+) -> OutputEvaluation:
+    """Use an LLM call to check pipeline output against error_hint."""
+    resolved_meta, _, _ = resolve_meta_and_workers(meta_model, None, None)
+
+    state_snapshot = _truncate(
+        json.dumps(state, default=str, ensure_ascii=False),
+        4000,
+    )
+    agent_names = ", ".join(
+        f"{a.name} (output_key={a.output_key})" for a in config.agents
+    )
+
+    instruction = EVALUATOR_SYSTEM_PROMPT.substitute(
+        state_snapshot=state_snapshot,
+        agent_names=agent_names,
+        error_hint=error_hint,
+    )
+
+    result = await run_meta_agent_call(
+        agent_name="output_evaluator",
+        instruction=instruction,
+        user_message=f"Evaluate pipeline output against hint: {error_hint}",
+        output_schema=OutputEvaluation,
+        output_key="output_evaluation",
+        model=resolved_meta,
+        temperature=0.1,
+        session_service=session_service,
+        max_retries=1,
+    )
+
+    evaluation = parse_llm_output(result.raw_output, OutputEvaluation)
+    _log.info(
+        "Output evaluated | passed={} agent={} reasoning={}",
+        evaluation.passed,
+        evaluation.agent_name,
+        evaluation.reasoning,
+    )
+    return evaluation
 
 
 async def diagnose_and_fix(

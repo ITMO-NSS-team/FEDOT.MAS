@@ -11,7 +11,7 @@ from fedotmas.control._run import ControlledRun, RunError
 from fedotmas.control.fixes._guardrails import run_config_guardrails
 from fedotmas.core.runner import PipelineResult
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.meta.maw_debugger import ErrorClassification
+from fedotmas.meta.maw_debugger import ErrorClassification, OutputEvaluation
 from fedotmas.plugins._checkpoint import Checkpoint
 
 
@@ -453,34 +453,6 @@ async def test_unknown_agent_skips_recovery():
 
 
 @pytest.mark.asyncio
-async def test_error_hint_without_llm_detection_warns():
-    """error_hint without llm_error_detection=True logs a warning."""
-    from loguru import logger
-
-    maw = _mock_maw()
-    config = _config("a")
-
-    warnings: list[str] = []
-    sink_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
-
-    try:
-        with patch("fedotmas.control._controller.run_pipeline") as mock_run:
-            mock_run.return_value = PipelineResult(state={"a": "ok"})
-            maw.generate_config.return_value = config
-
-            ctrl = Controller(maw)
-            await ctrl.run_with_recovery(
-                "task",
-                error_hint="some hint",
-                llm_error_detection=False,
-            )
-    finally:
-        logger.remove(sink_id)
-
-    assert any("error_hint is ignored" in w for w in warnings)
-
-
-@pytest.mark.asyncio
 async def test_custom_fix_tool_via_di():
     """A custom fix tool passed via fix_tools is forwarded to _run_debugger."""
     maw = _mock_maw()
@@ -529,3 +501,121 @@ async def test_default_fix_tools_is_none():
 
     call_kwargs = mock_debugger.call_args.kwargs
     assert call_kwargs["fix_tools"] is None
+
+
+@pytest.mark.asyncio
+async def test_checks_triggers_recovery():
+    """A check function that returns an error triggers debugger recovery."""
+    maw = _mock_maw()
+    config = _config("a", "b")
+    fixed_config = config.replace_agent(
+        "b", _agent("b").model_copy(update={"instruction": "Fixed b"}),
+    )
+
+    def check_b(state: dict) -> str | None:
+        if state.get("b") != "correct":
+            return "Agent b returned wrong value, fix instruction"
+        return None
+
+    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+         _mock_debugger_returning(fixed_config) as mock_debugger:
+
+        from fedotmas.plugins._eval import EvaluationError
+
+        mock_run.side_effect = [
+            EvaluationError("b", "Agent b returned wrong value, fix instruction"),
+            PipelineResult(state={"a": "ok", "b": "correct"}),
+        ]
+        maw.generate_config.return_value = config
+
+        ctrl = Controller(maw)
+        run = await ctrl.run_with_recovery(
+            "test task",
+            checks={"b": check_b},
+        )
+
+    assert run.status == "success"
+    mock_debugger.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_checks_pass_no_recovery():
+    """When checks pass, no recovery is triggered."""
+    maw = _mock_maw()
+    config = _config("a", "b")
+
+    def check_b(state: dict) -> str | None:
+        return None
+
+    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+         _mock_debugger_returning(config) as mock_debugger:
+
+        mock_run.return_value = PipelineResult(state={"a": "ok", "b": "ok"})
+        maw.generate_config.return_value = config
+
+        ctrl = Controller(maw)
+        run = await ctrl.run_with_recovery(
+            "test task",
+            checks={"b": check_b},
+        )
+
+    assert run.status == "success"
+    mock_debugger.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_error_hint_triggers_llm_eval():
+    """When error_hint is set and pipeline succeeds, LLM eval can trigger recovery."""
+    maw = _mock_maw()
+    config = _config("a", "b")
+
+    eval_fail = OutputEvaluation(
+        passed=False, agent_name="b", reasoning="Output is wrong",
+    )
+
+    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+         patch("fedotmas.meta.maw_debugger.evaluate_output", new=AsyncMock(return_value=eval_fail)) as mock_eval, \
+         _mock_debugger_returning(config) as mock_debugger:
+
+        mock_run.side_effect = [
+            PipelineResult(state={"a": "ok", "b": "bad"}),
+            PipelineResult(state={"a": "ok", "b": "fixed"}),
+        ]
+        maw.generate_config.return_value = config
+
+        ctrl = Controller(maw)
+        run = await ctrl.run_with_recovery(
+            "test task",
+            error_hint="b should return 'fixed'",
+        )
+
+    mock_eval.assert_called()
+    mock_debugger.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_error_hint_passes_llm_eval():
+    """When LLM eval passes, no recovery is triggered."""
+    maw = _mock_maw()
+    config = _config("a", "b")
+
+    eval_pass = OutputEvaluation(
+        passed=True, agent_name="", reasoning="Output is correct",
+    )
+
+    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+         patch("fedotmas.meta.maw_debugger.evaluate_output", new=AsyncMock(return_value=eval_pass)) as mock_eval, \
+         _mock_debugger_returning(config) as mock_debugger:
+
+        mock_run.return_value = PipelineResult(state={"a": "ok", "b": "ok"})
+        maw.generate_config.return_value = config
+
+        ctrl = Controller(maw)
+        run = await ctrl.run_with_recovery(
+            "test task",
+            error_hint="b should return ok",
+        )
+
+    assert run.status == "success"
+    mock_eval.assert_called_once()
+    mock_debugger.assert_not_called()

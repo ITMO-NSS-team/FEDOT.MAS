@@ -25,6 +25,7 @@ from fedotmas.core.runner import run_pipeline
 from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import MAWConfig
 from fedotmas.plugins._checkpoint import CheckpointPlugin
+from fedotmas.plugins._eval import CheckFn, EvalPlugin
 from fedotmas.plugins._skip_completed import SkipCompletedPlugin
 
 _log = get_logger("fedotmas.control")
@@ -42,13 +43,19 @@ class Controller:
         self._task: str | None = None
         self._last_run: ControlledRun | None = None
 
-    async def run(self, task: str, config: MAWConfig | None = None) -> ControlledRun:
+    async def run(
+        self,
+        task: str,
+        config: MAWConfig | None = None,
+        plugins: list[BasePlugin] | None = None,
+    ) -> ControlledRun:
         """Generate (or use provided) config and execute the pipeline.
 
         Args:
             task: The user's task description.
             config: Optional pre-built config. If ``None``, generates one
                 via ``maw.generate_config(task)``.
+            plugins: Extra ADK plugins injected into the pipeline execution.
         """
         self._task = task
 
@@ -56,7 +63,9 @@ class Controller:
             config = await self._maw.generate_config(task)
 
         agent = self._maw.build(config)
-        self._last_run = await self._execute(agent, task, config, plugins=[])
+        self._last_run = await self._execute(
+            agent, task, config, plugins=list(plugins or [])
+        )
         return self._last_run
 
     @asynccontextmanager
@@ -95,6 +104,8 @@ class Controller:
         max_retries: int = 2,
         config: MAWConfig | None = None,
         fix_tools: list[Callable] | None = None,
+        checks: dict[str, CheckFn] | None = None,
+        strategy: Strategy = Strategy.RESTART_AFTER,
         llm_error_detection: bool = False,
         error_hint: str | None = None,
     ) -> ControlledRun:
@@ -112,24 +123,57 @@ class Controller:
                 call.  Each tool reads/writes config via
                 ``tool_context.state["config"]``.  Defaults to
                 ``[fix_instruction]``.
+            checks: Per-agent check functions.  Each function receives the
+                pipeline state dict and returns an error message (str) if
+                the output is wrong, or ``None`` if OK.  The error message
+                is passed to the debugger as the problem description.
+            strategy: Resume strategy after debugger fixes the config.
+                Defaults to ``RESTART_AFTER`` which re-runs only the
+                modified agent and everything after it.
             llm_error_detection: When ``True``, use an LLM call to classify
                 errors as retryable/fatal before attempting recovery.
                 When ``False`` (default), use regex-based heuristics.
-            error_hint: Free-text hint passed to the LLM error classifier
-                (only used when ``llm_error_detection=True``).
+            error_hint: Free-text hint passed to the debugger agent to
+                provide additional context about expected behavior.
         """
-        from fedotmas.meta.maw_debugger import classify_error
+        from fedotmas.meta.maw_debugger import classify_error, evaluate_output
 
         if max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {max_retries}")
 
-        if error_hint and not llm_error_detection:
-            _log.warning("error_hint is ignored when llm_error_detection=False")
+        plugins: list[BasePlugin] = []
+        if checks:
+            plugins.append(EvalPlugin(checks))
 
-        run = await self.run(task, config=config)
+        run = await self.run(task, config=config, plugins=plugins)
 
         for attempt in range(max_retries):
             if run.status == "success":
+                if error_hint:
+                    eval_result = await evaluate_output(
+                        state=run.state,
+                        config=run.config,
+                        error_hint=error_hint,
+                        meta_model=self._maw.meta_model,
+                        session_service=self._maw._session_service,
+                    )
+                    if not eval_result.passed:
+                        _log.info(
+                            "LLM eval failed: {} (agent={})",
+                            eval_result.reasoning,
+                            eval_result.agent_name,
+                        )
+                        run = ControlledRun(
+                            config=run.config,
+                            status="error",
+                            state=run.state,
+                            checkpoints=run.checkpoints,
+                            error=RunError(
+                                agent_name=eval_result.agent_name or "unknown",
+                                message=eval_result.reasoning,
+                            ),
+                        )
+                        continue
                 return run
 
             error = run.error
@@ -175,9 +219,10 @@ class Controller:
                 current_config=run.config,
                 state=run.state,
                 fix_tools=fix_tools,
+                error_hint=error_hint,
             )
 
-            run = await self.resume(new_config, strategy=Strategy.RETRY_FAILED)
+            run = await self.resume(new_config, strategy=strategy)
 
         return run
 
@@ -189,6 +234,7 @@ class Controller:
         current_config: MAWConfig,
         state: dict[str, Any],
         fix_tools: list[Callable] | None = None,
+        error_hint: str | None = None,
     ) -> MAWConfig:
         """Launch a debugger LLM agent with fix tools to patch the config."""
         from fedotmas.control.fixes import fix_instruction, guardrail_validate_config
@@ -221,6 +267,8 @@ class Controller:
             config_json=config_json,
             state_snapshot=state_str,
         )
+        if error_hint:
+            instruction += f"\n\n**User hint:** {error_hint}\n"
 
         llm = make_llm(resolved_meta)
 

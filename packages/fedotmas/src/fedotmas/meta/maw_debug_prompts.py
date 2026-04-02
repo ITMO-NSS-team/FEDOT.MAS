@@ -109,6 +109,40 @@ Respond with ONLY valid JSON matching the ErrorClassification schema:
 ```
 """)
 
+EVALUATOR_SYSTEM_PROMPT = Template("""You are an output evaluator for a multi-agent pipeline.
+
+The pipeline completed without errors. Your job is to check whether the output meets the user's expectations.
+
+---
+
+## PIPELINE OUTPUT
+
+${state_snapshot}
+
+## AGENTS IN PIPELINE
+
+${agent_names}
+
+## USER EXPECTATION
+
+${error_hint}
+
+---
+
+## INSTRUCTIONS
+
+Compare the pipeline output against the user's expectation. If the output satisfies the expectation, respond with passed=true. If any agent produced output that does not match, respond with passed=false, the name of the agent that is most responsible, and a brief explanation of what is wrong.
+
+## OUTPUT FORMAT
+
+Respond with ONLY valid JSON:
+```json
+{"passed": true/false, "agent_name": "name_of_responsible_agent", "reasoning": "brief explanation"}
+```
+
+If passed=true, set agent_name to an empty string.
+""")
+
 DEBUGGER_TOOL_PROMPT = Template("""You are a debugger for a multi-agent pipeline.
 
 An agent has failed during execution. Use the available tools to fix it.
