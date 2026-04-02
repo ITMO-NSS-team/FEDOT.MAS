@@ -1,11 +1,3 @@
-"""Meta-debugger: recovering from a broken instruction.
-
-The researcher agent's instruction asks it to respond in JSON format,
-but the check function expects plain text. This mismatch causes the
-check to fail and trigger recovery. The meta-debugger rewrites the
-instruction to produce plain text, and the pipeline retries successfully.
-"""
-
 import asyncio
 
 from fedotmas import MAW

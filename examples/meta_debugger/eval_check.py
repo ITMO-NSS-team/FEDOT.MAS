@@ -1,14 +1,3 @@
-"""Meta-debugger: using error_hint for LLM-based evaluation.
-
-The calculator agent is instructed to return the number 2, but the task
-asks for 5. There is no programmatic check here. Instead, error_hint
-tells the meta-debugger what the expected behavior is, and
-llm_error_detection lets the LLM decide whether the output is correct.
-
-If the LLM determines that the output does not match the hint, recovery
-is triggered and the debugger rewrites the agent's instruction.
-"""
-
 import asyncio
 
 from fedotmas import MAW

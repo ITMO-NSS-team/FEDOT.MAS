@@ -1,14 +1,3 @@
-"""Meta-debugger: programmatic checks for agent output.
-
-The calculator agent is instructed to return the number 2, but the task
-expects 5. A check function inspects the pipeline state after the agent
-runs and returns an error message if the output is wrong.
-
-The error message is passed directly to the meta-debugger as the
-description of what went wrong. The debugger reads it and rewrites the
-agent's instruction to fix the problem.
-"""
-
 import asyncio
 
 from fedotmas import MAW
