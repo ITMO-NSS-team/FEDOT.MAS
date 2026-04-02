@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import json
 import re
-from collections.abc import AsyncIterator
+import time
+import uuid
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
+from google.adk import Runner
+from google.adk.agents import LlmAgent
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.plugins import BasePlugin
+from google.adk.sessions import InMemorySessionService
+from google.adk.tools import FunctionTool
+from google.genai import types
 
+from fedotmas.common.llm import make_llm
 from fedotmas.common.logging import get_logger
 from fedotmas.control._iterable import IterableRun
 from fedotmas.control._run import ControlledRun, RunError, extract_failed_agent_name
@@ -85,26 +94,31 @@ class Controller:
         *,
         max_retries: int = 2,
         config: MAWConfig | None = None,
+        fix_tools: list[Callable] | None = None,
         llm_error_detection: bool = False,
         error_hint: str | None = None,
     ) -> ControlledRun:
         """Run a pipeline with automatic recovery on agent failures.
 
-        On error, diagnoses the failing agent via an LLM meta-call, patches
-        its config, and resumes the pipeline.  Repeats up to *max_retries*
-        times.
+        On error, launches a debugger LLM agent that uses *fix_tools* to
+        patch the config, then resumes the pipeline.  Repeats up to
+        *max_retries* times.
 
         Args:
             task: The user's task description.
             max_retries: Maximum number of recovery attempts.
             config: Optional pre-built config.
+            fix_tools: ADK-compatible tool functions the debugger agent can
+                call.  Each tool reads/writes config via
+                ``tool_context.state["config"]``.  Defaults to
+                ``[fix_instruction]``.
             llm_error_detection: When ``True``, use an LLM call to classify
                 errors as retryable/fatal before attempting recovery.
                 When ``False`` (default), use regex-based heuristics.
             error_hint: Free-text hint passed to the LLM error classifier
                 (only used when ``llm_error_detection=True``).
         """
-        from fedotmas.meta.maw_debugger import classify_error, diagnose_and_fix
+        from fedotmas.meta.maw_debugger import classify_error
 
         if max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {max_retries}")
@@ -122,15 +136,12 @@ class Controller:
             if error is None:
                 return run
 
-            # Cannot recover if we don't know which agent failed
             if not _has_known_agent(error, run.config):
                 _log.warning(
                     "Cannot identify failed agent from error, skipping recovery: {}",
                     error.message,
                 )
                 return run
-
-            error_category: str | None = None
 
             if llm_error_detection:
                 classification = await classify_error(
@@ -146,7 +157,6 @@ class Controller:
                         classification.reasoning,
                     )
                     return run
-                error_category = classification.category
             else:
                 if not _is_retryable(error):
                     _log.warning("Non-retryable error: {}", error.message)
@@ -159,24 +169,137 @@ class Controller:
                 error.agent_name,
             )
 
-            temperature = self._maw.temperature
-            fixed_agent = await diagnose_and_fix(
-                error=error,
-                config=run.config,
+            new_config = await self._run_debugger(
                 task=task,
+                error=error,
+                current_config=run.config,
                 state=run.state,
-                meta_model=self._maw.meta_model,
-                temperature=temperature if temperature is not None else 0.3,
-                mcp_registry=self._maw.mcp_registry,
-                worker_models=self._maw.worker_models,
-                session_service=self._maw._session_service,
-                error_category=error_category,
+                fix_tools=fix_tools,
             )
 
-            new_config = run.config.replace_agent(error.agent_name, fixed_agent)
             run = await self.resume(new_config, strategy=Strategy.RETRY_FAILED)
 
         return run
+
+    async def _run_debugger(
+        self,
+        *,
+        task: str,
+        error: RunError,
+        current_config: MAWConfig,
+        state: dict[str, Any],
+        fix_tools: list[Callable] | None = None,
+    ) -> MAWConfig:
+        """Launch a debugger LLM agent with fix tools to patch the config."""
+        from fedotmas.control.fixes import fix_instruction, guardrail_validate_config
+        from fedotmas.meta._helpers import resolve_meta_and_workers
+        from fedotmas.meta.maw_debug_prompts import DEBUGGER_TOOL_PROMPT
+
+        tools = fix_tools or [fix_instruction]
+        resolved_meta, _, _ = resolve_meta_and_workers(
+            self._maw.meta_model,
+            None,
+            None,
+        )
+
+        config_json = current_config.model_dump_json(indent=2)
+        if len(config_json) > 6000:
+            config_json = config_json[:6000] + "... (truncated)"
+
+        state_str = json.dumps(state, default=str, ensure_ascii=False)
+        if len(state_str) > 4000:
+            state_str = state_str[:4000] + "... (truncated)"
+
+        error_message = error.message
+        if len(error_message) > 2000:
+            error_message = error_message[:2000] + "... (truncated)"
+
+        instruction = DEBUGGER_TOOL_PROMPT.substitute(
+            task=task,
+            agent_name=error.agent_name,
+            error_message=error_message,
+            config_json=config_json,
+            state_snapshot=state_str,
+        )
+
+        llm = make_llm(resolved_meta)
+
+        debugger_agent = LlmAgent(
+            name="debugger",
+            model=llm,
+            instruction=instruction,
+            tools=[FunctionTool(func=f) for f in tools],
+            after_tool_callback=guardrail_validate_config,
+            generate_content_config=types.GenerateContentConfig(
+                temperature=0.3,
+            ),
+        )
+
+        session_service = self._maw._session_service or InMemorySessionService()
+        session_id = uuid.uuid4().hex
+        app_name = "fedotmas_debugger"
+
+        session = await session_service.create_session(
+            app_name=app_name,
+            user_id="system",
+            session_id=session_id,
+            state={"config": current_config.model_dump_json()},
+        )
+
+        message = types.Content(
+            role="user",
+            parts=[
+                types.Part.from_text(
+                    text=f"Fix agent '{error.agent_name}' that failed with: {error_message}",
+                )
+            ],
+        )
+
+        start = time.monotonic()
+
+        async with Runner(
+            app_name=app_name,
+            agent=debugger_agent,
+            session_service=session_service,
+        ) as runner:
+            async for event in runner.run_async(
+                user_id="system",
+                session_id=session.id,
+                new_message=message,
+            ):
+                if event.partial:
+                    continue
+                if event.error_code:
+                    _log.error(
+                        "Debugger LLM error | code={} msg={}",
+                        event.error_code,
+                        event.error_message,
+                    )
+                    raise RuntimeError(
+                        f"Debugger LLM error {event.error_code}: {event.error_message}"
+                    )
+
+        elapsed = time.monotonic() - start
+        _log.info("Debugger complete | elapsed={:.1f}s", elapsed)
+
+        final_session = await session_service.get_session(
+            app_name=app_name,
+            user_id="system",
+            session_id=session.id,
+        )
+        if final_session is None:
+            raise RuntimeError("Debugger session lost after execution")
+
+        config_raw = final_session.state.get("config")
+        if config_raw is None:
+            raise RuntimeError("Debugger did not produce config in session state")
+
+        if isinstance(config_raw, str):
+            new_config = MAWConfig.model_validate_json(config_raw)
+        else:
+            new_config = MAWConfig.model_validate(config_raw)
+        _log.info("Debugger produced new config | agents={}", len(new_config.agents))
+        return new_config
 
     async def resume(
         self,

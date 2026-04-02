@@ -1,4 +1,4 @@
-"""Tests for Controller.run_with_recovery() and the meta-debugger loop."""
+"""Tests for Controller.run_with_recovery() and the fix tools."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pytest
 
 from fedotmas.control._controller import Controller, _is_retryable
 from fedotmas.control._run import ControlledRun, RunError
-from fedotmas.control._strategy import Strategy
+from fedotmas.control.fixes._guardrails import run_config_guardrails
 from fedotmas.core.runner import PipelineResult
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.meta.maw_debugger import ErrorClassification
@@ -41,28 +41,6 @@ def _mock_maw() -> MagicMock:
     return maw
 
 
-def _error_run(config: MAWConfig, agent_name: str = "b", message: str = "Agent 'b' failed: bad output") -> ControlledRun:
-    return ControlledRun(
-        config=config,
-        status="error",
-        state={"a": "result_a"},
-        checkpoints=[Checkpoint(agent_name="a", state={"a": "result_a"}, index=0)],
-        error=RunError(agent_name=agent_name, message=message),
-    )
-
-
-def _success_run(config: MAWConfig) -> ControlledRun:
-    return ControlledRun(
-        config=config,
-        status="success",
-        state={"a": "result_a", "b": "result_b"},
-        checkpoints=[
-            Checkpoint(agent_name="a", state={"a": "result_a"}, index=0),
-            Checkpoint(agent_name="b", state={"a": "result_a", "b": "result_b"}, index=1),
-        ],
-    )
-
-
 # ---------------------------------------------------------------------------
 # _is_retryable unit tests
 # ---------------------------------------------------------------------------
@@ -89,7 +67,6 @@ def test_is_retryable_fatal(msg: str):
     "Invalid JSON response from model",
     "Agent produced empty result",
     "Tool 'nonexistent_tool' not found",
-    # Words that contain fatal substrings but are NOT fatal:
     "The author of the paper disagrees",
     "authorization_flow setup required",
 ])
@@ -98,8 +75,132 @@ def test_is_retryable_true(msg: str):
 
 
 # ---------------------------------------------------------------------------
-# run_with_recovery tests
+# run_config_guardrails unit tests
 # ---------------------------------------------------------------------------
+
+
+def test_guardrails_valid_config():
+    config = _config("a", "b")
+    assert run_config_guardrails(config) == []
+
+
+def test_guardrails_unused_agent():
+    agents = [_agent("a"), _agent("b"), _agent("unused")]
+    pipeline = MAWStepConfig(
+        type="sequential",
+        children=[MAWStepConfig(agent_name="a"), MAWStepConfig(agent_name="b")],
+    )
+    config = MAWConfig(agents=agents, pipeline=pipeline)
+    errors = run_config_guardrails(config)
+    assert len(errors) == 1
+    assert "unused" in errors[0].lower() or "Unused" in errors[0]
+
+
+def test_guardrails_terminal_parallel():
+    agents = [_agent("a"), _agent("b")]
+    pipeline = MAWStepConfig(
+        type="parallel",
+        children=[MAWStepConfig(agent_name="a"), MAWStepConfig(agent_name="b")],
+    )
+    config = MAWConfig(agents=agents, pipeline=pipeline)
+    errors = run_config_guardrails(config)
+    assert any("parallel" in e.lower() for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# fix_instruction tool unit tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fix_instruction_updates_state():
+    from fedotmas.control.fixes._fix_instruction import fix_instruction
+
+    config = _config("a", "b")
+    mock_ctx = MagicMock()
+    mock_ctx.state = {"config": config.model_dump_json()}
+
+    result = await fix_instruction(
+        tool_context=mock_ctx,
+        agent_name="b",
+        new_instruction="Fixed instruction for b",
+        reasoning="instruction was too vague",
+    )
+
+    assert "Updated instruction" in result
+    new_config = MAWConfig.model_validate_json(mock_ctx.state["config"])
+    agent_b = next(a for a in new_config.agents if a.name == "b")
+    assert "Fixed instruction" in agent_b.instruction
+
+
+@pytest.mark.asyncio
+async def test_fix_instruction_unknown_agent():
+    from fedotmas.control.fixes._fix_instruction import fix_instruction
+
+    config = _config("a", "b")
+    mock_ctx = MagicMock()
+    mock_ctx.state = {"config": config.model_dump_json()}
+
+    result = await fix_instruction(
+        tool_context=mock_ctx,
+        agent_name="nonexistent",
+        new_instruction="whatever",
+        reasoning="test",
+    )
+
+    assert "Error" in result
+    assert "nonexistent" in result
+
+
+# ---------------------------------------------------------------------------
+# guardrail_validate_config callback unit tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_guardrail_callback_passes_valid():
+    from fedotmas.control.fixes._guardrails import guardrail_validate_config
+
+    config = _config("a", "b")
+    mock_tool = MagicMock()
+    mock_tool.name = "fix_instruction"
+    mock_ctx = MagicMock()
+    mock_ctx.state = {"config": config.model_dump_json()}
+
+    result = await guardrail_validate_config(
+        mock_tool, {}, mock_ctx, {},
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_guardrail_callback_catches_invalid():
+    from fedotmas.control.fixes._guardrails import guardrail_validate_config
+
+    mock_tool = MagicMock()
+    mock_tool.name = "fix_instruction"
+    mock_ctx = MagicMock()
+    mock_ctx.state = {"config": {"agents": [], "pipeline": {"type": "agent"}}}
+
+    result = await guardrail_validate_config(
+        mock_tool, {}, mock_ctx, {},
+    )
+    assert result is not None
+    assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# run_with_recovery integration tests
+# ---------------------------------------------------------------------------
+
+
+def _mock_debugger_returning(new_config: MAWConfig):
+    """Patch _run_debugger to return a fixed config."""
+    return patch.object(
+        Controller,
+        "_run_debugger",
+        new=AsyncMock(return_value=new_config),
+    )
 
 
 @pytest.mark.asyncio
@@ -107,26 +208,18 @@ async def test_happy_path_fails_then_recovers():
     """Pipeline fails once, debugger fixes the agent, resume succeeds."""
     maw = _mock_maw()
     config = _config("a", "b")
-
-    fixed_agent = _agent("b")
-    fixed_agent = fixed_agent.model_copy(update={"instruction": "Fixed instruction for b"})
+    fixed_config = config.replace_agent(
+        "b", _agent("b").model_copy(update={"instruction": "Fixed b"}),
+    )
 
     with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
-         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta:
+         _mock_debugger_returning(fixed_config):
 
-        # First run fails at agent 'b'
         mock_run.side_effect = [
             RuntimeError("Agent 'b' failed: bad output"),
             PipelineResult(state={"a": "ok", "b": "fixed"}),
         ]
         maw.generate_config.return_value = config
-
-        mock_meta.return_value = MagicMock(
-            raw_output=fixed_agent.model_dump(),
-            prompt_tokens=100,
-            completion_tokens=50,
-            elapsed=1.0,
-        )
 
         ctrl = Controller(maw)
         run = await ctrl.run_with_recovery("test task", max_retries=2)
@@ -141,39 +234,28 @@ async def test_all_retries_exhausted():
     maw = _mock_maw()
     config = _config("a", "b")
 
-    fixed_agent = _agent("b")
-
     with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
-         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta:
+         _mock_debugger_returning(config):
 
-        # Fails every time
         mock_run.side_effect = RuntimeError("Agent 'b' failed: bad output")
         maw.generate_config.return_value = config
-
-        mock_meta.return_value = MagicMock(
-            raw_output=fixed_agent.model_dump(),
-            prompt_tokens=100,
-            completion_tokens=50,
-            elapsed=1.0,
-        )
 
         ctrl = Controller(maw)
         run = await ctrl.run_with_recovery("test task", max_retries=2)
 
     assert run.status == "error"
     assert run.error.agent_name == "b"
-    # Initial run + 2 retries = 3 calls
     assert mock_run.call_count == 3
 
 
 @pytest.mark.asyncio
 async def test_non_retryable_error_regex():
-    """Connection error returns immediately without LLM call."""
+    """Connection error returns immediately without debugger call."""
     maw = _mock_maw()
     config = _config("a", "b")
 
     with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
-         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta:
+         _mock_debugger_returning(config) as mock_debugger:
 
         mock_run.side_effect = RuntimeError("Agent 'b' failed: connection timeout")
         maw.generate_config.return_value = config
@@ -183,7 +265,7 @@ async def test_non_retryable_error_regex():
 
     assert run.status == "error"
     assert mock_run.call_count == 1
-    mock_meta.assert_not_called()
+    mock_debugger.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -193,7 +275,7 @@ async def test_success_on_first_try():
     config = _config("a", "b")
 
     with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
-         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta:
+         _mock_debugger_returning(config) as mock_debugger:
 
         mock_run.return_value = PipelineResult(state={"a": "ok", "b": "ok"})
         maw.generate_config.return_value = config
@@ -202,42 +284,7 @@ async def test_success_on_first_try():
         run = await ctrl.run_with_recovery("test task")
 
     assert run.status == "success"
-    mock_meta.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_debugger_preserves_name_and_output_key():
-    """Fixed agent must keep original name and output_key."""
-    maw = _mock_maw()
-    config = _config("a", "b")
-
-    # Debugger returns agent with WRONG name and output_key
-    bad_fix = MAWAgentConfig(
-        name="b_renamed",
-        instruction="Fixed",
-        output_key="wrong_key",
-    )
-
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
-         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta:
-
-        mock_run.side_effect = [
-            RuntimeError("Agent 'b' failed: bad output"),
-            PipelineResult(state={"a": "ok", "b": "fixed"}),
-        ]
-        maw.generate_config.return_value = config
-
-        mock_meta.return_value = MagicMock(
-            raw_output=bad_fix.model_dump(),
-            prompt_tokens=100,
-            completion_tokens=50,
-            elapsed=1.0,
-        )
-
-        ctrl = Controller(maw)
-        run = await ctrl.run_with_recovery("test task", max_retries=1)
-
-    assert run.status == "success"
+    mock_debugger.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -247,22 +294,13 @@ async def test_config_none_auto_generates():
     config = _config("a", "b")
     maw.generate_config.return_value = config
 
-    fixed_agent = _agent("b")
-
     with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
-         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta:
+         _mock_debugger_returning(config):
 
         mock_run.side_effect = [
             RuntimeError("Agent 'b' failed: bad output"),
             PipelineResult(state={"a": "ok", "b": "fixed"}),
         ]
-
-        mock_meta.return_value = MagicMock(
-            raw_output=fixed_agent.model_dump(),
-            prompt_tokens=100,
-            completion_tokens=50,
-            elapsed=1.0,
-        )
 
         ctrl = Controller(maw)
         run = await ctrl.run_with_recovery("test task")
@@ -273,11 +311,10 @@ async def test_config_none_auto_generates():
 
 @pytest.mark.asyncio
 async def test_llm_classification_retryable():
-    """LLM classifier says retryable → calls diagnose_and_fix."""
+    """LLM classifier says retryable → calls debugger."""
     maw = _mock_maw()
     config = _config("a", "b")
 
-    fixed_agent = _agent("b")
     classification = ErrorClassification(
         retryable=True,
         category="bad_instruction",
@@ -285,7 +322,8 @@ async def test_llm_classification_retryable():
     )
 
     with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
-         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta:
+         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta, \
+         _mock_debugger_returning(config) as mock_debugger:
 
         mock_run.side_effect = [
             RuntimeError("Agent 'b' failed: bad output"),
@@ -293,21 +331,12 @@ async def test_llm_classification_retryable():
         ]
         maw.generate_config.return_value = config
 
-        # First call = classify_error, second call = diagnose_and_fix
-        mock_meta.side_effect = [
-            MagicMock(
-                raw_output=classification.model_dump(),
-                prompt_tokens=50,
-                completion_tokens=20,
-                elapsed=0.5,
-            ),
-            MagicMock(
-                raw_output=fixed_agent.model_dump(),
-                prompt_tokens=100,
-                completion_tokens=50,
-                elapsed=1.0,
-            ),
-        ]
+        mock_meta.return_value = MagicMock(
+            raw_output=classification.model_dump(),
+            prompt_tokens=50,
+            completion_tokens=20,
+            elapsed=0.5,
+        )
 
         ctrl = Controller(maw)
         run = await ctrl.run_with_recovery(
@@ -317,7 +346,7 @@ async def test_llm_classification_retryable():
         )
 
     assert run.status == "success"
-    assert mock_meta.call_count == 2
+    mock_debugger.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -333,7 +362,8 @@ async def test_llm_classification_fatal():
     )
 
     with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
-         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta:
+         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta, \
+         _mock_debugger_returning(config) as mock_debugger:
 
         mock_run.side_effect = RuntimeError("Agent 'b' failed: some error")
         maw.generate_config.return_value = config
@@ -353,8 +383,7 @@ async def test_llm_classification_fatal():
         )
 
     assert run.status == "error"
-    # Only classify_error was called, not diagnose_and_fix
-    assert mock_meta.call_count == 1
+    mock_debugger.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -389,60 +418,8 @@ async def test_error_hint_passed_to_classifier():
             error_hint="agent produces empty output",
         )
 
-    # Check that the classifier was called with instruction containing the hint
     call_kwargs = mock_meta.call_args.kwargs
     assert "agent produces empty output" in call_kwargs["instruction"]
-
-
-@pytest.mark.asyncio
-async def test_error_category_passed_to_debugger():
-    """Verify error_category from classifier reaches diagnose_and_fix."""
-    maw = _mock_maw()
-    config = _config("a", "b")
-
-    fixed_agent = _agent("b")
-    classification = ErrorClassification(
-        retryable=True,
-        category="wrong_tool",
-        reasoning="Agent used nonexistent tool",
-    )
-
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
-         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta:
-
-        mock_run.side_effect = [
-            RuntimeError("Agent 'b' failed: tool not found"),
-            PipelineResult(state={"a": "ok", "b": "fixed"}),
-        ]
-        maw.generate_config.return_value = config
-
-        mock_meta.side_effect = [
-            # classify_error
-            MagicMock(
-                raw_output=classification.model_dump(),
-                prompt_tokens=50,
-                completion_tokens=20,
-                elapsed=0.5,
-            ),
-            # diagnose_and_fix
-            MagicMock(
-                raw_output=fixed_agent.model_dump(),
-                prompt_tokens=100,
-                completion_tokens=50,
-                elapsed=1.0,
-            ),
-        ]
-
-        ctrl = Controller(maw)
-        await ctrl.run_with_recovery(
-            "test task",
-            max_retries=1,
-            llm_error_detection=True,
-        )
-
-    # Second call is diagnose_and_fix — check its instruction contains category
-    debugger_call = mock_meta.call_args_list[1]
-    assert "wrong_tool" in debugger_call.kwargs["instruction"]
 
 
 @pytest.mark.asyncio
@@ -461,9 +438,8 @@ async def test_unknown_agent_skips_recovery():
     config = _config("a", "b")
 
     with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
-         patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta:
+         _mock_debugger_returning(config) as mock_debugger:
 
-        # Error message doesn't match the regex → agent_name="unknown"
         mock_run.side_effect = RuntimeError("Something went very wrong")
         maw.generate_config.return_value = config
 
@@ -473,7 +449,7 @@ async def test_unknown_agent_skips_recovery():
     assert run.status == "error"
     assert run.error.agent_name == "unknown"
     assert mock_run.call_count == 1
-    mock_meta.assert_not_called()
+    mock_debugger.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -502,3 +478,54 @@ async def test_error_hint_without_llm_detection_warns():
         logger.remove(sink_id)
 
     assert any("error_hint is ignored" in w for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_custom_fix_tool_via_di():
+    """A custom fix tool passed via fix_tools is forwarded to _run_debugger."""
+    maw = _mock_maw()
+    config = _config("a", "b")
+
+    async def my_custom_fix(tool_context, agent_name: str) -> str:
+        return "custom fix applied"
+
+    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+         _mock_debugger_returning(config) as mock_debugger:
+
+        mock_run.side_effect = [
+            RuntimeError("Agent 'b' failed: bad output"),
+            PipelineResult(state={"a": "ok", "b": "fixed"}),
+        ]
+        maw.generate_config.return_value = config
+
+        ctrl = Controller(maw)
+        await ctrl.run_with_recovery(
+            "test task",
+            fix_tools=[my_custom_fix],
+        )
+
+    # _run_debugger was called with fix_tools=[my_custom_fix]
+    call_kwargs = mock_debugger.call_args.kwargs
+    assert call_kwargs["fix_tools"] == [my_custom_fix]
+
+
+@pytest.mark.asyncio
+async def test_default_fix_tools_is_none():
+    """When fix_tools not specified, _run_debugger receives None (uses default)."""
+    maw = _mock_maw()
+    config = _config("a", "b")
+
+    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+         _mock_debugger_returning(config) as mock_debugger:
+
+        mock_run.side_effect = [
+            RuntimeError("Agent 'b' failed: bad output"),
+            PipelineResult(state={"a": "ok", "b": "fixed"}),
+        ]
+        maw.generate_config.return_value = config
+
+        ctrl = Controller(maw)
+        await ctrl.run_with_recovery("test task")
+
+    call_kwargs = mock_debugger.call_args.kwargs
+    assert call_kwargs["fix_tools"] is None

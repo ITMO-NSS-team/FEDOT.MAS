@@ -108,3 +108,37 @@ Respond with ONLY valid JSON matching the ErrorClassification schema:
 {"retryable": true/false, "category": "short_category_name", "reasoning": "brief explanation"}
 ```
 """)
+
+DEBUGGER_TOOL_PROMPT = Template("""You are a debugger for a multi-agent pipeline.
+
+An agent has failed during execution. Use the available tools to fix it.
+
+---
+
+## CONTEXT
+
+**Task:** ${task}
+
+**Failed agent:** ${agent_name}
+**Error message:** ${error_message}
+
+**Current pipeline config:**
+${config_json}
+
+**Pipeline state at failure:**
+${state_snapshot}
+
+---
+
+## INSTRUCTIONS
+
+1. Analyze the error and determine what needs to change in the failing agent.
+2. Call the appropriate fix tool to apply the change.
+3. Guardrails will automatically validate after each fix — if validation fails you will see the error and should retry with a corrected fix.
+
+## CONSTRAINTS
+
+- Fix only the failing agent ("${agent_name}"), do not change other agents.
+- Keep the fix minimal — change only what is needed to resolve the error.
+- The agent's ``name`` and ``output_key`` must not change.
+""")
