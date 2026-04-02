@@ -564,6 +564,37 @@ async def test_checks_pass_no_recovery():
 
 
 @pytest.mark.asyncio
+async def test_error_hint_eval_runs_with_zero_retries():
+    """error_hint eval must run even when max_retries=0 (no recovery, but eval happens)."""
+    maw = _mock_maw()
+    config = _config("a", "b")
+
+    eval_fail = OutputEvaluation(
+        passed=False, agent_name="b", reasoning="Output is wrong",
+    )
+
+    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+         patch("fedotmas.meta.maw_debugger.evaluate_output", new=AsyncMock(return_value=eval_fail)) as mock_eval, \
+         _mock_debugger_returning(config) as mock_debugger:
+
+        mock_run.return_value = PipelineResult(state={"a": "ok", "b": "bad"})
+        maw.generate_config.return_value = config
+
+        ctrl = Controller(maw)
+        run = await ctrl.run_with_recovery(
+            "test task",
+            max_retries=0,
+            error_hint="b should return 'fixed'",
+        )
+
+    assert run.status == "error"
+    assert run.error is not None
+    assert run.error.agent_name == "b"
+    mock_eval.assert_called_once()
+    mock_debugger.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_error_hint_triggers_llm_eval():
     """When error_hint is set and pipeline succeeds, LLM eval can trigger recovery."""
     maw = _mock_maw()
@@ -586,6 +617,7 @@ async def test_error_hint_triggers_llm_eval():
         ctrl = Controller(maw)
         run = await ctrl.run_with_recovery(
             "test task",
+            max_retries=1,
             error_hint="b should return 'fixed'",
         )
 

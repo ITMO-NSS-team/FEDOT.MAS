@@ -147,7 +147,7 @@ class Controller:
 
         run = await self.run(task, config=config, plugins=plugins)
 
-        for attempt in range(max_retries):
+        for attempt in range(max_retries + 1):
             if run.status == "success":
                 if error_hint:
                     eval_result = await evaluate_output(
@@ -173,7 +173,12 @@ class Controller:
                                 message=eval_result.reasoning,
                             ),
                         )
-                        continue
+                    else:
+                        return run
+                else:
+                    return run
+
+            if attempt >= max_retries:
                 return run
 
             error = run.error
@@ -190,6 +195,7 @@ class Controller:
             if llm_error_detection:
                 classification = await classify_error(
                     error=error,
+                    config=run.config,
                     error_hint=error_hint,
                     meta_model=self._maw.meta_model,
                     session_service=self._maw._session_service,

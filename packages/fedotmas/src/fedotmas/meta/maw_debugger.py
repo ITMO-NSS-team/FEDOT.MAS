@@ -54,6 +54,7 @@ def _truncate(text: str, limit: int) -> str:
 async def classify_error(
     *,
     error: RunError,
+    config: MAWConfig | None = None,
     error_hint: str | None = None,
     meta_model: str | ModelConfig | None = None,
     session_service: BaseSessionService | None = None,
@@ -66,6 +67,10 @@ async def classify_error(
     )
 
     agent_config_json = "{}"
+    if config is not None:
+        failing = next((a for a in config.agents if a.name == error.agent_name), None)
+        if failing is not None:
+            agent_config_json = _truncate(failing.model_dump_json(indent=2), 2000)
 
     error_hint_section = ""
     if error_hint:
