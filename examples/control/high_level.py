@@ -76,6 +76,4 @@ async def auto_generated():
 
 
 if __name__ == "__main__":
-    # asyncio.run(interactive_debug())
-    # asyncio.run(interactive_break())
-    asyncio.run(auto_generated())
+    asyncio.run(interactive_debug())

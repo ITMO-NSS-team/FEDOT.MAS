@@ -141,13 +141,13 @@ class MAWStepConfig(BaseModel):
         """Auto-fill missing ``type`` based on other fields present."""
         if not isinstance(data, dict):
             return data
-        if "agent_name" in data and data.get("children"):
+        if data.get("agent_name") and data.get("children"):
             raise ValueError("Cannot specify both 'agent_name' and 'children'")
         if "type" not in data:
             data = dict(data)  # avoid mutating the original
-            if "agent_name" in data:
+            if data.get("agent_name"):
                 data["type"] = "agent"
-            elif "children" in data:
+            elif data.get("children"):
                 data["type"] = "sequential"
         return data
 

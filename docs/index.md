@@ -242,4 +242,5 @@ The coordinator reads worker descriptions and decides that `billing_agent` is th
 
 ## What’s Next
 
+* [Meta-debugger](debugger.md) - automatic recovery from agent failures
 * [Optimizer](optimizer.md) - evolutionary optimization of agent prompts

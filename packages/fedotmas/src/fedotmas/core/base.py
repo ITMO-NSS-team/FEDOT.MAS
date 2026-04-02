@@ -65,6 +65,26 @@ class BaseMAS(ABC, Generic[ConfigT]):
         self._resolved_workers: list[ModelConfig] | None = None
 
     @property
+    def meta_model(self) -> str | ModelConfig | None:
+        """The meta-model used for pipeline generation and debugging."""
+        return self._meta_model
+
+    @property
+    def worker_models(self) -> list[str | ModelConfig] | None:
+        """Worker models available for pipeline agents."""
+        return self._worker_models
+
+    @property
+    def temperature(self) -> float | None:
+        """Temperature setting for meta-agent LLM calls."""
+        return self._temperature
+
+    @property
+    def mcp_registry(self) -> dict[str, MCPServerConfig]:
+        """Registry of MCP servers available to this instance."""
+        return self._mcp_registry
+
+    @property
     def mcp_servers(self) -> dict[str, MCPServerConfig]:
         """Registry of MCP servers available to this instance."""
         return dict(self._mcp_registry)
