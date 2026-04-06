@@ -1,0 +1,28 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-sequential-thinking"
+version = "0.1.0"
+description = "MCP proxy server for sequential-thinking (step-by-step reasoning)"
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [ "fastmcp>=2.14.5" ]
+scripts.mcp-sequential-thinking = "mcp_sequential_thinking.server:main"
+
+[dependency-groups]
+dev = [ "pytest" ]
+
+[tool.fedotmas]
+mcp.name = "sequential-thinking"
+mcp.description = """\
+  Step-by-step thinking process for complex problem-solving, analysis, and multi-step reasoning with revision and \
+  branching support.\
+  """
+mcp.tags = [ "reasoning", "thinking", "analysis", "problem-solving" ]

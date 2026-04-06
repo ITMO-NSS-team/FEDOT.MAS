@@ -1,0 +1,25 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-youtube-transcript"
+version = "0.1.0"
+description = "MCP proxy server for YouTube video transcript extraction"
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [ "fastmcp>=2.14.5" ]
+scripts.mcp-youtube-transcript = "mcp_youtube_transcript.server:main"
+
+[dependency-groups]
+dev = [ "pytest" ]
+
+[tool.fedotmas]
+mcp.name = "youtube-transcript"
+mcp.description = "Fetch transcripts, timed transcripts, metadata, and available languages for YouTube videos."
+mcp.tags = [ "youtube", "transcript", "video", "media" ]
