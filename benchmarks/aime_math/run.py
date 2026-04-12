@@ -105,8 +105,12 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
     _log.info("Evaluating baseline on testset ({} tasks)", len(testset))
     baseline_tasks = await evaluate_on(seed_config, testset, maw, scorer)
 
-    _log.info("Evaluating optimized on testset ({} tasks)", len(testset))
-    optimized_tasks = await evaluate_on(opt_result.best_config, testset, maw, scorer)
+    if opt_result.best_config is seed_config or opt_result.best_config == seed_config:
+        _log.info("Best config == seed — reusing baseline results for optimized eval")
+        optimized_tasks = baseline_tasks
+    else:
+        _log.info("Evaluating optimized on testset ({} tasks)", len(testset))
+        optimized_tasks = await evaluate_on(opt_result.best_config, testset, maw, scorer)
 
     baseline_acc = (
         sum(t.correct for t in baseline_tasks) / len(baseline_tasks)
