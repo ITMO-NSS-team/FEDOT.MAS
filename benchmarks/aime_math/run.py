@@ -79,7 +79,12 @@ def report(result: BenchmarkResult) -> None:
 
 
 async def main(settings: AimeMathSettings) -> BenchmarkResult:
-    trainset, valset, testset = load_math_dataset()
+    trainset, valset, testset = load_math_dataset(
+        seed=settings.seed,
+        train_limit=settings.train_limit,
+        val_limit=settings.val_limit,
+        test_limit=settings.test_limit,
+    )
     seed_config = _build_seed_config(settings)
 
     opt_config = OptimizationConfig(
@@ -142,6 +147,9 @@ if __name__ == "__main__":
     parser.add_argument("--max-iterations", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--train-limit", type=int, default=None)
+    parser.add_argument("--val-limit", type=int, default=None)
+    parser.add_argument("--test-limit", type=int, default=None)
     args = parser.parse_args()
 
     overrides = {k: v for k, v in vars(args).items() if v is not None}

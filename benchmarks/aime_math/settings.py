@@ -10,3 +10,6 @@ class AimeMathSettings(BaseSettings):
     minibatch_size: int = 5
     seed: int = 42
     output_dir: str = "outputs/aime_math"
+    train_limit: int | None = None
+    val_limit: int | None = None
+    test_limit: int | None = None
