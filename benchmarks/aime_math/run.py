@@ -84,6 +84,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
         train_limit=settings.train_limit,
         val_limit=settings.val_limit,
         test_limit=settings.test_limit,
+        test_repeats=settings.test_repeats,
     )
     seed_config = _build_seed_config(settings)
 
@@ -150,6 +151,7 @@ if __name__ == "__main__":
     parser.add_argument("--train-limit", type=int, default=None)
     parser.add_argument("--val-limit", type=int, default=None)
     parser.add_argument("--test-limit", type=int, default=None)
+    parser.add_argument("--test-repeats", type=int, default=None)
     args = parser.parse_args()
 
     overrides = {k: v for k, v in vars(args).items() if v is not None}

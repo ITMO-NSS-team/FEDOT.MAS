@@ -12,6 +12,7 @@ def load_math_dataset(
     train_limit: int | None = None,
     val_limit: int | None = None,
     test_limit: int | None = None,
+    test_repeats: int = 1,
 ) -> tuple[list[Task], list[Task], list[Task]]:
     """Load AIME datasets from HuggingFace.
 
@@ -41,5 +42,7 @@ def load_math_dataset(
     ]
     if test_limit:
         testset = testset[:test_limit]
+    if test_repeats > 1:
+        testset = testset * test_repeats
 
     return trainset, valset, testset
