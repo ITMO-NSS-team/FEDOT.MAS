@@ -415,6 +415,9 @@ class Controller:
         except Exception as exc:
             msg = str(exc)
             agent_name = extract_failed_agent_name(msg)
+            _log.error(
+                "Pipeline execution failed | agent={} error={}", agent_name, msg
+            )
             error_state = (
                 dict(checkpoint.checkpoints[-1].state) if checkpoint.checkpoints else {}
             )

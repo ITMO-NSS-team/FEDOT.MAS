@@ -51,8 +51,16 @@ async def evaluate_on(
         _log.info("[{}] Task {}/{} — solving...", stage, i + 1, total)
         try:
             run = await Controller(maw).run(task.input, config=config)
-            scoring = await scorer.evaluate(task, run.state)
-            output = str(run.state.get("answer", ""))
+            if run.status == "error":
+                err_msg = run.error.message if run.error else "unknown error"
+                _log.warning(
+                    "[{}] Task {}/{} pipeline error: {}", stage, i + 1, total, err_msg
+                )
+                scoring = None
+                output = f"ERROR: {err_msg}"
+            else:
+                scoring = await scorer.evaluate(task, run.state)
+                output = str(run.state.get("answer", ""))
         except Exception as exc:
             _log.warning("[{}] Task {}/{} failed: {}", stage, i + 1, total, exc)
             scoring = None
