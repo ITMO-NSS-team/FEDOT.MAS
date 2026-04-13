@@ -42,17 +42,36 @@ async def evaluate_on(
     tasks: list[Task],
     maw: MAW,
     scorer: ExactIntScorer,
+    stage: str = "eval",
 ) -> list[TaskResult]:
     results: list[TaskResult] = []
+    total = len(tasks)
+    correct_count = 0
     for i, task in enumerate(tasks):
+        _log.info("[{}] Task {}/{} — solving...", stage, i + 1, total)
         try:
             run = await Controller(maw).run(task.input, config=config)
             scoring = await scorer.evaluate(task, run.state)
             output = str(run.state.get("answer", ""))
         except Exception as exc:
-            _log.warning("Task {} failed: {}", i, exc)
+            _log.warning("[{}] Task {}/{} failed: {}", stage, i + 1, total, exc)
             scoring = None
             output = f"ERROR: {exc}"
+
+        is_correct = (scoring.score == 1.0) if scoring else False
+        if is_correct:
+            correct_count += 1
+        _log.info(
+            "[{}] Task {}/{} {} | expected={} running_acc={}/{} ({:.1%})",
+            stage,
+            i + 1,
+            total,
+            "✓" if is_correct else "✗",
+            task.expected,
+            correct_count,
+            i + 1,
+            correct_count / (i + 1),
+        )
 
         results.append(
             TaskResult(
@@ -61,7 +80,7 @@ async def evaluate_on(
                 expected=task.expected,
                 output=output,
                 score=scoring.score if scoring else 0.0,
-                correct=(scoring.score == 1.0) if scoring else False,
+                correct=is_correct,
             )
         )
     return results
@@ -103,14 +122,16 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
     )
 
     _log.info("Evaluating baseline on testset ({} tasks)", len(testset))
-    baseline_tasks = await evaluate_on(seed_config, testset, maw, scorer)
+    baseline_tasks = await evaluate_on(seed_config, testset, maw, scorer, stage="baseline")
 
     if opt_result.best_config is seed_config or opt_result.best_config == seed_config:
         _log.info("Best config == seed — reusing baseline results for optimized eval")
         optimized_tasks = baseline_tasks
     else:
         _log.info("Evaluating optimized on testset ({} tasks)", len(testset))
-        optimized_tasks = await evaluate_on(opt_result.best_config, testset, maw, scorer)
+        optimized_tasks = await evaluate_on(
+            opt_result.best_config, testset, maw, scorer, stage="optimized"
+        )
 
     baseline_acc = (
         sum(t.correct for t in baseline_tasks) / len(baseline_tasks)
