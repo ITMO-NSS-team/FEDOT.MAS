@@ -14,3 +14,4 @@ class AimeMathSettings(BaseSettings):
     val_limit: int | None = None
     test_limit: int | None = None
     test_repeats: int = 1
+    concurrency: int = 8

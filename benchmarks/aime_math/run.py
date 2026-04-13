@@ -37,17 +37,18 @@ def _build_seed_config(settings: AimeMathSettings) -> MAWConfig:
     )
 
 
-async def evaluate_on(
+async def _solve_one(
+    i: int,
+    task: Task,
     config: MAWConfig,
-    tasks: list[Task],
     maw: MAW,
     scorer: ExactIntScorer,
-    stage: str = "eval",
-) -> list[TaskResult]:
-    results: list[TaskResult] = []
-    total = len(tasks)
-    correct_count = 0
-    for i, task in enumerate(tasks):
+    sem: asyncio.Semaphore,
+    stage: str,
+    total: int,
+    progress: dict[str, int],
+) -> TaskResult:
+    async with sem:
         _log.info("[{}] Task {}/{} — solving...", stage, i + 1, total)
         try:
             run = await Controller(maw).run(task.input, config=config)
@@ -67,8 +68,9 @@ async def evaluate_on(
             output = f"ERROR: {exc}"
 
         is_correct = (scoring.score == 1.0) if scoring else False
+        progress["done"] += 1
         if is_correct:
-            correct_count += 1
+            progress["correct"] += 1
         _log.info(
             "[{}] Task {}/{} {} | expected={} running_acc={}/{} ({:.1%})",
             stage,
@@ -76,22 +78,40 @@ async def evaluate_on(
             total,
             "✓" if is_correct else "✗",
             task.expected,
-            correct_count,
-            i + 1,
-            correct_count / (i + 1),
+            progress["correct"],
+            progress["done"],
+            progress["correct"] / progress["done"],
         )
 
-        results.append(
-            TaskResult(
-                task_id=str(i),
-                input=task.input[:200],
-                expected=task.expected,
-                output=output,
-                score=scoring.score if scoring else 0.0,
-                correct=is_correct,
-            )
+        return TaskResult(
+            task_id=str(i),
+            input=task.input[:200],
+            expected=task.expected,
+            output=output,
+            score=scoring.score if scoring else 0.0,
+            correct=is_correct,
         )
-    return results
+
+
+async def evaluate_on(
+    config: MAWConfig,
+    tasks: list[Task],
+    maw: MAW,
+    scorer: ExactIntScorer,
+    stage: str = "eval",
+    concurrency: int = 1,
+) -> list[TaskResult]:
+    total = len(tasks)
+    sem = asyncio.Semaphore(max(1, concurrency))
+    progress = {"done": 0, "correct": 0}
+    _log.info(
+        "[{}] Evaluating {} tasks with concurrency={}", stage, total, concurrency
+    )
+    coros = [
+        _solve_one(i, t, config, maw, scorer, sem, stage, total, progress)
+        for i, t in enumerate(tasks)
+    ]
+    return await asyncio.gather(*coros)
 
 
 def report(result: BenchmarkResult) -> None:
@@ -130,7 +150,10 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
     )
 
     _log.info("Evaluating baseline on testset ({} tasks)", len(testset))
-    baseline_tasks = await evaluate_on(seed_config, testset, maw, scorer, stage="baseline")
+    baseline_tasks = await evaluate_on(
+        seed_config, testset, maw, scorer,
+        stage="baseline", concurrency=settings.concurrency,
+    )
 
     if opt_result.best_config is seed_config or opt_result.best_config == seed_config:
         _log.info("Best config == seed — reusing baseline results for optimized eval")
@@ -138,7 +161,8 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
     else:
         _log.info("Evaluating optimized on testset ({} tasks)", len(testset))
         optimized_tasks = await evaluate_on(
-            opt_result.best_config, testset, maw, scorer, stage="optimized"
+            opt_result.best_config, testset, maw, scorer,
+            stage="optimized", concurrency=settings.concurrency,
         )
 
     baseline_acc = (
@@ -185,6 +209,7 @@ if __name__ == "__main__":
     parser.add_argument("--val-limit", type=int, default=None)
     parser.add_argument("--test-limit", type=int, default=None)
     parser.add_argument("--test-repeats", type=int, default=None)
+    parser.add_argument("--concurrency", type=int, default=None)
     args = parser.parse_args()
 
     overrides = {k: v for k, v in vars(args).items() if v is not None}
