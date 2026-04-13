@@ -15,3 +15,4 @@ class AimeMathSettings(BaseSettings):
     test_limit: int | None = None
     test_repeats: int = 1
     concurrency: int = 8
+    max_output_tokens: int | None = None

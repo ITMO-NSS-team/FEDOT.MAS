@@ -31,6 +31,7 @@ def _build_seed_config(settings: AimeMathSettings) -> MAWConfig:
                 instruction=INITIAL_PROMPT,
                 model=settings.solver_model,
                 output_key="answer",
+                max_output_tokens=settings.max_output_tokens,
             ),
         ],
         pipeline=MAWStepConfig(type="agent", agent_name="math_solver"),
@@ -210,6 +211,7 @@ if __name__ == "__main__":
     parser.add_argument("--test-limit", type=int, default=None)
     parser.add_argument("--test-repeats", type=int, default=None)
     parser.add_argument("--concurrency", type=int, default=None)
+    parser.add_argument("--max-output-tokens", type=int, default=None)
     args = parser.parse_args()
 
     overrides = {k: v for k, v in vars(args).items() if v is not None}
