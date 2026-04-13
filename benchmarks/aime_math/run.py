@@ -122,7 +122,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
         minibatch_size=settings.minibatch_size,
     )
 
-    maw = MAW()
+    maw = MAW(worker_models=[settings.solver_model])
     scorer = ExactIntScorer()
     optimizer = Optimizer(maw, scorer=scorer, config=opt_config)
     opt_result = await optimizer.optimize(
