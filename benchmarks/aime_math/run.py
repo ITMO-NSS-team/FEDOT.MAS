@@ -145,26 +145,36 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
 
     maw = MAW(worker_models=[settings.solver_model])
     scorer = ExactIntScorer()
-    optimizer = Optimizer(maw, scorer=scorer, config=opt_config)
-    opt_result = await optimizer.optimize(
-        trainset, seed_config=seed_config, valset=valset
-    )
 
-    _log.info("Evaluating baseline on testset ({} tasks)", len(testset))
-    baseline_tasks = await evaluate_on(
-        seed_config, testset, maw, scorer,
-        stage="baseline", concurrency=settings.concurrency,
-    )
-
-    if opt_result.best_config is seed_config or opt_result.best_config == seed_config:
-        _log.info("Best config == seed — reusing baseline results for optimized eval")
+    if settings.max_iterations == 0:
+        _log.info("max_iterations=0 — skipping optimizer, evaluating seed on testset only")
+        opt_result = None
+        baseline_tasks = await evaluate_on(
+            seed_config, testset, maw, scorer,
+            stage="baseline", concurrency=settings.concurrency,
+        )
         optimized_tasks = baseline_tasks
     else:
-        _log.info("Evaluating optimized on testset ({} tasks)", len(testset))
-        optimized_tasks = await evaluate_on(
-            opt_result.best_config, testset, maw, scorer,
-            stage="optimized", concurrency=settings.concurrency,
+        optimizer = Optimizer(maw, scorer=scorer, config=opt_config)
+        opt_result = await optimizer.optimize(
+            trainset, seed_config=seed_config, valset=valset
         )
+
+        _log.info("Evaluating baseline on testset ({} tasks)", len(testset))
+        baseline_tasks = await evaluate_on(
+            seed_config, testset, maw, scorer,
+            stage="baseline", concurrency=settings.concurrency,
+        )
+
+        if opt_result.best_config is seed_config or opt_result.best_config == seed_config:
+            _log.info("Best config == seed — reusing baseline results for optimized eval")
+            optimized_tasks = baseline_tasks
+        else:
+            _log.info("Evaluating optimized on testset ({} tasks)", len(testset))
+            optimized_tasks = await evaluate_on(
+                opt_result.best_config, testset, maw, scorer,
+                stage="optimized", concurrency=settings.concurrency,
+            )
 
     baseline_acc = (
         sum(t.correct for t in baseline_tasks) / len(baseline_tasks)
@@ -184,12 +194,15 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
             "optimized_accuracy": optimized_acc,
             "improvement": optimized_acc - baseline_acc,
         },
-        iterations=opt_result.iterations,
+        iterations=opt_result.iterations if opt_result else 0,
         cost=CostSummary(
-            prompt_tokens=opt_result.total_prompt_tokens,
-            completion_tokens=opt_result.total_completion_tokens,
-            total_tokens=opt_result.total_prompt_tokens
-            + opt_result.total_completion_tokens,
+            prompt_tokens=opt_result.total_prompt_tokens if opt_result else 0,
+            completion_tokens=opt_result.total_completion_tokens if opt_result else 0,
+            total_tokens=(
+                (opt_result.total_prompt_tokens + opt_result.total_completion_tokens)
+                if opt_result
+                else 0
+            ),
         ),
         per_task=optimized_tasks,
     )
