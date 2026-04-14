@@ -218,11 +218,11 @@ async def process_task(
 
     # Save per-task result
     task_log_dir.mkdir(parents=True, exist_ok=True)
-    with open(task_log_dir / "result.json", "w") as f:
+    with open(task_log_dir / "result.json", "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False, default=str)
 
     leaderboard = {"task_id": task.task_id, "model_answer": answer}
-    with open(task_log_dir / "leaderboard.json", "w") as f:
+    with open(task_log_dir / "leaderboard.json", "w", encoding="utf-8") as f:
         json.dump(leaderboard, f, indent=2)
 
     return result
