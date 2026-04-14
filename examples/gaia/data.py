@@ -104,8 +104,10 @@ class GaiaBenchmark:
     def split_string(
         self,
         s: str,
-        char_list: list[str] = [",", ";"],
+        char_list: list[str] | None = None,
     ) -> list[str]:
+        if char_list is None:
+            char_list = [",", ";"]
         pattern = f"[{''.join(char_list)}]"
         return re.split(pattern, s)
 
