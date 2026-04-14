@@ -127,7 +127,7 @@ def report(result: BenchmarkResult) -> None:
 
 
 async def main(settings: AimeMathSettings) -> BenchmarkResult:
-    trainset, valset, testset = load_math_dataset(
+    trainset, valset, testset, solutions = load_math_dataset(
         seed=settings.seed,
         train_limit=settings.train_limit,
         val_limit=settings.val_limit,
@@ -146,7 +146,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
     )
 
     maw = MAW(worker_models=[settings.solver_model])
-    scorer = ExactIntScorer()
+    scorer = ExactIntScorer(solutions=solutions)
 
     if settings.max_iterations == 0:
         _log.info("max_iterations=0 — skipping optimizer, evaluating seed on testset only")

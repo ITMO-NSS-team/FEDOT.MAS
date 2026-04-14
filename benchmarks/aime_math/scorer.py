@@ -41,22 +41,41 @@ class ExactIntScorer:
 
     Reads the agent answer from ``state[output_key]``, extracts the final
     integer (supports \\boxed{}, "answer is N", or trailing number),
-    and compares against ``int(task.expected)``.
+    and compares against ``int(task.expected)``. If a reference solution
+    is available, it is appended to the feedback (GEPA-style) so that
+    the reflector can learn from worked examples.
     """
 
-    def __init__(self, output_key: str = "answer") -> None:
+    def __init__(
+        self,
+        output_key: str = "answer",
+        solutions: dict[str, str] | None = None,
+    ) -> None:
         self._output_key = output_key
+        self._solutions = solutions or {}
+
+    def _solution_suffix(self, task: Task) -> str:
+        sol = self._solutions.get(task.input)
+        if not sol:
+            return ""
+        return (
+            f" Here's the full step-by-step solution:\n{sol}\n\n"
+            "Think about what takeaways you can learn from this solution "
+            "to improve your future answers and approach to similar problems"
+        )
 
     async def evaluate(self, task: Task, state: dict[str, Any]) -> ScoringResult:
         raw = str(state.get(self._output_key, ""))
         predicted = _extract_int(raw)
+        suffix = self._solution_suffix(task)
 
         if predicted is None:
             return ScoringResult(
                 score=0.0,
                 feedback=(
-                    f"Could not parse integer from answer. "
-                    f"The correct answer is {task.expected!r}."
+                    f"The final answer must be a valid integer and nothing else. "
+                    f"You responded with {raw[:200]!r}, which couldn't be parsed "
+                    f"as an integer. The correct answer is {task.expected!r}.{suffix}"
                 ),
                 reasoning=f"Failed to extract int from: {raw[:200]!r}",
             )
@@ -66,6 +85,6 @@ class ExactIntScorer:
         status = "correct" if correct else "incorrect"
         return ScoringResult(
             score=1.0 if correct else 0.0,
-            feedback=f"Your answer is {status}. The correct answer is {expected!r}.",
+            feedback=f"Your answer is {status}. The correct answer is {expected!r}.{suffix}",
             reasoning=f"Exact int match: {predicted} == {expected} → {correct}",
         )

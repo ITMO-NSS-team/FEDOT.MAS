@@ -13,18 +13,24 @@ def load_math_dataset(
     val_limit: int | None = None,
     test_limit: int | None = None,
     test_repeats: int = 1,
-) -> tuple[list[Task], list[Task], list[Task]]:
+) -> tuple[list[Task], list[Task], list[Task], dict[str, str]]:
     """Load AIME datasets from HuggingFace.
 
-    Returns (trainset, valset, testset) as lists of ``Task``.
+    Returns (trainset, valset, testset, solutions) where ``solutions``
+    maps problem text → step-by-step solution (only available for
+    train/val; test has none).
 
     * Train / val — AI-MO/aimo-validation-aime (AIME 2022-2024), 50/50 split.
     * Test — MathArena/aime_2025.
     """
     train_raw = load_dataset("AI-MO/aimo-validation-aime", "default", split="train")
     all_tasks: list[Task] = []
+    solutions: dict[str, str] = {}
     for item in train_raw:
-        all_tasks.append(Task(input=item["problem"], expected=str(item["answer"])))
+        problem = item["problem"]
+        all_tasks.append(Task(input=problem, expected=str(item["answer"])))
+        if item.get("solution"):
+            solutions[problem] = item["solution"]
 
     random.Random(seed).shuffle(all_tasks)
     mid = len(all_tasks) // 2
@@ -45,4 +51,4 @@ def load_math_dataset(
     if test_repeats > 1:
         testset = testset * test_repeats
 
-    return trainset, valset, testset
+    return trainset, valset, testset, solutions
