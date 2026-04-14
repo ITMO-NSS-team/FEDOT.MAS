@@ -80,7 +80,7 @@ Non-OpenAI models are routed through `_ProxyClient` using `OPENAI_BASE_URL` (e.g
 
 | Model | Accuracy | Time | Cost |
 |---|---|---|---|
-| `gpt-4.1-mini` baseline | — | — | — |
-| `qwen/qwen3-8b` baseline (`--max-output-tokens 2048`) | 56.7% | 30 min | ~$0.21 |
+| `gpt-4.1-mini` baseline (5 runs averaged) | 44.7% | ~5 min/run | ~$0.19/run |
+| `qwen/qwen3-8b` baseline (4 runs averaged) | 63.3% | ~27 min/run | ~$0.22/run |
 
 GEPA paper baselines: `gpt-4.1-mini` = 49.33%, `qwen3-8b` = 27.33%.

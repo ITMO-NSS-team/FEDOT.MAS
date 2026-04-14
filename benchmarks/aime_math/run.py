@@ -139,8 +139,10 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
     opt_config = OptimizationConfig(
         seed=settings.seed,
         max_iterations=settings.max_iterations,
+        max_evaluations=settings.max_evaluations,
         patience=settings.patience,
         minibatch_size=settings.minibatch_size,
+        use_merge=settings.use_merge,
     )
 
     maw = MAW(worker_models=[settings.solver_model])
@@ -217,6 +219,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AIME Math benchmark")
     parser.add_argument("--max-iterations", type=int, default=None)
+    parser.add_argument("--max-evaluations", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--train-limit", type=int, default=None)

@@ -5,9 +5,11 @@ class AimeMathSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AIME_")
 
     solver_model: str = "openai/gpt-4.1-mini"
-    max_iterations: int = 50
-    patience: int = 10
-    minibatch_size: int = 5
+    max_iterations: int = 10_000
+    max_evaluations: int | None = None
+    patience: int = 10_000
+    minibatch_size: int = 3
+    use_merge: bool = False
     seed: int = 42
     output_dir: str = "outputs/aime_math"
     train_limit: int | None = None
