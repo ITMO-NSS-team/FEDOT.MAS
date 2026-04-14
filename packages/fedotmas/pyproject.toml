@@ -24,5 +24,8 @@ dependencies = [
   "rich>=14.3.2"
 ]
 
+[project.optional-dependencies]
+langfuse = ["langfuse>=2.0"]
+
 [tool.uv]
 build-backend.module-name = "fedotmas"

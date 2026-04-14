@@ -213,6 +213,12 @@ class BaseMAS(ABC, Generic[ConfigT]):
             auto_create_session=auto_create_session,
         )
 
+    def _finalize_langfuse(self) -> None:
+        """End Langfuse trace if a LangfusePlugin is among the plugins."""
+        for plugin in self._plugins:
+            if hasattr(plugin, "end_trace"):
+                plugin.end_trace()
+
     async def run(
         self,
         task: str,
@@ -225,4 +231,6 @@ class BaseMAS(ABC, Generic[ConfigT]):
         """
         _log.info("Full-auto run for task: {}", task)
         config = await self.generate_config(task)
-        return await self.build_and_run(config, task, initial_state=initial_state)
+        result = await self.build_and_run(config, task, initial_state=initial_state)
+        self._finalize_langfuse()
+        return result

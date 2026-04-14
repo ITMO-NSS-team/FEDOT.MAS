@@ -12,3 +12,10 @@ __all__ = [
     "LoggingPlugin",
     "SkipCompletedPlugin",
 ]
+
+try:
+    from fedotmas.plugins._langfuse import LangfusePlugin
+
+    __all__.append("LangfusePlugin")
+except ImportError:
+    pass

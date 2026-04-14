@@ -8,6 +8,8 @@ from typing import Any
 
 from google.adk import Runner
 from google.adk.agents import LlmAgent
+from google.adk.apps.app import App
+from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 from pydantic import BaseModel
@@ -42,6 +44,7 @@ async def run_meta_agent_call(
     session_service: BaseSessionService | None = None,
     max_retries: int = 2,
     allowed_models: list[str] | None = None,
+    plugins: list[BasePlugin] | None = None,
 ) -> LLMCallResult:
     """Run a single ADK LlmAgent call and return the structured result.
 
@@ -67,6 +70,7 @@ async def run_meta_agent_call(
                 temperature=temperature,
                 session_service=session_service,
                 allowed_models=allowed_models,
+                plugins=plugins,
             )
         except (RuntimeError, ValueError, TypeError) as e:
             last_error = e
@@ -109,6 +113,7 @@ async def _execute_meta_call(
     temperature: float,
     session_service: BaseSessionService | None = None,
     allowed_models: list[str] | None = None,
+    plugins: list[BasePlugin] | None = None,
 ) -> LLMCallResult:
     """Core execution logic for a single meta-agent LLM call."""
     _log.info(
@@ -151,11 +156,23 @@ async def _execute_meta_call(
     total_completion = 0
     start = time.monotonic()
 
-    async with Runner(
-        app_name=app_name,
-        agent=agent,
-        session_service=session_service,
-    ) as runner:
+    if plugins:
+        runner_kwargs: dict[str, Any] = {
+            "app": App(
+                name=app_name,
+                root_agent=agent,
+                plugins=list(plugins),
+            ),
+            "session_service": session_service,
+        }
+    else:
+        runner_kwargs = {
+            "app_name": app_name,
+            "agent": agent,
+            "session_service": session_service,
+        }
+
+    async with Runner(**runner_kwargs) as runner:
         async for event in runner.run_async(
             user_id="system",
             session_id=session.id,

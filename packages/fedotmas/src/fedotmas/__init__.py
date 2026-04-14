@@ -47,3 +47,10 @@ __all__ = [
     "Optimizer",
     "OptimizationResult",
 ]
+
+try:
+    from fedotmas.plugins._langfuse import LangfusePlugin
+
+    __all__.append("LangfusePlugin")
+except ImportError:
+    pass

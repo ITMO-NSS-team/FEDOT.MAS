@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
@@ -29,6 +30,7 @@ class PipelineGenerator:
         mcp_registry: dict[str, MCPServerConfig] | None = None,
         session_service: BaseSessionService | None = None,
         max_retries: int = 2,
+        plugins: list[BasePlugin] | None = None,
     ) -> None:
         self._resolved_meta, self._resolved_workers, self._temperature = (
             resolve_meta_and_workers(meta_model, worker_models, temperature)
@@ -36,6 +38,7 @@ class PipelineGenerator:
         self._mcp_registry = mcp_registry
         self._session_service = session_service
         self._max_retries = max_retries
+        self._plugins = plugins
         self.result: LLMCallResult | None = None
 
     async def generate(self, task: str, pool: AgentPoolConfig) -> MAWConfig:
@@ -63,6 +66,7 @@ class PipelineGenerator:
             session_service=self._session_service,
             max_retries=self._max_retries,
             allowed_models=[m.model for m in self._resolved_workers],
+            plugins=self._plugins,
         )
 
         config = parse_llm_output(self.result.raw_output, MAWConfig)

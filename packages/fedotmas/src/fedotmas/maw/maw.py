@@ -64,6 +64,7 @@ class MAW(BaseMAS[MAWConfig]):
                 mcp_registry=self._mcp_registry,
                 session_service=self._session_service,
                 max_retries=self._max_retries,
+                plugins=self._plugins,
             )
 
         self._last_meta_result = meta_result
@@ -89,6 +90,7 @@ class MAW(BaseMAS[MAWConfig]):
             mcp_registry=self._mcp_registry,
             session_service=self._session_service,
             max_retries=self._max_retries,
+            plugins=self._plugins,
         )
         pool = await pool_gen.generate(task)
 
@@ -103,6 +105,7 @@ class MAW(BaseMAS[MAWConfig]):
             mcp_registry=self._mcp_registry,
             session_service=self._session_service,
             max_retries=self._max_retries,
+            plugins=self._plugins,
         )
         config = await pipeline_gen.generate(task, pool)
 

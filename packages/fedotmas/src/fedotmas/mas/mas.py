@@ -43,6 +43,7 @@ class MAS(BaseMAS[MASConfig]):
             mcp_registry=self._mcp_registry,
             session_service=self._session_service,
             max_retries=self._max_retries,
+            plugins=self._plugins,
         )
 
         self._last_meta_result = meta_result
