@@ -374,13 +374,13 @@ class LangfusePlugin(BasePlugin):
             self._trace = None
         if self._langfuse is not None:
             self._langfuse.flush()
+            self._langfuse.shutdown()
+            self._langfuse = None
         _log.debug("Langfuse trace ended and flushed")
 
     async def close(self) -> None:
-        if self._trace is not None:
-            self._trace.end()
-            self._trace = None
-        if self._langfuse is not None:
-            self._langfuse.shutdown()
-            self._langfuse = None
-        _log.debug("Langfuse plugin closed")
+        # Do NOT end the trace here — close() is called by each Runner's
+        # __aexit__, but we want the trace to persist across multiple runners
+        # (meta-agent + pipeline).  The trace is finalised by end_trace()
+        # which BaseMAS calls after the full run completes.
+        pass
