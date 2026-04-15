@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from google.adk.agents.base_agent import BaseAgent
-
 from fedotmas.common.logging import get_logger
 from fedotmas.core.base import BaseMAS
+from fedotmas.interfaces.agent import AgentTree
 from fedotmas.mas.builder import build_routing_system
 from fedotmas.mas.models import MASConfig
 from fedotmas.meta.mas_gen import generate_routing_config
@@ -15,8 +14,7 @@ class MAS(BaseMAS[MASConfig]):
     """Multi-Agent System are dynamic LLM-driven routing.
 
     Generates and executes agent systems where a coordinator agent
-    dynamically routes tasks to specialized workers using ADK AutoFlow's
-    ``transfer_to_agent`` mechanism.
+    dynamically routes tasks to specialized workers.
 
     Usage::
 
@@ -43,7 +41,7 @@ class MAS(BaseMAS[MASConfig]):
             mcp_registry=self._mcp_registry,
             session_service=self._session_service,
             max_retries=self._max_retries,
-            plugins=self._plugins,
+            plugins=self._backend_plugins or None,
         )
 
         self._last_meta_result = meta_result
@@ -57,13 +55,13 @@ class MAS(BaseMAS[MASConfig]):
         )
         return config
 
-    def build(self, config: MASConfig) -> BaseAgent:
-        """Build an ADK agent tree with routing from *config*."""
+    def build(self, config: MASConfig) -> AgentTree:
+        """Build a framework-neutral routing descriptor from *config*."""
         _log.info("Building routing system")
-        agent = build_routing_system(
+        agent_tree = build_routing_system(
             config,
             mcp_registry=self._mcp_registry,
             worker_models=self._worker_map(),
         )
         _log.info("Config:\n{}", config)
-        return agent
+        return agent_tree

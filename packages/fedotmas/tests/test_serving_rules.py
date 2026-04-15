@@ -6,7 +6,8 @@ import pytest
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.apps.app import App
 
-from fedotmas._serving import _AgentLoader, serve
+from fedotmas.backends.adk.serving import _AgentLoader, serve_adk
+from fedotmas.interfaces.agent import AgentDescriptor
 
 
 # ---------------------------------------------------------------------------
@@ -61,36 +62,41 @@ class TestLoaderRegister:
 
 
 # ---------------------------------------------------------------------------
-# serve
+# serve_adk
 # ---------------------------------------------------------------------------
 
-_PATCH_TARGET = "fedotmas._serving.get_fast_api_app"
+_PATCH_GET = "fedotmas.backends.adk.serving.get_fast_api_app"
+_PATCH_BUILD = "fedotmas.backends.adk.serving.build_adk_tree"
 
 
 class TestCreateApiApp:
-    @patch(_PATCH_TARGET)
-    def test_default_session_uri(self, mock_get):
-        serve({})
+    @patch(_PATCH_BUILD, return_value=MagicMock(spec=BaseAgent))
+    @patch(_PATCH_GET)
+    def test_default_session_uri(self, mock_get, _mock_build):
+        serve_adk({})
         _, kwargs = mock_get.call_args
         assert kwargs["session_service_uri"] == "memory://"
 
-    @patch(_PATCH_TARGET)
-    def test_custom_session_uri(self, mock_get):
-        serve({}, session_service_uri="sqlite:///s.db")
+    @patch(_PATCH_BUILD, return_value=MagicMock(spec=BaseAgent))
+    @patch(_PATCH_GET)
+    def test_custom_session_uri(self, mock_get, _mock_build):
+        serve_adk({}, session_service_uri="sqlite:///s.db")
         _, kwargs = mock_get.call_args
         assert kwargs["session_service_uri"] == "sqlite:///s.db"
 
-    @patch(_PATCH_TARGET)
-    def test_empty_agents_dict(self, mock_get):
-        serve({})
+    @patch(_PATCH_BUILD, return_value=MagicMock(spec=BaseAgent))
+    @patch(_PATCH_GET)
+    def test_empty_agents_dict(self, mock_get, _mock_build):
+        serve_adk({})
         _, kwargs = mock_get.call_args
         loader = kwargs["agent_loader"]
         assert isinstance(loader, _AgentLoader)
         assert loader.list_agents() == []
 
-    @patch(_PATCH_TARGET)
-    def test_all_kwargs_forwarded(self, mock_get):
-        serve(
+    @patch(_PATCH_BUILD, return_value=MagicMock(spec=BaseAgent))
+    @patch(_PATCH_GET)
+    def test_all_kwargs_forwarded(self, mock_get, _mock_build):
+        serve_adk(
             {},
             session_service_uri="pg://db",
             memory_service_uri="mem://m",
@@ -108,13 +114,14 @@ class TestCreateApiApp:
         assert kwargs["host"] == "0.0.0.0"
         assert kwargs["port"] == 9000
 
-    @patch(_PATCH_TARGET)
-    def test_agents_registered_in_loader(self, mock_get):
-        agent_a = MagicMock(spec=BaseAgent)
-        agent_b = MagicMock(spec=BaseAgent)
-        serve({"a": agent_a, "b": agent_b})
+    @patch(_PATCH_BUILD, return_value=MagicMock(spec=BaseAgent))
+    @patch(_PATCH_GET)
+    def test_agents_registered_in_loader(self, mock_get, _mock_build):
+        tree_a = AgentDescriptor(name="a", instruction="do a")
+        tree_b = AgentDescriptor(name="b", instruction="do b")
+        serve_adk({"a": tree_a, "b": tree_b})
         _, kwargs = mock_get.call_args
         loader: _AgentLoader = kwargs["agent_loader"]
         assert isinstance(loader, _AgentLoader)
-        assert loader.load_agent("a") is agent_a
-        assert loader.load_agent("b") is agent_b
+        # The loader should have both agents registered (as App wrappers)
+        assert sorted(loader.list_agents()) == ["a", "b"]

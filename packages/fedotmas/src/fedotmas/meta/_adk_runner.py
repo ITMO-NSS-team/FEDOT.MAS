@@ -1,35 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-import time
-import uuid
-from dataclasses import dataclass
 from typing import Any
 
-from google.adk import Runner
-from google.adk.agents import LlmAgent
-from google.adk.apps.app import App
-from google.adk.plugins import BasePlugin
-from google.adk.sessions import BaseSessionService, InMemorySessionService
-from google.genai import types
 from pydantic import BaseModel
 
+from fedotmas.backends import get_backend
 from fedotmas.common.logging import get_logger
 from fedotmas._settings import ModelConfig
-from fedotmas.common.llm import make_llm
+from fedotmas.interfaces.runner import SingleAgentResult
 from fedotmas.meta._helpers import validate_allowed_models
 
 _log = get_logger("fedotmas.meta._adk_runner")
 
 
-@dataclass
-class LLMCallResult:
-    """Result of a single ADK LlmAgent call."""
-
-    raw_output: Any
-    prompt_tokens: int
-    completion_tokens: int
-    elapsed: float
+# Keep LLMCallResult as a compatibility alias
+LLMCallResult = SingleAgentResult
 
 
 async def run_meta_agent_call(
@@ -41,12 +27,13 @@ async def run_meta_agent_call(
     output_key: str,
     model: ModelConfig,
     temperature: float,
-    session_service: BaseSessionService | None = None,
+    session_service: Any | None = None,
     max_retries: int = 2,
     allowed_models: list[str] | None = None,
-    plugins: list[BasePlugin] | None = None,
-) -> LLMCallResult:
-    """Run a single ADK LlmAgent call and return the structured result.
+    plugins: list[Any] | None = None,
+    backend: str = "adk",
+) -> SingleAgentResult:
+    """Run a single LLM agent call and return the structured result.
 
     Used by both single-stage ``generate_pipeline_config`` and the two-stage
     ``PoolGenerator`` / ``PipelineGenerator``.
@@ -60,18 +47,28 @@ async def run_meta_agent_call(
     effective_message = user_message
     for attempt in range(max_retries + 1):
         try:
-            return await _execute_meta_call(
+            be = get_backend(backend)
+            runner = be.create_runner(session_service=session_service)
+            result = await runner.run_single_agent(
                 agent_name=agent_name,
                 instruction=instruction,
                 user_message=effective_message,
-                output_schema=output_schema,
-                output_key=output_key,
                 model=model,
                 temperature=temperature,
-                session_service=session_service,
-                allowed_models=allowed_models,
-                plugins=plugins,
+                output_schema=output_schema,
+                output_key=output_key,
+                backend_plugins=plugins,
             )
+
+            if result.raw_output is None:
+                raise RuntimeError(
+                    f"{agent_name} did not produce '{output_key}' in session state"
+                )
+
+            if allowed_models:
+                validate_allowed_models(result.raw_output, allowed_models)
+
+            return result
         except (RuntimeError, ValueError, TypeError) as e:
             last_error = e
             if attempt < max_retries:
@@ -100,150 +97,3 @@ async def run_meta_agent_call(
     if last_error is None:
         raise RuntimeError(f"{agent_name}: retry loop exited without result or error")
     raise last_error
-
-
-async def _execute_meta_call(
-    *,
-    agent_name: str,
-    instruction: str,
-    user_message: str,
-    output_schema: type[BaseModel],
-    output_key: str,
-    model: ModelConfig,
-    temperature: float,
-    session_service: BaseSessionService | None = None,
-    allowed_models: list[str] | None = None,
-    plugins: list[BasePlugin] | None = None,
-) -> LLMCallResult:
-    """Core execution logic for a single meta-agent LLM call."""
-    _log.info(
-        "{} | model={} temperature={}",
-        agent_name,
-        model.model,
-        temperature,
-    )
-
-    llm = make_llm(model)
-
-    agent = LlmAgent(
-        name=agent_name,
-        model=llm,
-        instruction=instruction,
-        output_schema=output_schema,
-        output_key=output_key,
-        generate_content_config=types.GenerateContentConfig(
-            temperature=temperature,
-        ),
-    )
-
-    session_service = session_service or InMemorySessionService()
-    session_id = uuid.uuid4().hex
-    app_name = f"fedotmas_{agent_name}"
-
-    session = await session_service.create_session(
-        app_name=app_name,
-        user_id="system",
-        session_id=session_id,
-        state={},
-    )
-
-    message = types.Content(
-        role="user",
-        parts=[types.Part.from_text(text=user_message)],
-    )
-
-    total_prompt = 0
-    total_completion = 0
-    start = time.monotonic()
-
-    if plugins:
-        runner_kwargs: dict[str, Any] = {
-            "app": App(
-                name=app_name,
-                root_agent=agent,
-                plugins=list(plugins),
-            ),
-            "session_service": session_service,
-        }
-    else:
-        runner_kwargs = {
-            "app_name": app_name,
-            "agent": agent,
-            "session_service": session_service,
-        }
-
-    async with Runner(**runner_kwargs) as runner:
-        async for event in runner.run_async(
-            user_id="system",
-            session_id=session.id,
-            new_message=message,
-        ):
-            if event.partial:
-                continue
-
-            if event.usage_metadata:
-                um = event.usage_metadata
-                prompt = um.prompt_token_count or 0
-                completion = um.candidates_token_count or 0
-                total_prompt += prompt
-                total_completion += completion
-                if prompt or completion:
-                    _log.info("Tokens | prompt={} completion={}", prompt, completion)
-
-            if event.content and event.content.parts:
-                texts = [p.text for p in event.content.parts if p.text]
-                if texts:
-                    _log.debug("Response preview | text={}", texts[0][:200])
-
-            if event.error_code:
-                _log.error(
-                    "LLM error | agent={} code={} msg={}",
-                    agent_name,
-                    event.error_code,
-                    event.error_message,
-                )
-                raise RuntimeError(
-                    f"{agent_name} LLM error {event.error_code}: {event.error_message}"
-                )
-
-    elapsed = time.monotonic() - start
-    _log.info(
-        "{} complete | elapsed={:.1f}s prompt={} completion={}",
-        agent_name,
-        elapsed,
-        total_prompt,
-        total_completion,
-    )
-
-    # Retrieve the structured output from session state.
-    final_session = await session_service.get_session(
-        app_name=app_name,
-        user_id="system",
-        session_id=session.id,
-    )
-    if final_session is None:
-        raise RuntimeError(
-            f"{agent_name}: session lost after execution — results unavailable"
-        )
-
-    raw_output = final_session.state.get(output_key)
-    _log.debug(
-        "Raw output | key={} type={} preview={}",
-        output_key,
-        type(raw_output).__name__,
-        str(raw_output)[:500],
-    )
-    if raw_output is None:
-        raise RuntimeError(
-            f"{agent_name} did not produce '{output_key}' in session state"
-        )
-
-    if allowed_models:
-        validate_allowed_models(raw_output, allowed_models)
-
-    return LLMCallResult(
-        raw_output=raw_output,
-        prompt_tokens=total_prompt,
-        completion_tokens=total_completion,
-        elapsed=elapsed,
-    )

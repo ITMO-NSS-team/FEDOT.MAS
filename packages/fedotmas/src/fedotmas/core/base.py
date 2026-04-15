@@ -4,15 +4,12 @@ from abc import ABC, abstractmethod
 from typing import Any, Generic, Literal, TypeVar
 
 from fastapi import FastAPI
-from google.adk.agents.base_agent import BaseAgent
-from google.adk.apps.app import App
-from google.adk.memory import BaseMemoryService
-from google.adk.plugins import BasePlugin
-from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger, setup_logging
 from fedotmas._settings import ModelConfig, resolve_model_config
-from fedotmas.core.runner import PipelineResult, run_pipeline
+from fedotmas.interfaces.agent import AgentTree
+from fedotmas.interfaces.middleware import MiddlewareProtocol
+from fedotmas.interfaces.runner import PipelineResult
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
 from fedotmas.meta._result import MetaAgentResult
 from fedotmas.plugins import LoggingPlugin
@@ -26,8 +23,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
     """Abstract base class for multi-agent system orchestration.
 
     Provides shared infrastructure: logging, MCP registry, model resolution,
-    token tracking, and common execution methods (build_app, build_and_run,
-    serve, run).
+    token tracking, and common execution methods (build_and_run, serve, run).
 
     Subclasses implement ``generate_config()`` and ``build()`` for their
     specific orchestration mode.
@@ -43,10 +39,13 @@ class BaseMAS(ABC, Generic[ConfigT]):
         | dict[str, MCPServerConfig]
         | Literal["all"]
         | None = None,
-        session_service: BaseSessionService | None = None,
-        memory_service: BaseMemoryService | None = None,
-        plugins: list[BasePlugin] | None = None,
+        session_service: Any | None = None,
+        memory_service: Any | None = None,
+        middlewares: list[MiddlewareProtocol] | None = None,
+        plugins: list[Any] | None = None,
+        backend_plugins: list[Any] | None = None,
         max_retries: int = 3,
+        backend: str = "adk",
     ) -> None:
         setup_logging()
         self._meta_model = meta_model
@@ -55,10 +54,22 @@ class BaseMAS(ABC, Generic[ConfigT]):
         self._mcp_registry = resolve_mcp_registry(mcp_servers)
         self._session_service = session_service
         self._memory_service = memory_service
-        if plugins is not None:
-            self._plugins = list(plugins)
+        self._backend_name = backend
+
+        # Middleware (backend-agnostic lifecycle hooks)
+        if middlewares is not None:
+            self._middlewares: list[MiddlewareProtocol] = list(middlewares)
         else:
-            self._plugins = [LoggingPlugin()]
+            self._middlewares = [LoggingPlugin()]
+
+        # Backend-specific plugins (e.g. LangfusePlugin for ADK)
+        self._backend_plugins: list[Any] = list(backend_plugins or [])
+
+        # Legacy 'plugins' parameter — treat as backend_plugins for
+        # backward compatibility with code passing ADK BasePlugin instances
+        if plugins is not None:
+            self._backend_plugins.extend(plugins)
+
         self._max_retries = max_retries
         self._last_result: PipelineResult | None = None
         self._last_meta_result: MetaAgentResult | None = None
@@ -153,16 +164,21 @@ class BaseMAS(ABC, Generic[ConfigT]):
             return {m.model: m for m in self._resolved_workers}
         return None
 
+    def _get_runner(self) -> Any:
+        """Create a backend runner instance."""
+        from fedotmas.backends import get_backend
+
+        be = get_backend(self._backend_name)
+        return be.create_runner(
+            session_service=self._session_service,
+            memory_service=self._memory_service,
+        )
+
     @abstractmethod
     async def generate_config(self, task: str) -> ConfigT: ...
 
     @abstractmethod
-    def build(self, config: ConfigT) -> BaseAgent: ...
-
-    def build_app(self, config: ConfigT, *, name: str = "fedotmas") -> App:
-        """Build an ADK ``App`` (agent tree + plugins) from *config*."""
-        agent = self.build(config)
-        return App(name=name, root_agent=agent, plugins=list(self._plugins))
+    def build(self, config: ConfigT) -> AgentTree: ...
 
     async def build_and_run(
         self,
@@ -171,18 +187,19 @@ class BaseMAS(ABC, Generic[ConfigT]):
         *,
         initial_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Build the ADK agent tree from *config* and execute it.
+        """Build the agent tree from *config* and execute it.
 
         Returns the final ``session.state`` dict.
         """
-        app = self.build_app(config)
+        agent_tree = self.build(config)
+        runner = self._get_runner()
         _log.info("Running pipeline")
-        self._last_result = await run_pipeline(
-            app,
+        self._last_result = await runner.run_pipeline(
+            agent_tree,
             user_query,
-            session_service=self._session_service,
-            memory_service=self._memory_service,
             initial_state=initial_state,
+            middlewares=self._middlewares,
+            backend_plugins=self._backend_plugins,
         )
         return self._last_result.state
 
@@ -198,12 +215,15 @@ class BaseMAS(ABC, Generic[ConfigT]):
         allow_origins: list[str] | None = None,
         auto_create_session: bool = False,
     ) -> FastAPI:
-        """Build an ``App`` from *config* and create a FastAPI server."""
-        from fedotmas._serving import serve as _serve
+        """Build an agent tree from *config* and create a FastAPI server."""
+        agent_tree = self.build(config)
 
-        app = self.build_app(config, name=name)
-        return _serve(
-            {name: app},
+        from fedotmas.backends.adk.serving import serve_adk
+
+        return serve_adk(
+            {name: agent_tree},
+            middlewares=self._middlewares,
+            backend_plugins=self._backend_plugins,
             session_service=self._session_service,
             session_service_uri=session_service_uri,
             web=web,
@@ -215,7 +235,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
 
     def _finalize_langfuse(self) -> None:
         """End Langfuse trace if a LangfusePlugin is among the plugins."""
-        for plugin in self._plugins:
+        for plugin in self._backend_plugins:
             if hasattr(plugin, "end_trace"):
                 plugin.end_trace()
 

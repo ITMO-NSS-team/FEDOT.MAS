@@ -1,16 +1,22 @@
-"""Builder edge-case tests — patch ADK constructors, test logic."""
+"""Builder edge-case tests — descriptor-based builder logic."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
 
 from fedotmas._settings import ModelConfig
+from fedotmas.interfaces.agent import (
+    AgentDescriptor,
+    LoopDescriptor,
+    ParallelDescriptor,
+    SequentialDescriptor,
+)
 from fedotmas.maw.builder import (
-    _inject_exit_loop,
-    _resolve_llm,
+    _find_exit_loop_agent,
+    _resolve_model,
     build,
 )
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig
@@ -20,7 +26,7 @@ from fedotmas.maw.models import MAWAgentConfig, MAWConfig
 
 
 class TestNormalizeAngleBrackets:
-    """Rule 1: <var> → {var} (via MAWAgentConfig)."""
+    """Rule 1: <var> -> {var} (via MAWAgentConfig)."""
 
     def _make(self, instruction: str) -> MAWAgentConfig:
         return MAWAgentConfig(name="t", instruction=instruction, output_key="k")
@@ -36,7 +42,7 @@ class TestNormalizeAngleBrackets:
 
 
 class TestMakeVarsOptional:
-    """Rule 2: {var} → {var?} (via MAWAgentConfig)."""
+    """Rule 2: {var} -> {var?} (via MAWAgentConfig)."""
 
     def _make(self, instruction: str) -> MAWAgentConfig:
         return MAWAgentConfig(name="t", instruction=instruction, output_key="k")
@@ -56,7 +62,7 @@ class TestMakeVarsOptional:
 
 
 class TestAngleThenOptionalCombo:
-    """Rule 3: <var> → {var} → {var?} chain (via MAWAgentConfig)."""
+    """Rule 3: <var> -> {var} -> {var?} chain (via MAWAgentConfig)."""
 
     def test_chain(self):
         cfg = MAWAgentConfig(
@@ -71,19 +77,19 @@ class TestAngleThenOptionalCombo:
 
 
 class TestNormalizeModelNameDefault:
-    """Rule 4: None/empty model → stays None (resolved later by _resolve_llm)."""
+    """Rule 4: None/empty model -> stays None (resolved later by _resolve_model)."""
 
     def test_none_model(self):
         cfg = MAWAgentConfig(name="t", instruction="x", output_key="k", model=None)
         assert cfg.model is None
 
     def test_resolve_none_gives_default(self):
-        result = _resolve_llm(None, None)
+        result = _resolve_model(None, None)
         assert result == "openai/gpt-oss-120b"
 
 
 class TestNormalizeModelNamePrefix:
-    """Rule 5: bare model name without provider prefix → ValueError."""
+    """Rule 5: bare model name without provider prefix -> ValueError."""
 
     def test_bare_name(self):
         with pytest.raises(ValidationError, match="must include a provider prefix"):
@@ -102,117 +108,87 @@ class TestNormalizeModelNamePrefix:
         assert cfg.model == "gemini/flash"
 
 
-# ---- Rules 6-7: _resolve_llm ----
+# ---- Rules 6-7: _resolve_model ----
 
 
-class TestResolveLlmCustomEndpoint:
-    """Rule 6: model in worker_models → delegates to make_llm factory."""
+class TestResolveModelCustomEndpoint:
+    """Rule 6: model in worker_models -> returns the ModelConfig."""
 
-    @patch("fedotmas.maw.builder.make_llm")
-    def test_custom_endpoint(self, mock_factory):
+    def test_custom_endpoint(self):
         cfg = ModelConfig(model="my-model", api_base="http://localhost:9090")
-        _resolve_llm("my-model", {"my-model": cfg})
-        mock_factory.assert_called_once_with(cfg)
+        result = _resolve_model("my-model", {"my-model": cfg})
+        assert result is cfg
 
-    @patch("fedotmas.maw.builder.make_llm")
-    def test_custom_with_api_key(self, mock_factory):
+    def test_custom_with_api_key(self):
         cfg = ModelConfig(model="m", api_base="http://x", api_key="sk-123")
-        _resolve_llm("m", {"m": cfg})
-        mock_factory.assert_called_once_with(cfg)
+        result = _resolve_model("m", {"m": cfg})
+        assert result is cfg
 
 
-class TestResolveLlmNoCustom:
-    """Rule 7: model not in worker_models → plain string."""
+class TestResolveModelNoCustom:
+    """Rule 7: model not in worker_models -> plain string."""
 
     def test_not_in_registry(self):
         other = ModelConfig(model="other")
-        result = _resolve_llm("openai/gpt-4o", {"other": other})
+        result = _resolve_model("openai/gpt-4o", {"other": other})
         assert result == "openai/gpt-4o"
 
 
-# ---- Rules 8-10: _inject_exit_loop ----
+# ---- Rules 8-10: _find_exit_loop_agent ----
 
 
-class TestInjectExitLoop:
-    """Rules 8-10: exit_loop injection into loop children."""
+class TestFindExitLoopAgent:
+    """Rules 8-10: exit_loop agent discovery in loop children."""
 
-    def _make_mock_llm_agent(self, name: str, tools: list | None = None) -> MagicMock:
-        from google.adk.agents import LlmAgent
+    def _make_agent(self, name: str) -> AgentDescriptor:
+        return AgentDescriptor(name=name, instruction="do stuff", output_key="k")
 
-        agent = MagicMock(spec=LlmAgent)
-        agent.name = name
-        agent.tools = tools if tools is not None else []
-        return agent
+    def _make_seq(self, name: str) -> SequentialDescriptor:
+        return SequentialDescriptor(name=name, children=[])
 
-    def _make_mock_seq_agent(self, name: str) -> MagicMock:
-        from google.adk.agents import SequentialAgent
+    def test_finds_last_agent(self):
+        """Rule 8: last AgentDescriptor is selected."""
+        a = self._make_agent("a")
+        result = _find_exit_loop_agent([a])
+        assert result == "a"
 
-        agent = MagicMock(spec=SequentialAgent)
-        agent.name = name
-        agent.tools = []
-        return agent
+    def test_skips_non_agent(self):
+        """Rule 10: SequentialDescriptor is not selected."""
+        seq = self._make_seq("s")
+        result = _find_exit_loop_agent([seq])
+        assert result is None
 
-    def test_injects_exit_loop(self):
-        """Rule 8: last LlmAgent gets exit_loop."""
-        from google.adk.tools.exit_loop_tool import exit_loop
+    def test_finds_last_llm(self):
+        """exit_loop goes to the *last* AgentDescriptor only."""
+        a1 = self._make_agent("first")
+        a2 = self._make_agent("second")
+        result = _find_exit_loop_agent([a1, a2])
+        assert result == "second"
 
-        agent = self._make_mock_llm_agent("a", tools=[])
-        _inject_exit_loop([agent])
-        assert exit_loop in agent.tools
-
-    def test_skip_if_already_has_exit_loop(self):
-        """Rule 9: no duplicate exit_loop."""
-        from google.adk.tools.exit_loop_tool import exit_loop
-
-        agent = self._make_mock_llm_agent("a", tools=[exit_loop])
-        _inject_exit_loop([agent])
-        assert agent.tools.count(exit_loop) == 1
-
-    def test_skips_non_llm_agent(self):
-        """Rule 10: SequentialAgent is not modified."""
-        seq = self._make_mock_seq_agent("s")
-        original_tools = list(seq.tools)
-        _inject_exit_loop([seq])
-        assert seq.tools == original_tools
-
-    def test_injects_into_last_llm(self):
-        """exit_loop goes into the *last* LlmAgent only."""
-        from google.adk.tools.exit_loop_tool import exit_loop
-
-        a1 = self._make_mock_llm_agent("first", tools=[])
-        a2 = self._make_mock_llm_agent("second", tools=[])
-        _inject_exit_loop([a1, a2])
-        assert exit_loop in a2.tools
-        assert exit_loop not in a1.tools
-
-    def test_none_tools_becomes_list(self):
-        """Agent with tools=None gets [exit_loop]."""
-        from google.adk.tools.exit_loop_tool import exit_loop
-
-        agent = self._make_mock_llm_agent("a", tools=None)
-        _inject_exit_loop([agent])
-        assert agent.tools == [exit_loop]
+    def test_empty_list_returns_none(self):
+        """No children -> None."""
+        result = _find_exit_loop_agent([])
+        assert result is None
 
 
 # ---- Rules 11-15: build() ----
 
 
 class TestBuildSequentialTree:
-    """Rule 11: MAWConfig → SequentialAgent with children."""
+    """Rule 11: MAWConfig -> SequentialDescriptor with children."""
 
     @patch("fedotmas.maw.builder.create_toolset", return_value=[])
     def test_sequential(self, _mock_toolset, simple_pipeline_config):
         root = build(simple_pipeline_config)
-        from google.adk.agents import SequentialAgent
 
-        assert isinstance(root, SequentialAgent)
-        assert len(root.sub_agents) == 2
-        assert root.sub_agents[0].name == "alpha"
-        assert root.sub_agents[1].name == "beta"
+        assert isinstance(root, SequentialDescriptor)
+        assert len(root.children) == 2
+        assert root.children[0].name == "alpha"
+        assert root.children[1].name == "beta"
 
 
 class TestBuildParallelTree:
-    """Rule 12: parallel type → ParallelAgent."""
+    """Rule 12: parallel type -> ParallelDescriptor."""
 
     @patch("fedotmas.maw.builder.create_toolset", return_value=[])
     def test_parallel(self, _mock_toolset):
@@ -232,14 +208,13 @@ class TestBuildParallelTree:
             }
         )
         root = build(config)
-        from google.adk.agents import ParallelAgent
 
-        assert isinstance(root, ParallelAgent)
-        assert len(root.sub_agents) == 2
+        assert isinstance(root, ParallelDescriptor)
+        assert len(root.children) == 2
 
 
 class TestBuildNestedSeqPar:
-    """Rule 13: nested sequential → parallel."""
+    """Rule 13: nested sequential -> parallel."""
 
     @patch("fedotmas.maw.builder.create_toolset", return_value=[])
     def test_nested(self, _mock_toolset):
@@ -266,11 +241,10 @@ class TestBuildNestedSeqPar:
             }
         )
         root = build(config)
-        from google.adk.agents import ParallelAgent, SequentialAgent
 
-        assert isinstance(root, SequentialAgent)
-        assert isinstance(root.sub_agents[1], ParallelAgent)
-        assert len(root.sub_agents[1].sub_agents) == 2
+        assert isinstance(root, SequentialDescriptor)
+        assert isinstance(root.children[1], ParallelDescriptor)
+        assert len(root.children[1].children) == 2
 
 
 class TestBuildLoopMaxIterations:
@@ -297,14 +271,13 @@ class TestBuildLoopMaxIterations:
             }
         )
         root = build(config)
-        from google.adk.agents import LoopAgent
 
-        assert isinstance(root, LoopAgent)
+        assert isinstance(root, LoopDescriptor)
         assert root.max_iterations == 5
 
 
 class TestBuildLoopDefaultMaxIterations:
-    """Rule 15: loop without max_iterations → settings default."""
+    """Rule 15: loop without max_iterations -> settings default."""
 
     @patch("fedotmas.maw.builder.create_toolset", return_value=[])
     @patch("fedotmas.maw.builder.get_max_loop_iterations", return_value=10)
@@ -327,7 +300,6 @@ class TestBuildLoopDefaultMaxIterations:
             }
         )
         root = build(config)
-        from google.adk.agents import LoopAgent
 
-        assert isinstance(root, LoopAgent)
+        assert isinstance(root, LoopDescriptor)
         assert root.max_iterations == 10

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from google.adk.agents.base_agent import BaseAgent
-
 from fedotmas.common.logging import get_logger
 from fedotmas._settings import resolve_model_config
 from fedotmas.core.base import BaseMAS
+from fedotmas.interfaces.agent import AgentTree
 from fedotmas.maw.builder import build
 from fedotmas.maw.models import MAWConfig
 from fedotmas.meta._result import MetaAgentResult
@@ -64,7 +63,7 @@ class MAW(BaseMAS[MAWConfig]):
                 mcp_registry=self._mcp_registry,
                 session_service=self._session_service,
                 max_retries=self._max_retries,
-                plugins=self._plugins,
+                plugins=self._backend_plugins or None,
             )
 
         self._last_meta_result = meta_result
@@ -90,7 +89,7 @@ class MAW(BaseMAS[MAWConfig]):
             mcp_registry=self._mcp_registry,
             session_service=self._session_service,
             max_retries=self._max_retries,
-            plugins=self._plugins,
+            plugins=self._backend_plugins or None,
         )
         pool = await pool_gen.generate(task)
 
@@ -105,7 +104,7 @@ class MAW(BaseMAS[MAWConfig]):
             mcp_registry=self._mcp_registry,
             session_service=self._session_service,
             max_retries=self._max_retries,
-            plugins=self._plugins,
+            plugins=self._backend_plugins or None,
         )
         config = await pipeline_gen.generate(task, pool)
 
@@ -125,13 +124,13 @@ class MAW(BaseMAS[MAWConfig]):
             + (pipe_r.elapsed if pipe_r else 0.0),
         )
 
-    def build(self, config: MAWConfig) -> BaseAgent:
-        """Build an ADK agent tree from *config*."""
+    def build(self, config: MAWConfig) -> AgentTree:
+        """Build a framework-neutral agent tree from *config*."""
         _log.info("Building agent tree")
-        agent = build(
+        agent_tree = build(
             config,
             mcp_registry=self._mcp_registry,
             worker_models=self._worker_map(),
         )
         _log.info("Config:\n{}", config)
-        return agent
+        return agent_tree

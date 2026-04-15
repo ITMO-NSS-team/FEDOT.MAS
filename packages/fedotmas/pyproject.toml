@@ -15,7 +15,6 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-  "google-adk>=1.26",
   "litellm>=1.80.16",
   "loguru>=0.7.3",
   "platformdirs>=4.9.2",
@@ -25,7 +24,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+adk = ["google-adk>=1.26"]
 langfuse = ["langfuse>=2.0"]
+all = ["google-adk>=1.26", "langfuse>=2.0"]
 
 [tool.uv]
 build-backend.module-name = "fedotmas"

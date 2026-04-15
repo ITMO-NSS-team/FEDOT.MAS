@@ -3,11 +3,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from google.adk.agents.base_agent import BaseAgent
-from google.adk.agents.callback_context import CallbackContext
-from google.adk.plugins import BasePlugin
-from google.genai import types
-
 from fedotmas.common.logging import get_logger
 from fedotmas.control._run import (
     ControlledRun,
@@ -15,7 +10,15 @@ from fedotmas.control._run import (
     RunError,
     extract_failed_agent_name,
 )
-from fedotmas.core.runner import run_pipeline
+from fedotmas.interfaces.agent import (
+    AgentDescriptor,
+    AgentTree,
+    LoopDescriptor,
+    ParallelDescriptor,
+    RoutingDescriptor,
+    SequentialDescriptor,
+)
+from fedotmas.interfaces.middleware import MiddlewareProtocol
 from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import MAWConfig
 from fedotmas.plugins._checkpoint import Checkpoint, CheckpointPlugin
@@ -23,26 +26,44 @@ from fedotmas.plugins._checkpoint import Checkpoint, CheckpointPlugin
 _log = get_logger("fedotmas.control.iterable")
 
 
-class _StepPlugin(BasePlugin):
-    """Pauses pipeline execution before each top-level step."""
+def _get_top_level_names(tree: AgentTree) -> set[str]:
+    """Extract names of top-level children from an agent tree."""
+    if isinstance(tree, (SequentialDescriptor, ParallelDescriptor, LoopDescriptor)):
+        return {
+            c.name for c in tree.children
+            if isinstance(c, (AgentDescriptor, SequentialDescriptor, ParallelDescriptor, LoopDescriptor))
+        }
+    if isinstance(tree, RoutingDescriptor):
+        return {tree.coordinator.name} | {w.name for w in tree.workers}
+    if isinstance(tree, AgentDescriptor):
+        return {tree.name}
+    return set()
+
+
+class _StepMiddleware:
+    """Middleware that pauses pipeline execution before each top-level step."""
 
     def __init__(self, pause_names: set[str]) -> None:
-        super().__init__(name="fedotmas_step")
         self._pause_names = pause_names
         self._step_queue: asyncio.Queue[str] = asyncio.Queue()
         self._resume = asyncio.Event()
         self._pausing = True
 
-    async def before_agent_callback(
-        self, *, agent: BaseAgent, callback_context: CallbackContext
-    ) -> types.Content | None:
+    async def before_agent(
+        self, agent_name: str, state: dict[str, Any]
+    ) -> dict[str, str] | None:
         if not self._pausing:
             return None
-        if agent.name in self._pause_names:
-            await self._step_queue.put(agent.name)
+        if agent_name in self._pause_names:
+            await self._step_queue.put(agent_name)
             await self._resume.wait()
             self._resume.clear()
         return None
+
+    async def after_agent(
+        self, agent_name: str, state: dict[str, Any]
+    ) -> None:
+        pass
 
 
 class IterableRun:
@@ -57,7 +78,7 @@ class IterableRun:
         self._config = config
         self._task = task
         self._checkpoint = CheckpointPlugin()
-        self._plugin: _StepPlugin | None = None
+        self._plugin: _StepMiddleware | None = None
         self._plugin_ready = asyncio.Event()
         self._exec_task: asyncio.Task[ControlledRun] | None = None
         self._result: ControlledRun | None = None
@@ -189,24 +210,23 @@ class IterableRun:
 
     async def _run(self) -> ControlledRun:
         try:
-            agent = self._maw.build(self._config)
-            if agent.sub_agents:
-                pause_names = {child.name for child in agent.sub_agents}
-            else:
-                # Single-agent pipeline: the root IS the only step
-                pause_names = {agent.name}
-            self._plugin = _StepPlugin(pause_names)
+            agent_tree = self._maw.build(self._config)
+            pause_names = _get_top_level_names(agent_tree)
+            if not pause_names:
+                pause_names = {getattr(agent_tree, 'name', 'root')}
+            self._plugin = _StepMiddleware(pause_names)
         finally:
             self._plugin_ready.set()
-        plugins = [self._checkpoint, self._plugin]
+
+        middlewares: list[MiddlewareProtocol] = [self._checkpoint, self._plugin]
+        runner = self._maw._get_runner()
 
         try:
-            result = await run_pipeline(
-                agent,
+            result = await runner.run_pipeline(
+                agent_tree,
                 self._task,
-                plugins=plugins,
-                session_service=self._maw._session_service,
-                memory_service=self._maw._memory_service,
+                middlewares=middlewares,
+                backend_plugins=self._maw._backend_plugins or None,
             )
         except RuntimeError as exc:
             msg = str(exc)

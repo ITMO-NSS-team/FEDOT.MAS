@@ -1,12 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
-
-from google.adk.agents.base_agent import BaseAgent
-from google.adk.agents.callback_context import CallbackContext
-from google.adk.plugins import BasePlugin
-from google.genai import types
+from typing import Any
 
 from fedotmas.common.logging import get_logger
 
@@ -24,15 +19,13 @@ class Checkpoint:
     index: int
 
 
-class CheckpointPlugin(BasePlugin):
+class CheckpointPlugin:
     """Snapshots session state after each agent completes.
 
-    Checkpoints are stored in-memory and can be used for inspection,
-    rewind, or retry from a specific pipeline stage.
+    Implements :class:`MiddlewareProtocol`.
     """
 
     def __init__(self) -> None:
-        super().__init__(name="fedotmas_checkpoint")
         self._checkpoints: list[Checkpoint] = []
 
     @property
@@ -54,15 +47,20 @@ class CheckpointPlugin(BasePlugin):
     def clear(self) -> None:
         self._checkpoints.clear()
 
-    async def after_agent_callback(
-        self, *, agent: BaseAgent, callback_context: CallbackContext
-    ) -> Optional[types.Content]:
-        if agent.name.startswith(_WORKFLOW_PREFIXES):
-            return None
+    async def before_agent(
+        self, agent_name: str, state: dict[str, Any]
+    ) -> dict[str, str] | None:
+        return None
+
+    async def after_agent(
+        self, agent_name: str, state: dict[str, Any]
+    ) -> None:
+        if agent_name.startswith(_WORKFLOW_PREFIXES):
+            return
 
         cp = Checkpoint(
-            agent_name=agent.name,
-            state=dict(callback_context.state.to_dict()),
+            agent_name=agent_name,
+            state=dict(state),
             index=len(self._checkpoints),
         )
         self._checkpoints.append(cp)
@@ -72,4 +70,3 @@ class CheckpointPlugin(BasePlugin):
             cp.index,
             list(cp.state.keys()),
         )
-        return None

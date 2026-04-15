@@ -8,8 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from fedotmas.control._controller import Controller
-from fedotmas.control._iterable import IterableRun, _StepPlugin
-from fedotmas.core.runner import PipelineResult
+from fedotmas.control._iterable import IterableRun, _StepMiddleware
+from fedotmas.interfaces.agent import AgentDescriptor, SequentialDescriptor
+from fedotmas.interfaces.runner import PipelineResult
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 
 
@@ -30,102 +31,79 @@ def _mock_maw(*agent_names: str) -> MagicMock:
     maw = MagicMock()
     maw._session_service = None
     maw._memory_service = None
-    root = MagicMock()
-    children = []
-    for name in agent_names:
-        child = MagicMock()
-        child.name = name
-        children.append(child)
-    root.sub_agents = children
-    maw.build = MagicMock(return_value=root)
+    maw._backend_name = "adk"
+    maw._backend_plugins = []
+    # Build returns descriptor tree
+    children = [
+        AgentDescriptor(name=name, instruction=f"Do {name}", output_key=name)
+        for name in agent_names
+    ]
+    if len(children) == 1:
+        tree = children[0]
+    else:
+        tree = SequentialDescriptor(name="seq_1", children=children)
+    maw.build = MagicMock(return_value=tree)
     return maw
 
 
-class _FakeState(dict):
-    def to_dict(self) -> dict:
-        return dict(self)
+def _fake_runner(agent_names: list[str], final_state: dict):
+    """Return a mock runner that simulates pipeline execution with middleware callbacks."""
+    runner = AsyncMock()
 
-
-def _fake_run_pipeline(agent_names: list[str], final_state: dict):
-    """Return an async function that simulates pipeline execution with plugin callbacks."""
-
-    async def _run(_agent, _task, *, plugins=None, **_kwargs):
-        state = _FakeState(_kwargs.get("initial_state") or {})
+    async def _run_pipeline(agent_tree, task, *, middlewares=None, backend_plugins=None, **_kwargs):
+        state = dict(_kwargs.get("initial_state") or {})
         for name in agent_names:
-            fake_agent = MagicMock()
-            fake_agent.name = name
-            fake_ctx = MagicMock()
-            fake_ctx.state = state
-
-            for plugin in plugins or []:
-                if hasattr(plugin, "before_agent_callback"):
-                    await plugin.before_agent_callback(
-                        agent=fake_agent, callback_context=fake_ctx
-                    )
+            for mw in middlewares or []:
+                result = await mw.before_agent(name, state)
+                if result is not None:
+                    continue
 
             state[name] = f"done_{name}"
 
-            for plugin in plugins or []:
-                if hasattr(plugin, "after_agent_callback"):
-                    await plugin.after_agent_callback(
-                        agent=fake_agent, callback_context=fake_ctx
-                    )
+            for mw in middlewares or []:
+                await mw.after_agent(name, state)
 
         return PipelineResult(state=dict(final_state))
 
-    return _run
+    runner.run_pipeline = _run_pipeline
+    return runner
 
 
-class TestStepPlugin:
+class TestStepMiddleware:
     @pytest.mark.asyncio
     async def test_pauses_at_known_agent(self):
-        plugin = _StepPlugin({"writer"})
-
-        agent = MagicMock()
-        agent.name = "writer"
-        ctx = MagicMock()
+        mw = _StepMiddleware({"writer"})
 
         paused = False
 
-        async def run_plugin():
+        async def run_mw():
             nonlocal paused
-            await plugin.before_agent_callback(agent=agent, callback_context=ctx)
+            await mw.before_agent("writer", {})
             paused = True
 
-        task = asyncio.create_task(run_plugin())
+        task = asyncio.create_task(run_mw())
         await asyncio.sleep(0)
-        # Plugin should have put agent name in queue and be waiting for resume
-        assert not plugin._step_queue.empty()
+        assert not mw._step_queue.empty()
         assert not paused
 
-        plugin._resume.set()
+        mw._resume.set()
         await task
         assert paused
 
     @pytest.mark.asyncio
     async def test_passes_unknown_agent(self):
-        plugin = _StepPlugin({"writer"})
-
-        agent = MagicMock()
-        agent.name = "reader"
-        ctx = MagicMock()
-
-        result = await plugin.before_agent_callback(agent=agent, callback_context=ctx)
+        mw = _StepMiddleware({"writer"})
+        result = await mw.before_agent("reader", {})
         assert result is None
-        assert plugin._step_queue.empty()
+        assert mw._step_queue.empty()
 
     @pytest.mark.asyncio
     async def test_skips_when_not_pausing(self):
-        plugin = _StepPlugin({"writer"})
-        plugin._pausing = False
-
-        agent = MagicMock()
-        agent.name = "writer"
-        ctx = MagicMock()
-
-        result = await plugin.before_agent_callback(agent=agent, callback_context=ctx)
+        mw = _StepMiddleware({"writer"})
+        mw._pausing = False
+        result = await mw.before_agent("writer", {})
         assert result is None
-        assert plugin._step_queue.empty()
+        assert mw._step_queue.empty()
 
 
 class TestIterableRun:
@@ -133,10 +111,9 @@ class TestIterableRun:
     async def test_iterate_all_steps(self):
         maw = _mock_maw("a", "b")
         config = _config("a", "b")
+        runner = _fake_runner(["a", "b"], {"a": "done_a", "b": "done_b"})
 
-        fake_run = _fake_run_pipeline(["a", "b"], {"a": "done_a", "b": "done_b"})
-
-        with patch("fedotmas.control._iterable.run_pipeline", side_effect=fake_run):
+        with patch.object(maw, "_get_runner", return_value=runner):
             async with Controller(maw).iter("task", config) as run:
                 steps = []
                 async for step in run:
@@ -150,12 +127,11 @@ class TestIterableRun:
     async def test_break_and_finish(self):
         maw = _mock_maw("a", "b", "c")
         config = _config("a", "b", "c")
-
-        fake_run = _fake_run_pipeline(
+        runner = _fake_runner(
             ["a", "b", "c"], {"a": "done_a", "b": "done_b", "c": "done_c"}
         )
 
-        with patch("fedotmas.control._iterable.run_pipeline", side_effect=fake_run):
+        with patch.object(maw, "_get_runner", return_value=runner):
             async with Controller(maw).iter("task", config) as run:
                 async for step in run:
                     if step.name == "b":
@@ -169,12 +145,11 @@ class TestIterableRun:
     async def test_step_index_increments(self):
         maw = _mock_maw("a", "b", "c")
         config = _config("a", "b", "c")
-
-        fake_run = _fake_run_pipeline(
+        runner = _fake_runner(
             ["a", "b", "c"], {"a": "done_a", "b": "done_b", "c": "done_c"}
         )
 
-        with patch("fedotmas.control._iterable.run_pipeline", side_effect=fake_run):
+        with patch.object(maw, "_get_runner", return_value=runner):
             async with Controller(maw).iter("task", config) as run:
                 indices = []
                 async for step in run:
@@ -197,15 +172,13 @@ class TestIterableRun:
     async def test_cleanup_releases_paused_pipeline(self):
         maw = _mock_maw("a", "b")
         config = _config("a", "b")
+        runner = _fake_runner(["a", "b"], {"a": "ok", "b": "ok"})
 
-        fake_run = _fake_run_pipeline(["a", "b"], {"a": "ok", "b": "ok"})
-
-        with patch("fedotmas.control._iterable.run_pipeline", side_effect=fake_run):
+        with patch.object(maw, "_get_runner", return_value=runner):
             async with Controller(maw).iter("task", config) as run:
                 async for step in run:
                     if step.name == "b":
                         break
-                # Exit without calling finish() — __aexit__ should cleanup
 
             assert run._exec_task is not None
             assert run._exec_task.done()
@@ -215,12 +188,14 @@ class TestIterableRun:
         maw = _mock_maw("a", "b")
         config = _config("a", "b")
 
-        async def failing_run(_agent, _task, **_kwargs):
+        runner = AsyncMock()
+
+        async def failing_run(agent_tree, task, **_kwargs):
             raise RuntimeError("Agent 'b' failed with error 500: boom")
 
-        with patch(
-            "fedotmas.control._iterable.run_pipeline", side_effect=failing_run
-        ):
+        runner.run_pipeline = failing_run
+
+        with patch.object(maw, "_get_runner", return_value=runner):
             async with Controller(maw).iter("task", config) as run:
                 async for step in run:
                     pass
@@ -233,10 +208,9 @@ class TestIterableRun:
     async def test_checkpoints_created(self):
         maw = _mock_maw("a", "b")
         config = _config("a", "b")
+        runner = _fake_runner(["a", "b"], {"a": "done_a", "b": "done_b"})
 
-        fake_run = _fake_run_pipeline(["a", "b"], {"a": "done_a", "b": "done_b"})
-
-        with patch("fedotmas.control._iterable.run_pipeline", side_effect=fake_run):
+        with patch.object(maw, "_get_runner", return_value=runner):
             async with Controller(maw).iter("task", config) as run:
                 async for step in run:
                     if step.name == "b":
@@ -247,22 +221,14 @@ class TestIterableRun:
 
             assert len(result.checkpoints) == 2
 
-
     @pytest.mark.asyncio
     async def test_single_agent_pipeline(self):
         """Single-agent pipeline (no sub_agents) should yield one step."""
-        maw = MagicMock()
-        maw._session_service = None
-        maw._memory_service = None
-        root = MagicMock()
-        root.name = "solo"
-        root.sub_agents = []
-        maw.build = MagicMock(return_value=root)
-
+        maw = _mock_maw("solo")
         config = _config("solo")
-        fake_run = _fake_run_pipeline(["solo"], {"solo": "done_solo"})
+        runner = _fake_runner(["solo"], {"solo": "done_solo"})
 
-        with patch("fedotmas.control._iterable.run_pipeline", side_effect=fake_run):
+        with patch.object(maw, "_get_runner", return_value=runner):
             async with Controller(maw).iter("task", config) as run:
                 steps = []
                 async for step in run:
@@ -271,13 +237,14 @@ class TestIterableRun:
             assert steps == ["solo"]
             assert run.result.status == "success"
 
-
     @pytest.mark.asyncio
     async def test_build_error_does_not_hang(self):
         """If build() raises, iteration should not deadlock."""
         maw = MagicMock()
         maw._session_service = None
         maw._memory_service = None
+        maw._backend_name = "adk"
+        maw._backend_plugins = []
         maw.build = MagicMock(side_effect=ValueError("bad config"))
 
         config = _config("a")
@@ -307,8 +274,10 @@ class TestRunWithRecovery:
         )
         maw.generate_config = AsyncMock(return_value=config)
 
-        with patch("fedotmas.control._controller.run_pipeline") as mock_run:
-            mock_run.return_value = PipelineResult(state={"a": "ok"})
+        runner = AsyncMock()
+        runner.run_pipeline = AsyncMock(return_value=PipelineResult(state={"a": "ok"}))
+
+        with patch.object(maw, "_get_runner", return_value=runner):
             ctrl = Controller(maw)
             run = await ctrl.run_with_recovery("task")
         assert run.status == "success"
