@@ -3,8 +3,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Generic, Literal, TypeVar
 
-from fastapi import FastAPI
-
 from fedotmas.common.logging import get_logger, setup_logging
 from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.interfaces.agent import AgentTree
