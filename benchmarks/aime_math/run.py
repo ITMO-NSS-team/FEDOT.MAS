@@ -207,6 +207,9 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
             ),
         ),
         per_task=optimized_tasks,
+        optimized_config=(
+            opt_result.best_config.model_dump() if opt_result else None
+        ),
     )
 
     path = save_result(result, Path(settings.output_dir))

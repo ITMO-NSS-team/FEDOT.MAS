@@ -19,32 +19,36 @@ pipeline agents' instructions to produce better output. Focus on concrete change
 not vague suggestions.
 """
 
-REFLECTION_SYSTEM_PROMPT = """\
-You are an expert prompt engineer optimizing agent instructions in a multi-agent \
-pipeline.
+REFLECTION_SYSTEM_PROMPT = (
+    "You are an expert prompt engineer. Output only the new instruction text "
+    "in the `improved_instruction` field."
+)
 
-You will receive:
-1. The current instruction for a specific agent.
-2. A set of examples showing: the task, the agent's output, outputs from other \
-agents in the pipeline (pipeline context), the score, and feedback from an evaluator.
+REFLECTION_USER_TEMPLATE = """\
+I provided an assistant with the following instructions to perform a task for me:
+```
+{current_instruction}
+```
 
-Your job is to produce an IMPROVED instruction for this agent that would lead to \
-better pipeline outputs. The improved instruction should:
-- Address the specific feedback from the evaluator.
-- Preserve the core purpose of the agent.
-- Be clear, specific, and actionable.
-- Not include meta-commentary — output ONLY the new instruction text.
-- Identify domain-specific factual information from the task and include it in \
-the instruction when it would improve accuracy.
+The following are examples of different task inputs provided to the assistant along \
+with the assistant's response for each of them, and some feedback on how the \
+assistant's response could be better:
+```
+{examples}
+```
 
-Use the pipeline context to understand WHY the agent failed, not just WHAT it \
-produced. If preceding agents produced incorrect or incomplete outputs that this \
-agent relied on, focus on making this agent more robust to upstream errors.
+Your task is to write a new instruction for the assistant.
 
-Important constraints:
-- Keep the same general role and responsibility of the agent.
-- Do not reference other agents by name or assume specific pipeline structure.
-- Focus on what THIS agent should do differently.
+Read the inputs carefully and identify the input format and infer detailed task \
+description about the task I wish to solve with the assistant.
+
+Read all the assistant responses and the corresponding feedback. Identify all niche \
+and domain specific factual information about the task and include it in the \
+instruction, as a lot of it may not be available to the assistant in the future. \
+The assistant may have utilized a generalizable strategy to solve the task, if so, \
+include that in the instruction as well.
+
+Return the new instruction in the `improved_instruction` field.
 """
 
 MERGE_SYSTEM_PROMPT = """\

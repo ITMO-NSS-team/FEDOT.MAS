@@ -32,6 +32,7 @@ class BenchmarkResult(BaseModel):
     cost: CostSummary | None = None
     iterations: int | None = None
     per_task: list[TaskResult] = []
+    optimized_config: dict[str, Any] | None = None
 
 
 def save_result(result: BenchmarkResult, output_dir: Path | str) -> Path:

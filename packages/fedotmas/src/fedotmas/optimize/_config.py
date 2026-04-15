@@ -23,7 +23,7 @@ class OptimizationConfig:
     """Stop after this many total evaluation runs. None = disabled."""
 
     # LLM temperatures
-    temperature_reflect: float = 0.7
+    temperature_reflect: float = 1.0
     """LLM temperature for reflection (mutation) calls. Range: [0, 2]."""
 
     temperature_merge: float = 0.5
