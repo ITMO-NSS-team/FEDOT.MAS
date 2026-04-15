@@ -276,6 +276,14 @@ async def _run_iteration(
     )
     eval_runs += runs
 
+    batch_inputs = {t.input for t in batch}
+    if _mean_score_on(parent, batch_inputs) >= 1.0:
+        _log.info(
+            "Skipping iteration: parent #{} already perfect on minibatch",
+            parent.index,
+        )
+        return eval_runs, False, consecutive_failures
+
     try:
         new_config = await ctx.mutator.mutate(parent, components, batch)
     except Exception as e:
@@ -315,7 +323,6 @@ async def _run_iteration(
     eval_runs += runs
     ctx.dispatcher.on_candidate_evaluated(child, batch)
 
-    batch_inputs = {t.input for t in batch}
     parent_batch_score = _mean_score_on(parent, batch_inputs)
     child_batch_score = _mean_score_on(child, batch_inputs)
 
