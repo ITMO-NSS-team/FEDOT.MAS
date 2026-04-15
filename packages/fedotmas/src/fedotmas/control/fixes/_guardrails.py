@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from google.adk.tools import BaseTool, ToolContext
-
 from fedotmas.common.logging import get_logger
 from fedotmas.maw._validators import (
     _find_terminal_node,
@@ -39,9 +37,9 @@ def run_config_guardrails(config: MAWConfig) -> list[str]:
 
 
 async def guardrail_validate_config(
-    tool: BaseTool,
+    tool: Any,
     args: dict[str, Any],
-    tool_context: ToolContext,
+    tool_context: Any,
     tool_response: dict,
 ) -> Optional[dict]:
     """ADK ``after_tool_callback`` — auto-validates config after every fix tool.

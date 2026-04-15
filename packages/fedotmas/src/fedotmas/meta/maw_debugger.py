@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from google.adk.sessions import BaseSessionService
 from pydantic import BaseModel
 
 from fedotmas._settings import ModelConfig
@@ -57,7 +56,7 @@ async def classify_error(
     config: MAWConfig | None = None,
     error_hint: str | None = None,
     meta_model: str | ModelConfig | None = None,
-    session_service: BaseSessionService | None = None,
+    session_service: Any | None = None,
 ) -> ErrorClassification:
     """Use a lightweight LLM call to classify an error as retryable or fatal."""
     resolved_meta, _, _ = resolve_meta_and_workers(
@@ -113,7 +112,7 @@ async def evaluate_output(
     config: MAWConfig,
     error_hint: str,
     meta_model: str | ModelConfig | None = None,
-    session_service: BaseSessionService | None = None,
+    session_service: Any | None = None,
 ) -> OutputEvaluation:
     """Use an LLM call to check pipeline output against error_hint."""
     resolved_meta, _, _ = resolve_meta_and_workers(meta_model, None, None)
@@ -164,7 +163,7 @@ async def diagnose_and_fix(
     temperature: float = 0.3,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
     worker_models: list[str | ModelConfig] | None = None,
-    session_service: BaseSessionService | None = None,
+    session_service: Any | None = None,
     error_category: str | None = None,
 ) -> MAWAgentConfig:
     """Diagnose a failing agent and produce a fixed MAWAgentConfig."""

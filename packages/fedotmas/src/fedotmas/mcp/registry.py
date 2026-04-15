@@ -1,18 +1,10 @@
 from __future__ import annotations
 
 import functools
-import os
-
-from google.adk.tools.mcp_tool import (
-    McpToolset,
-    StdioConnectionParams,
-    StreamableHTTPConnectionParams,
-)
-from mcp import StdioServerParameters
-from mcp.client.stdio import get_default_environment
 
 from fedotmas.common.logging import get_logger
-from fedotmas.mcp._config import HttpMCPServer, MCPServerConfig, StdioMCPServer
+from fedotmas.interfaces.tools import ToolDescriptor
+from fedotmas.mcp._config import MCPServerConfig
 from fedotmas.mcp.discovery import discover_local_servers
 
 _log = get_logger("fedotmas.mcp.registry")
@@ -26,37 +18,21 @@ def get_mcp_servers() -> dict[str, MCPServerConfig]:
 
 def create_toolset(
     name: str, registry: dict[str, MCPServerConfig] | None = None
-) -> McpToolset:
-    """Create an ADK ``McpToolset`` for the named server."""
+) -> ToolDescriptor:
+    """Create a framework-neutral ``ToolDescriptor`` for the named MCP server."""
     reg = registry if registry is not None else get_mcp_servers()
     if name not in reg:
         _log.error("Unknown MCP server: '{}' | available={}", name, sorted(reg))
         raise ValueError(f"Unknown MCP server: '{name}'. Available: {sorted(reg)}")
 
     cfg = reg[name]
-    _log.debug("Creating MCP toolset | server={}", name)
-
-    match cfg:
-        case StdioMCPServer():
-            env = {**get_default_environment(), **os.environ, **cfg.env}
-            params = StdioConnectionParams(
-                server_params=StdioServerParameters(
-                    command=cfg.command,
-                    args=list(cfg.args),
-                    env=env,
-                ),
-                timeout=cfg.timeout,
-            )
-        case HttpMCPServer():
-            params = StreamableHTTPConnectionParams(
-                url=cfg.url,
-                headers=cfg.headers or None,
-                timeout=cfg.timeout,
-            )
-        case _:
-            raise TypeError(f"Unsupported MCP server type: {type(cfg)}")
-
-    return McpToolset(connection_params=params)
+    _log.debug("Creating MCP tool descriptor | server={}", name)
+    return ToolDescriptor(
+        name=name,
+        mcp_server_name=name,
+        mcp_server=cfg,
+        description=cfg.description,
+    )
 
 
 def get_server_descriptions(

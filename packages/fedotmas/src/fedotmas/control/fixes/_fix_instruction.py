@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from google.adk.tools import ToolContext
+from typing import Any
 
 from fedotmas.common.logging import get_logger
 from fedotmas.maw.models import MAWConfig
@@ -15,7 +15,7 @@ def _load_config(raw: str | dict) -> MAWConfig:
 
 
 async def fix_instruction(
-    tool_context: ToolContext,
+    tool_context: Any,
     agent_name: str,
     new_instruction: str,
     reasoning: str,

@@ -8,20 +8,14 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-from google.adk import Runner
-from google.adk.agents import LlmAgent
-from google.adk.agents.base_agent import BaseAgent
-from google.adk.plugins import BasePlugin
-from google.adk.sessions import InMemorySessionService
-from google.adk.tools import FunctionTool
-from google.genai import types
-
-from fedotmas.common.llm import make_llm
 from fedotmas.common.logging import get_logger
 from fedotmas.control._iterable import IterableRun
 from fedotmas.control._run import ControlledRun, RunError, extract_failed_agent_name
 from fedotmas.control._strategy import Strategy, resolve_initial_state
-from fedotmas.core.runner import run_pipeline
+from fedotmas.interfaces.agent import AgentTree
+from fedotmas.interfaces.middleware import MiddlewareProtocol
+from fedotmas.interfaces.runner import PipelineResult
+from fedotmas.interfaces.tools import ToolDescriptor
 from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import MAWConfig
 from fedotmas.plugins._checkpoint import CheckpointPlugin
@@ -34,8 +28,8 @@ _log = get_logger("fedotmas.control")
 class Controller:
     """Manages controlled execution and resumption of MAW pipelines.
 
-    Uses ``MAW.build`` to get the agent tree, then calls ``run_pipeline``
-    directly with custom plugins for full control over execution.
+    Uses ``MAW.build`` to get the agent tree, then executes it via the
+    backend runner with custom middlewares for full control over execution.
     """
 
     def __init__(self, maw: MAW) -> None:
@@ -47,7 +41,7 @@ class Controller:
         self,
         task: str,
         config: MAWConfig | None = None,
-        plugins: list[BasePlugin] | None = None,
+        plugins: list[MiddlewareProtocol] | None = None,
     ) -> ControlledRun:
         """Generate (or use provided) config and execute the pipeline.
 
@@ -55,16 +49,16 @@ class Controller:
             task: The user's task description.
             config: Optional pre-built config. If ``None``, generates one
                 via ``maw.generate_config(task)``.
-            plugins: Extra ADK plugins injected into the pipeline execution.
+            plugins: Extra middlewares injected into the pipeline execution.
         """
         self._task = task
 
         if config is None:
             config = await self._maw.generate_config(task)
 
-        agent = self._maw.build(config)
+        agent_tree = self._maw.build(config)
         self._last_run = await self._execute(
-            agent, task, config, plugins=list(plugins or [])
+            agent_tree, task, config, middlewares=list(plugins or [])
         )
         return self._last_run
 
@@ -114,38 +108,17 @@ class Controller:
         On error, launches a debugger LLM agent that uses *fix_tools* to
         patch the config, then resumes the pipeline.  Repeats up to
         *max_retries* times.
-
-        Args:
-            task: The user's task description.
-            max_retries: Maximum number of recovery attempts.
-            config: Optional pre-built config.
-            fix_tools: ADK-compatible tool functions the debugger agent can
-                call.  Each tool reads/writes config via
-                ``tool_context.state["config"]``.  Defaults to
-                ``[fix_instruction]``.
-            checks: Per-agent check functions.  Each function receives the
-                pipeline state dict and returns an error message (str) if
-                the output is wrong, or ``None`` if OK.  The error message
-                is passed to the debugger as the problem description.
-            strategy: Resume strategy after debugger fixes the config.
-                Defaults to ``RESTART_AFTER`` which re-runs only the
-                modified agent and everything after it.
-            llm_error_detection: When ``True``, use an LLM call to classify
-                errors as retryable/fatal before attempting recovery.
-                When ``False`` (default), use regex-based heuristics.
-            error_hint: Free-text hint passed to the debugger agent to
-                provide additional context about expected behavior.
         """
         from fedotmas.meta.maw_debugger import classify_error, evaluate_output
 
         if max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {max_retries}")
 
-        plugins: list[BasePlugin] = []
+        middlewares: list[MiddlewareProtocol] = []
         if checks:
-            plugins.append(EvalPlugin(checks))
+            middlewares.append(EvalPlugin(checks))
 
-        run = await self.run(task, config=config, plugins=plugins)
+        run = await self.run(task, config=config, plugins=middlewares)
 
         for attempt in range(max_retries + 1):
             if run.status == "success":
@@ -247,7 +220,7 @@ class Controller:
         from fedotmas.meta._helpers import resolve_meta_and_workers
         from fedotmas.meta.maw_debug_prompts import DEBUGGER_TOOL_PROMPT
 
-        tools = fix_tools or [fix_instruction]
+        tools_fns = fix_tools or [fix_instruction]
         resolved_meta, _, _ = resolve_meta_and_workers(
             self._maw.meta_model,
             None,
@@ -276,75 +249,29 @@ class Controller:
         if error_hint:
             instruction += f"\n\n**User hint:** {error_hint}\n"
 
-        llm = make_llm(resolved_meta)
+        tool_descriptors = [
+            ToolDescriptor(
+                name=f.__name__,
+                function=f,
+                after_tool_callback=guardrail_validate_config,
+            )
+            for f in tools_fns
+        ]
 
-        debugger_agent = LlmAgent(
-            name="debugger",
-            model=llm,
+        runner = self._maw._get_runner()
+        result = await runner.run_single_agent(
+            agent_name="debugger",
             instruction=instruction,
-            tools=[FunctionTool(func=f) for f in tools],
+            user_message=f"Fix agent '{error.agent_name}' that failed with: {error_message}",
+            model=resolved_meta,
+            temperature=0.3,
+            output_key="debugger_output",
+            tools=tool_descriptors,
             after_tool_callback=guardrail_validate_config,
-            generate_content_config=types.GenerateContentConfig(
-                temperature=0.3,
-            ),
+            initial_state={"config": current_config.model_dump_json()},
         )
 
-        session_service = self._maw._session_service or InMemorySessionService()
-        session_id = uuid.uuid4().hex
-        app_name = "fedotmas_debugger"
-
-        session = await session_service.create_session(
-            app_name=app_name,
-            user_id="system",
-            session_id=session_id,
-            state={"config": current_config.model_dump_json()},
-        )
-
-        message = types.Content(
-            role="user",
-            parts=[
-                types.Part.from_text(
-                    text=f"Fix agent '{error.agent_name}' that failed with: {error_message}",
-                )
-            ],
-        )
-
-        start = time.monotonic()
-
-        async with Runner(
-            app_name=app_name,
-            agent=debugger_agent,
-            session_service=session_service,
-        ) as runner:
-            async for event in runner.run_async(
-                user_id="system",
-                session_id=session.id,
-                new_message=message,
-            ):
-                if event.partial:
-                    continue
-                if event.error_code:
-                    _log.error(
-                        "Debugger LLM error | code={} msg={}",
-                        event.error_code,
-                        event.error_message,
-                    )
-                    raise RuntimeError(
-                        f"Debugger LLM error {event.error_code}: {event.error_message}"
-                    )
-
-        elapsed = time.monotonic() - start
-        _log.info("Debugger complete | elapsed={:.1f}s", elapsed)
-
-        final_session = await session_service.get_session(
-            app_name=app_name,
-            user_id="system",
-            session_id=session.id,
-        )
-        if final_session is None:
-            raise RuntimeError("Debugger session lost after execution")
-
-        config_raw = final_session.state.get("config")
+        config_raw = result.state.get("config")
         if config_raw is None:
             raise RuntimeError("Debugger did not produce config in session state")
 
@@ -377,39 +304,39 @@ class Controller:
             strategy, self._last_run.checkpoints, self._last_run.config, new_config
         )
 
-        extra_plugins: list[BasePlugin] = []
+        extra_middlewares: list[MiddlewareProtocol] = []
         if completed:
-            extra_plugins.append(SkipCompletedPlugin(completed))
+            extra_middlewares.append(SkipCompletedPlugin(completed))
 
-        agent = self._maw.build(new_config)
+        agent_tree = self._maw.build(new_config)
         self._last_run = await self._execute(
-            agent,
+            agent_tree,
             self._task,
             new_config,
-            plugins=extra_plugins,
+            middlewares=extra_middlewares,
             initial_state=initial_state,
         )
         return self._last_run
 
     async def _execute(
         self,
-        agent: BaseAgent,
+        agent_tree: AgentTree,
         task: str,
         config: MAWConfig,
         *,
-        plugins: list[BasePlugin],
+        middlewares: list[MiddlewareProtocol],
         initial_state: dict[str, Any] | None = None,
     ) -> ControlledRun:
         checkpoint = CheckpointPlugin()
-        all_plugins = [checkpoint, *plugins]
+        all_middlewares = [checkpoint, *middlewares]
 
+        runner = self._maw._get_runner()
         try:
-            result = await run_pipeline(
-                agent,
+            result = await runner.run_pipeline(
+                agent_tree,
                 task,
-                plugins=all_plugins,
-                session_service=self._maw._session_service,
-                memory_service=self._maw._memory_service,
+                middlewares=all_middlewares,
+                backend_plugins=self._maw._backend_plugins or None,
                 initial_state=initial_state,
             )
         except Exception as exc:
@@ -441,11 +368,7 @@ _FATAL_ERROR_RE = re.compile(
 
 
 def _is_retryable(error: RunError | None) -> bool:
-    """Check whether an error is retryable using regex heuristics.
-
-    Returns ``False`` for infrastructure/auth errors (fatal),
-    ``True`` for everything else (retryable).
-    """
+    """Check whether an error is retryable using regex heuristics."""
     if error is None:
         return False
     return not bool(_FATAL_ERROR_RE.search(error.message))

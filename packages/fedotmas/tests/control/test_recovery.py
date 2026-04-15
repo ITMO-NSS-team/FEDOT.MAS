@@ -32,6 +32,8 @@ def _mock_maw() -> MagicMock:
     maw = MagicMock()
     maw._session_service = None
     maw._memory_service = None
+    maw._backend_name = "adk"
+    maw._backend_plugins = []
     maw.meta_model = None
     maw.worker_models = None
     maw.temperature = None
@@ -39,6 +41,15 @@ def _mock_maw() -> MagicMock:
     maw.generate_config = AsyncMock()
     maw.build = MagicMock(return_value=MagicMock())
     return maw
+
+
+def _mock_runner(return_value=None, side_effect=None):
+    runner = AsyncMock()
+    if side_effect:
+        runner.run_pipeline = AsyncMock(side_effect=side_effect)
+    else:
+        runner.run_pipeline = AsyncMock(return_value=return_value)
+    return runner
 
 
 # ---------------------------------------------------------------------------
@@ -212,13 +223,13 @@ async def test_happy_path_fails_then_recovers():
         "b", _agent("b").model_copy(update={"instruction": "Fixed b"}),
     )
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(side_effect=[
+        RuntimeError("Agent 'b' failed: bad output"),
+        PipelineResult(state={"a": "ok", "b": "fixed"}),
+    ])
+    with patch.object(maw, "_get_runner", return_value=runner), \
          _mock_debugger_returning(fixed_config):
 
-        mock_run.side_effect = [
-            RuntimeError("Agent 'b' failed: bad output"),
-            PipelineResult(state={"a": "ok", "b": "fixed"}),
-        ]
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
@@ -234,10 +245,10 @@ async def test_all_retries_exhausted():
     maw = _mock_maw()
     config = _config("a", "b")
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(side_effect=RuntimeError("Agent 'b' failed: bad output"))
+    with patch.object(maw, "_get_runner", return_value=runner), \
          _mock_debugger_returning(config):
 
-        mock_run.side_effect = RuntimeError("Agent 'b' failed: bad output")
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
@@ -245,7 +256,7 @@ async def test_all_retries_exhausted():
 
     assert run.status == "error"
     assert run.error.agent_name == "b"
-    assert mock_run.call_count == 3
+    assert runner.run_pipeline.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -254,17 +265,17 @@ async def test_non_retryable_error_regex():
     maw = _mock_maw()
     config = _config("a", "b")
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(side_effect=RuntimeError("Agent 'b' failed: connection timeout"))
+    with patch.object(maw, "_get_runner", return_value=runner), \
          _mock_debugger_returning(config) as mock_debugger:
 
-        mock_run.side_effect = RuntimeError("Agent 'b' failed: connection timeout")
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
         run = await ctrl.run_with_recovery("test task", max_retries=2)
 
     assert run.status == "error"
-    assert mock_run.call_count == 1
+    assert runner.run_pipeline.call_count == 1
     mock_debugger.assert_not_called()
 
 
@@ -274,10 +285,10 @@ async def test_success_on_first_try():
     maw = _mock_maw()
     config = _config("a", "b")
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(return_value=PipelineResult(state={"a": "ok", "b": "ok"}))
+    with patch.object(maw, "_get_runner", return_value=runner), \
          _mock_debugger_returning(config) as mock_debugger:
 
-        mock_run.return_value = PipelineResult(state={"a": "ok", "b": "ok"})
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
@@ -294,13 +305,12 @@ async def test_config_none_auto_generates():
     config = _config("a", "b")
     maw.generate_config.return_value = config
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(side_effect=[
+        RuntimeError("Agent 'b' failed: bad output"),
+        PipelineResult(state={"a": "ok", "b": "fixed"}),
+    ])
+    with patch.object(maw, "_get_runner", return_value=runner), \
          _mock_debugger_returning(config):
-
-        mock_run.side_effect = [
-            RuntimeError("Agent 'b' failed: bad output"),
-            PipelineResult(state={"a": "ok", "b": "fixed"}),
-        ]
 
         ctrl = Controller(maw)
         run = await ctrl.run_with_recovery("test task")
@@ -321,14 +331,14 @@ async def test_llm_classification_retryable():
         reasoning="The instruction is too vague",
     )
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(side_effect=[
+        RuntimeError("Agent 'b' failed: bad output"),
+        PipelineResult(state={"a": "ok", "b": "fixed"}),
+    ])
+    with patch.object(maw, "_get_runner", return_value=runner), \
          patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta, \
          _mock_debugger_returning(config) as mock_debugger:
 
-        mock_run.side_effect = [
-            RuntimeError("Agent 'b' failed: bad output"),
-            PipelineResult(state={"a": "ok", "b": "fixed"}),
-        ]
         maw.generate_config.return_value = config
 
         mock_meta.return_value = MagicMock(
@@ -361,11 +371,11 @@ async def test_llm_classification_fatal():
         reasoning="The API key is invalid",
     )
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(side_effect=RuntimeError("Agent 'b' failed: some error"))
+    with patch.object(maw, "_get_runner", return_value=runner), \
          patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta, \
          _mock_debugger_returning(config) as mock_debugger:
 
-        mock_run.side_effect = RuntimeError("Agent 'b' failed: some error")
         maw.generate_config.return_value = config
 
         mock_meta.return_value = MagicMock(
@@ -398,10 +408,10 @@ async def test_error_hint_passed_to_classifier():
         reasoning="matched hint",
     )
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(side_effect=RuntimeError("Agent 'b' failed: some error"))
+    with patch.object(maw, "_get_runner", return_value=runner), \
          patch("fedotmas.meta.maw_debugger.run_meta_agent_call") as mock_meta:
 
-        mock_run.side_effect = RuntimeError("Agent 'b' failed: some error")
         maw.generate_config.return_value = config
 
         mock_meta.return_value = MagicMock(
@@ -437,10 +447,10 @@ async def test_unknown_agent_skips_recovery():
     maw = _mock_maw()
     config = _config("a", "b")
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(side_effect=RuntimeError("Something went very wrong"))
+    with patch.object(maw, "_get_runner", return_value=runner), \
          _mock_debugger_returning(config) as mock_debugger:
 
-        mock_run.side_effect = RuntimeError("Something went very wrong")
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
@@ -448,7 +458,7 @@ async def test_unknown_agent_skips_recovery():
 
     assert run.status == "error"
     assert run.error.agent_name == "unknown"
-    assert mock_run.call_count == 1
+    assert runner.run_pipeline.call_count == 1
     mock_debugger.assert_not_called()
 
 
@@ -461,13 +471,13 @@ async def test_custom_fix_tool_via_di():
     async def my_custom_fix(tool_context, agent_name: str) -> str:
         return "custom fix applied"
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(side_effect=[
+        RuntimeError("Agent 'b' failed: bad output"),
+        PipelineResult(state={"a": "ok", "b": "fixed"}),
+    ])
+    with patch.object(maw, "_get_runner", return_value=runner), \
          _mock_debugger_returning(config) as mock_debugger:
 
-        mock_run.side_effect = [
-            RuntimeError("Agent 'b' failed: bad output"),
-            PipelineResult(state={"a": "ok", "b": "fixed"}),
-        ]
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
@@ -487,13 +497,13 @@ async def test_default_fix_tools_is_none():
     maw = _mock_maw()
     config = _config("a", "b")
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(side_effect=[
+        RuntimeError("Agent 'b' failed: bad output"),
+        PipelineResult(state={"a": "ok", "b": "fixed"}),
+    ])
+    with patch.object(maw, "_get_runner", return_value=runner), \
          _mock_debugger_returning(config) as mock_debugger:
 
-        mock_run.side_effect = [
-            RuntimeError("Agent 'b' failed: bad output"),
-            PipelineResult(state={"a": "ok", "b": "fixed"}),
-        ]
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
@@ -517,15 +527,15 @@ async def test_checks_triggers_recovery():
             return "Agent b returned wrong value, fix instruction"
         return None
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    from fedotmas.plugins._eval import EvaluationError
+
+    runner = _mock_runner(side_effect=[
+        EvaluationError("b", "Agent b returned wrong value, fix instruction"),
+        PipelineResult(state={"a": "ok", "b": "correct"}),
+    ])
+    with patch.object(maw, "_get_runner", return_value=runner), \
          _mock_debugger_returning(fixed_config) as mock_debugger:
 
-        from fedotmas.plugins._eval import EvaluationError
-
-        mock_run.side_effect = [
-            EvaluationError("b", "Agent b returned wrong value, fix instruction"),
-            PipelineResult(state={"a": "ok", "b": "correct"}),
-        ]
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
@@ -547,10 +557,10 @@ async def test_checks_pass_no_recovery():
     def check_b(state: dict) -> str | None:
         return None
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(return_value=PipelineResult(state={"a": "ok", "b": "ok"}))
+    with patch.object(maw, "_get_runner", return_value=runner), \
          _mock_debugger_returning(config) as mock_debugger:
 
-        mock_run.return_value = PipelineResult(state={"a": "ok", "b": "ok"})
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
@@ -573,11 +583,11 @@ async def test_error_hint_eval_runs_with_zero_retries():
         passed=False, agent_name="b", reasoning="Output is wrong",
     )
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(return_value=PipelineResult(state={"a": "ok", "b": "bad"}))
+    with patch.object(maw, "_get_runner", return_value=runner), \
          patch("fedotmas.meta.maw_debugger.evaluate_output", new=AsyncMock(return_value=eval_fail)) as mock_eval, \
          _mock_debugger_returning(config) as mock_debugger:
 
-        mock_run.return_value = PipelineResult(state={"a": "ok", "b": "bad"})
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
@@ -604,14 +614,14 @@ async def test_error_hint_triggers_llm_eval():
         passed=False, agent_name="b", reasoning="Output is wrong",
     )
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(side_effect=[
+        PipelineResult(state={"a": "ok", "b": "bad"}),
+        PipelineResult(state={"a": "ok", "b": "fixed"}),
+    ])
+    with patch.object(maw, "_get_runner", return_value=runner), \
          patch("fedotmas.meta.maw_debugger.evaluate_output", new=AsyncMock(return_value=eval_fail)) as mock_eval, \
          _mock_debugger_returning(config) as mock_debugger:
 
-        mock_run.side_effect = [
-            PipelineResult(state={"a": "ok", "b": "bad"}),
-            PipelineResult(state={"a": "ok", "b": "fixed"}),
-        ]
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
@@ -635,11 +645,11 @@ async def test_error_hint_passes_llm_eval():
         passed=True, agent_name="", reasoning="Output is correct",
     )
 
-    with patch("fedotmas.control._controller.run_pipeline") as mock_run, \
+    runner = _mock_runner(return_value=PipelineResult(state={"a": "ok", "b": "ok"}))
+    with patch.object(maw, "_get_runner", return_value=runner), \
          patch("fedotmas.meta.maw_debugger.evaluate_output", new=AsyncMock(return_value=eval_pass)) as mock_eval, \
          _mock_debugger_returning(config) as mock_debugger:
 
-        mock_run.return_value = PipelineResult(state={"a": "ok", "b": "ok"})
         maw.generate_config.return_value = config
 
         ctrl = Controller(maw)
