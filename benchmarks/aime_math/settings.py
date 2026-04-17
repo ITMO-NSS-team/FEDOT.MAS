@@ -18,3 +18,5 @@ class AimeMathSettings(BaseSettings):
     test_repeats: int = 1
     concurrency: int = 8
     max_output_tokens: int | None = None
+    skip_baseline_test: bool = False
+    baseline_accuracy: float | None = None

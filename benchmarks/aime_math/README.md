@@ -38,7 +38,17 @@ python benchmarks/aime_math/run.py --max-iterations 0
 ### Full optimization run
 
 ```bash
-python benchmarks/aime_math/run.py --max-iterations 50
+python benchmarks/aime_math/run.py \
+    --max-evaluations 500 --test-repeats 5 \
+    2>&1 | tee logs/aime_$(date +%Y%m%d_%H%M%S).log
+```
+
+### Skip baseline test evaluation (use known accuracy)
+
+```bash
+python benchmarks/aime_math/run.py \
+    --max-evaluations 500 --test-repeats 5 \
+    --skip-baseline-test --baseline-accuracy 0.465
 ```
 
 ### Quick debug run
@@ -53,15 +63,18 @@ python benchmarks/aime_math/run.py \
 
 | Flag | Default | Description |
 |---|---|---|
-| `--max-iterations` | 50 | Optimizer iterations. `0` skips optimization entirely. |
+| `--max-iterations` | 10000 | Optimizer iterations. `0` skips optimization entirely. |
+| `--max-evaluations` | `None` | Stop after N total evaluation runs (rollout budget). |
 | `--seed` | 42 | RNG seed for dataset shuffle and optimizer. |
 | `--output-dir` | `outputs/aime_math` | Where to write result JSON. |
 | `--train-limit` | `None` | Cap trainset size (debug). |
 | `--val-limit` | `None` | Cap valset size (debug). |
 | `--test-limit` | `None` | Cap testset size (debug). |
-| `--test-repeats` | 1 | Repeat each test question N times (GEPA paper uses 5). |
+| `--test-repeats` | 1 | Repeat each test question N times. |
 | `--concurrency` | 8 | Parallel task evaluations (semaphore limit). |
 | `--max-output-tokens` | `None` | Cap completion tokens per LLM call. |
+| `--skip-baseline-test` | `False` | Skip baseline evaluation on test set. |
+| `--baseline-accuracy` | `None` | Use this value as baseline accuracy instead of evaluating. |
 
 All flags also work as env vars with `AIME_` prefix, e.g. `AIME_SOLVER_MODEL="qwen/qwen3-8b"`.
 
@@ -80,7 +93,7 @@ Non-OpenAI models are routed through `_ProxyClient` using `OPENAI_BASE_URL` (e.g
 
 | Model | Accuracy | Time | Cost |
 |---|---|---|---|
-| `gpt-4.1-mini` baseline (5 runs averaged) | 44.7% | ~5 min/run | ~$0.19/run |
+| `gpt-4.1-mini` baseline (16 runs, 480 trials) | 46.5% ± 4.5% | ~5 min/run | ~$0.19/run |
 | `qwen/qwen3-8b` baseline (4 runs averaged) | 63.3% | ~27 min/run | ~$0.22/run |
 
 GEPA paper baselines: `gpt-4.1-mini` = 49.33%, `qwen3-8b` = 27.33%.

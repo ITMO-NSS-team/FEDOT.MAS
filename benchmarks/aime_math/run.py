@@ -162,11 +162,15 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
             trainset, seed_config=seed_config, valset=valset
         )
 
-        _log.info("Evaluating baseline on testset ({} tasks)", len(testset))
-        baseline_tasks = await evaluate_on(
-            seed_config, testset, maw, scorer,
-            stage="baseline", concurrency=settings.concurrency,
-        )
+        if settings.skip_baseline_test:
+            _log.info("Skipping baseline test evaluation (--skip-baseline-test)")
+            baseline_tasks = []
+        else:
+            _log.info("Evaluating baseline on testset ({} tasks)", len(testset))
+            baseline_tasks = await evaluate_on(
+                seed_config, testset, maw, scorer,
+                stage="baseline", concurrency=settings.concurrency,
+            )
 
         if opt_result.best_config is seed_config or opt_result.best_config == seed_config:
             _log.info("Best config == seed — reusing baseline results for optimized eval")
@@ -178,11 +182,12 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
                 stage="optimized", concurrency=settings.concurrency,
             )
 
-    baseline_acc = (
-        sum(t.correct for t in baseline_tasks) / len(baseline_tasks)
-        if baseline_tasks
-        else 0.0
-    )
+    if baseline_tasks:
+        baseline_acc = sum(t.correct for t in baseline_tasks) / len(baseline_tasks)
+    elif settings.baseline_accuracy is not None:
+        baseline_acc = settings.baseline_accuracy
+    else:
+        baseline_acc = 0.0
     optimized_acc = (
         sum(t.correct for t in optimized_tasks) / len(optimized_tasks)
         if optimized_tasks
@@ -231,9 +236,13 @@ if __name__ == "__main__":
     parser.add_argument("--test-repeats", type=int, default=None)
     parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--max-output-tokens", type=int, default=None)
+    parser.add_argument("--skip-baseline-test", action="store_true")
+    parser.add_argument("--baseline-accuracy", type=float, default=None)
     args = parser.parse_args()
 
-    overrides = {k: v for k, v in vars(args).items() if v is not None}
+    raw = vars(args)
+    # store_true flags: keep False (explicit default) only if flag was actually passed
+    overrides = {k: v for k, v in raw.items() if v is not None}
     overrides = {k.replace("-", "_"): v for k, v in overrides.items()}
     settings = AimeMathSettings(**overrides)
 
