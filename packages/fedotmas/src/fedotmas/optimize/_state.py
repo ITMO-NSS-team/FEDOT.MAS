@@ -105,6 +105,13 @@ class OptimizationState:
         self._next_index += 1
         return c
 
+    def remove_candidate(self, index: int) -> None:
+        """Remove a candidate from the pool (e.g. after rejection).
+
+        Cache entries are kept so identical configs won't be re-evaluated.
+        """
+        self.candidates = [c for c in self.candidates if c.index != index]
+
     def record_task_result(self, candidate: Candidate, result: TaskResult) -> None:
         candidate.scores[result.task] = result.score
         candidate.feedbacks[result.task] = result.feedback

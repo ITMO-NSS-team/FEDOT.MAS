@@ -350,6 +350,7 @@ async def _run_iteration(
             parent_batch_score,
         )
         ctx.dispatcher.on_candidate_rejected(child, parent)
+        state.remove_candidate(child.index)
         return eval_runs, False, consecutive_failures
 
 
@@ -452,6 +453,7 @@ async def _try_merge(ctx: _LoopContext) -> _MergeResult:
             parent_best,
         )
         ctx.dispatcher.on_candidate_rejected(merged, pair[0])
+        state.remove_candidate(merged.index)
         return _MergeResult(eval_runs=eval_runs, attempted=True)
 
 
@@ -471,10 +473,13 @@ def _build_result(
         raise RuntimeError("No candidates were evaluated")
 
     _log.info(
-        "Optimization complete | iterations={} candidates={} best_score={:.3f}",
+        "Optimization complete | iterations={} candidates={} best=#{} ({}) best_score={:.3f} eval_count={}",
         iteration,
         len(state.candidates),
+        best.index,
+        best.origin,
         best.mean_score or 0.0,
+        len(best.scores),
     )
 
     result = OptimizationResult(
