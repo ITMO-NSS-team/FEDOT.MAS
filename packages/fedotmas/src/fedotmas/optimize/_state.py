@@ -5,9 +5,11 @@ import json
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from fedotmas.maw.models import MAWConfig
+
+Split = Literal["train", "val"]
 
 
 class Task(NamedTuple):
@@ -32,9 +34,15 @@ class Candidate:
     index: int
     config: MAWConfig
     config_hash: str
+    # Val scores — used for Pareto, dominance, mean_score, best selection.
     scores: dict[str, float] = field(default_factory=dict)
     feedbacks: dict[str, str] = field(default_factory=dict)
     states: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Train minibatch scores — used for accept/reject decisions and reflection
+    # examples only. Kept separate so they don't contaminate Pareto/mean.
+    train_scores: dict[str, float] = field(default_factory=dict)
+    train_feedbacks: dict[str, str] = field(default_factory=dict)
+    train_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     parent_index: int | None = None
     origin: str = "seed"
     on_pareto_front: bool = False
@@ -112,10 +120,17 @@ class OptimizationState:
         """
         self.candidates = [c for c in self.candidates if c.index != index]
 
-    def record_task_result(self, candidate: Candidate, result: TaskResult) -> None:
-        candidate.scores[result.task] = result.score
-        candidate.feedbacks[result.task] = result.feedback
-        candidate.states[result.task] = result.state
+    def record_task_result(
+        self, candidate: Candidate, result: TaskResult, *, split: Split
+    ) -> None:
+        if split == "train":
+            candidate.train_scores[result.task] = result.score
+            candidate.train_feedbacks[result.task] = result.feedback
+            candidate.train_states[result.task] = result.state
+        else:
+            candidate.scores[result.task] = result.score
+            candidate.feedbacks[result.task] = result.feedback
+            candidate.states[result.task] = result.state
         self.cache.put(candidate.config_hash, result.task, result)
         self.total_evaluations += 1
 
@@ -149,7 +164,7 @@ class OptimizationState:
         candidates_data = []
         for c in self.candidates:
             expected_answers: dict[str, str] = {}
-            for task_key in c.scores:
+            for task_key in (*c.scores, *c.train_scores):
                 cached = self.cache.get(c.config_hash, task_key)
                 if cached is not None and cached.expected is not None:
                     expected_answers[task_key] = cached.expected
@@ -160,6 +175,9 @@ class OptimizationState:
                 "scores": c.scores,
                 "feedbacks": c.feedbacks,
                 "states": c.states,
+                "train_scores": c.train_scores,
+                "train_feedbacks": c.train_feedbacks,
+                "train_states": c.train_states,
                 "parent_index": c.parent_index,
                 "origin": c.origin,
                 "on_pareto_front": c.on_pareto_front,
@@ -197,6 +215,9 @@ class OptimizationState:
                 scores=cd["scores"],
                 feedbacks=cd["feedbacks"],
                 states=cd["states"],
+                train_scores=cd.get("train_scores", {}),
+                train_feedbacks=cd.get("train_feedbacks", {}),
+                train_states=cd.get("train_states", {}),
                 parent_index=cd["parent_index"],
                 origin=cd["origin"],
                 on_pareto_front=cd["on_pareto_front"],
@@ -210,6 +231,15 @@ class OptimizationState:
                     state=c.states.get(task, {}),
                     score=score_val,
                     feedback=c.feedbacks.get(task, ""),
+                    expected=expected_answers.get(task),
+                )
+                state.cache.put(c.config_hash, task, result)
+            for task, score_val in c.train_scores.items():
+                result = TaskResult(
+                    task=task,
+                    state=c.train_states.get(task, {}),
+                    score=score_val,
+                    feedback=c.train_feedbacks.get(task, ""),
                     expected=expected_answers.get(task),
                 )
                 state.cache.put(c.config_hash, task, result)

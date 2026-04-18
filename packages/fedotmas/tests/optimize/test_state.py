@@ -242,7 +242,7 @@ def test_state_record_and_cache():
     state = OptimizationState()
     c = state.add_candidate(_config("a"))
     result = TaskResult(task="t1", state={"a": "val"}, score=0.9, feedback="great")
-    state.record_task_result(c, result)
+    state.record_task_result(c, result, split="val")
     assert c.scores["t1"] == 0.9
     assert c.feedbacks["t1"] == "great"
     assert c.states["t1"] == {"a": "val"}
@@ -297,3 +297,141 @@ def test_is_ancestor_of_unrelated():
     # c1 and c2 are siblings, not ancestors of each other
     assert is_ancestor_of(c1, c2, state.candidates) is False
     assert is_ancestor_of(c2, c1, state.candidates) is False
+
+
+# --- Train/val score isolation ---
+
+
+def test_record_task_result_routes_to_split():
+    """split='train' writes to train_*; split='val' writes to scores/feedbacks/states."""
+    state = OptimizationState()
+    c = state.add_candidate(_config("a"))
+
+    state.record_task_result(
+        c, TaskResult(task="v1", state={"a": "v_out"}, score=0.7, feedback="vf"),
+        split="val",
+    )
+    state.record_task_result(
+        c, TaskResult(task="t1", state={"a": "t_out"}, score=0.4, feedback="tf"),
+        split="train",
+    )
+
+    assert c.scores == {"v1": 0.7}
+    assert c.feedbacks == {"v1": "vf"}
+    assert c.states == {"v1": {"a": "v_out"}}
+    assert c.train_scores == {"t1": 0.4}
+    assert c.train_feedbacks == {"t1": "tf"}
+    assert c.train_states == {"t1": {"a": "t_out"}}
+
+
+def test_train_scores_dont_affect_mean_score():
+    """mean_score reads only val scores, ignoring train minibatch evals."""
+    state = OptimizationState()
+    c = state.add_candidate(_config("a"))
+    for i, score in enumerate([0.5, 0.6, 0.7]):  # val
+        state.record_task_result(
+            c, TaskResult(task=f"v{i}", state={}, score=score, feedback=""),
+            split="val",
+        )
+    # Add poor train scores — must not drag mean_score down
+    for i in range(10):
+        state.record_task_result(
+            c, TaskResult(task=f"t{i}", state={}, score=0.0, feedback=""),
+            split="train",
+        )
+    assert c.mean_score == pytest.approx(0.6)
+
+
+def test_train_scores_dont_affect_pareto_dominance():
+    """Pareto dominance ignores train scores (uses only c.scores)."""
+    from fedotmas.optimize._state import _dominates
+
+    state = OptimizationState()
+    a = state.add_candidate(_config("a"))
+    b = state.add_candidate(_config("a", instructions={"a": "v2"}))
+    # Same val scores
+    for cand in (a, b):
+        state.record_task_result(
+            cand, TaskResult(task="v1", state={}, score=0.5, feedback=""),
+            split="val",
+        )
+    # 'a' has a private train task with perfect score — must not dominate.
+    state.record_task_result(
+        a, TaskResult(task="t1", state={}, score=1.0, feedback=""),
+        split="train",
+    )
+    assert _dominates(a, b) is False
+    assert _dominates(b, a) is False
+
+
+def test_save_load_preserves_train_scores():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    state = OptimizationState()
+    c = state.add_candidate(_config("a"))
+    state.record_task_result(
+        c, TaskResult(task="v1", state={"a": "vo"}, score=0.7, feedback="vf"),
+        split="val",
+    )
+    state.record_task_result(
+        c, TaskResult(task="t1", state={"a": "to"}, score=0.4, feedback="tf"),
+        split="train",
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        path = Path(f.name)
+    try:
+        state.save(path)
+        loaded = OptimizationState.load(path)
+        lc = loaded.candidates[0]
+        assert lc.scores == {"v1": 0.7}
+        assert lc.train_scores == {"t1": 0.4}
+        assert lc.train_feedbacks == {"t1": "tf"}
+        assert lc.train_states == {"t1": {"a": "to"}}
+        # Cache restored for both splits
+        assert loaded.cache.get(lc.config_hash, "v1") is not None
+        assert loaded.cache.get(lc.config_hash, "t1") is not None
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_load_old_checkpoint_without_train_fields():
+    """Backward compat: old JSONs without train_* should load with empty defaults."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    cfg = _config("a")
+    legacy = {
+        "next_index": 1,
+        "total_evaluations": 1,
+        "iteration": 0,
+        "candidates": [
+            {
+                "index": 0,
+                "config": json.loads(cfg.model_dump_json()),
+                "config_hash": config_hash(cfg),
+                "scores": {"v1": 0.5},
+                "feedbacks": {"v1": "ok"},
+                "states": {"v1": {"a": "out"}},
+                "parent_index": None,
+                "origin": "seed",
+                "on_pareto_front": True,
+                "merge_parent_indices": None,
+            }
+        ],
+    }
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(legacy, f)
+        path = Path(f.name)
+    try:
+        loaded = OptimizationState.load(path)
+        c = loaded.candidates[0]
+        assert c.scores == {"v1": 0.5}
+        assert c.train_scores == {}
+        assert c.train_feedbacks == {}
+        assert c.train_states == {}
+    finally:
+        path.unlink(missing_ok=True)

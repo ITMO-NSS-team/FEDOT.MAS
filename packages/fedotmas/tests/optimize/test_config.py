@@ -8,7 +8,7 @@ from fedotmas.optimize._config import OptimizationConfig
 class TestOptimizationConfig:
     def test_defaults(self):
         cfg = OptimizationConfig()
-        assert cfg.temperature_reflect == 0.7
+        assert cfg.temperature_reflect == 1.0
         assert cfg.temperature_merge == 0.5
         assert cfg.temperature_judge == 0.1
         assert cfg.improvement_epsilon == 1e-6

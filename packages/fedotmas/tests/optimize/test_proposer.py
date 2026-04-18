@@ -33,9 +33,10 @@ def _config(*agents: MAWAgentConfig) -> MAWConfig:
 
 def _candidate_with_scores(config: MAWConfig) -> Candidate:
     c = Candidate(index=0, config=config, config_hash="h0")
-    c.scores = {"t1": 0.5, "t2": 0.8}
-    c.feedbacks = {"t1": "needs work", "t2": "good"}
-    c.states = {
+    # Reflection examples are built from train_* (minibatch tasks).
+    c.train_scores = {"t1": 0.5, "t2": 0.8}
+    c.train_feedbacks = {"t1": "needs work", "t2": "good"}
+    c.train_states = {
         "t1": {"a": "output_a_t1", "b": "output_b_t1"},
         "t2": {"a": "output_a_t2", "b": "output_b_t2"},
     }
@@ -81,7 +82,6 @@ def test_format_reflection_examples():
     ]
     text = _format_reflection_examples(examples)
     assert "test task" in text
-    assert "0.70" in text
     assert "Pretty good" in text
 
 
@@ -106,9 +106,9 @@ async def test_mutate():
     a1 = _agent("a", "Original instruction")
     config = _config(a1)
     candidate = Candidate(index=0, config=config, config_hash="h0")
-    candidate.scores = {"t1": 0.5}
-    candidate.feedbacks = {"t1": "improve"}
-    candidate.states = {"t1": {"a": "output"}}
+    candidate.train_scores = {"t1": 0.5}
+    candidate.train_feedbacks = {"t1": "improve"}
+    candidate.train_states = {"t1": {"a": "output"}}
 
     mutator = InstructionMutator()
     with patch("fedotmas.optimize._mutators._instruction.run_meta_agent_call") as mock_call:
@@ -136,9 +136,9 @@ async def test_mutate_preserves_invariants():
     )
     config = _config(a1)
     candidate = Candidate(index=0, config=config, config_hash="h0")
-    candidate.scores = {"t1": 0.5}
-    candidate.feedbacks = {"t1": "improve"}
-    candidate.states = {"t1": {"research_result": "output"}}
+    candidate.train_scores = {"t1": 0.5}
+    candidate.train_feedbacks = {"t1": "improve"}
+    candidate.train_states = {"t1": {"research_result": "output"}}
 
     mutator = InstructionMutator()
     with patch("fedotmas.optimize._mutators._instruction.run_meta_agent_call") as mock_call:

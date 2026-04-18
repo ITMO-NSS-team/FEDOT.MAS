@@ -22,6 +22,7 @@ from fedotmas.optimize._scoring import Scorer, ScoringResult
 from fedotmas.optimize._state import (
     Candidate,
     OptimizationState,
+    Split,
     Task,
     TaskResult,
     config_hash,
@@ -112,7 +113,7 @@ async def run_optimization(
     if seed is not None and not seed.scores:
         _log.info("Evaluating seed candidate on valset ({} tasks)", len(valset))
         eval_runs = await _evaluate_candidate(
-            maw, scorer, seed, valset, state, cfg, metrics_cb
+            maw, scorer, seed, valset, state, cfg, metrics_cb, split="val"
         )
         total_eval_runs += eval_runs
         state.update_pareto_front()
@@ -272,7 +273,8 @@ async def _run_iteration(
     )
 
     runs = await _evaluate_candidate(
-        ctx.maw, ctx.scorer, parent, batch, state, cfg, ctx.metrics_cb
+        ctx.maw, ctx.scorer, parent, batch, state, cfg, ctx.metrics_cb,
+        split="train",
     )
     eval_runs += runs
 
@@ -318,7 +320,8 @@ async def _run_iteration(
         new_config, parent_index=parent.index, origin="mutation"
     )
     runs = await _evaluate_candidate(
-        ctx.maw, ctx.scorer, child, batch, state, cfg, ctx.metrics_cb
+        ctx.maw, ctx.scorer, child, batch, state, cfg, ctx.metrics_cb,
+        split="train",
     )
     eval_runs += runs
     ctx.dispatcher.on_candidate_evaluated(child, batch)
@@ -337,7 +340,8 @@ async def _run_iteration(
         ctx.dispatcher.on_candidate_accepted(child, parent)
 
         runs = await _evaluate_candidate(
-            ctx.maw, ctx.scorer, child, ctx.valset, state, cfg, ctx.metrics_cb
+            ctx.maw, ctx.scorer, child, ctx.valset, state, cfg, ctx.metrics_cb,
+            split="val",
         )
         eval_runs += runs
         state.update_pareto_front()
@@ -427,7 +431,8 @@ async def _try_merge(ctx: _LoopContext) -> _MergeResult:
         origin="merge",
     )
     runs = await _evaluate_candidate(
-        ctx.maw, ctx.scorer, merged, ctx.valset, state, cfg, ctx.metrics_cb
+        ctx.maw, ctx.scorer, merged, ctx.valset, state, cfg, ctx.metrics_cb,
+        split="val",
     )
     eval_runs += runs
     ctx.dispatcher.on_candidate_evaluated(merged, ctx.valset)
@@ -504,13 +509,15 @@ async def _evaluate_candidate(
     state: OptimizationState,
     config: OptimizationConfig,
     metrics_cb: MetricsCallback | None = None,
+    *,
+    split: Split,
 ) -> int:
     """Returns number of new evaluation runs performed."""
     tasks_to_run: list[Task] = []
     for task in tasks:
         cached = state.cache.get(candidate.config_hash, task.input)
         if cached is not None:
-            state.record_task_result(candidate, cached)
+            state.record_task_result(candidate, cached, split=split)
             if metrics_cb is not None:
                 metrics_cb.metrics.cache_hits += 1
         else:
@@ -543,7 +550,7 @@ async def _evaluate_candidate(
                 expected=task.expected,
                 error=True,
             )
-            state.record_task_result(candidate, result)
+            state.record_task_result(candidate, result, split=split)
             if consecutive_errors >= max_failures:
                 _log.warning(
                     "Skipping remaining tasks after {} consecutive failures",
@@ -572,13 +579,20 @@ async def _evaluate_candidate(
                     expected=task.expected,
                     error=True,
                 )
-        state.record_task_result(candidate, result)
+        state.record_task_result(candidate, result, split=split)
 
     return len(tasks_to_run)
 
 
 def _mean_score_on(candidate: Candidate, tasks: set[str]) -> float:
-    scores = [candidate.scores[t] for t in tasks if t in candidate.scores]
+    """Mean score of candidate on a minibatch (uses train_scores).
+
+    Used for accept/reject decisions where the minibatch is freshly evaluated
+    train tasks, recorded into ``candidate.train_scores``.
+    """
+    scores = [
+        candidate.train_scores[t] for t in tasks if t in candidate.train_scores
+    ]
     if not scores:
         return 0.0
     return sum(scores) / len(scores)

@@ -21,6 +21,7 @@ class TestCheckpointSaveLoad:
         state.record_task_result(
             c1,
             TaskResult(task="t1", state={"a": "out1"}, score=0.7, feedback="good"),
+            split="val",
         )
         c2 = state.add_candidate(
             _config("v2"), parent_index=0, origin="mutation"
@@ -28,6 +29,7 @@ class TestCheckpointSaveLoad:
         state.record_task_result(
             c2,
             TaskResult(task="t1", state={"a": "out2"}, score=0.9, feedback="great"),
+            split="val",
         )
         state.update_pareto_front()
         state.iteration = 5

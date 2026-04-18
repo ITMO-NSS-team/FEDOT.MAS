@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from fedotmas._settings import ModelConfig, resolve_model_config, get_meta_model
+from fedotmas._settings import ModelConfig, resolve_model_config, get_reflection_model
 from fedotmas.common.logging import get_logger
 from fedotmas.meta._adk_runner import run_meta_agent_call
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig
@@ -81,11 +81,16 @@ def _unique_agent_names(*configs: MAWConfig) -> list[str]:
 def _build_reflection_examples(
     candidate: Candidate, agent: MAWAgentConfig, tasks: list[Task]
 ) -> list[ReflectionExample]:
+    """Build reflection examples from the train minibatch just evaluated.
+
+    Reads from ``train_*`` fields — these are the freshly evaluated minibatch
+    tasks that motivated this mutation.
+    """
     examples: list[ReflectionExample] = []
     for task in tasks:
-        if task.input not in candidate.scores:
+        if task.input not in candidate.train_scores:
             continue
-        state = candidate.states.get(task.input, {})
+        state = candidate.train_states.get(task.input, {})
         agent_output = state.get(agent.output_key)
         examples.append(
             ReflectionExample(
@@ -93,8 +98,8 @@ def _build_reflection_examples(
                 agent_instruction=agent.instruction,
                 agent_output=str(agent_output) if agent_output is not None else None,
                 pipeline_output=state,
-                score=candidate.scores[task.input],
-                feedback=candidate.feedbacks.get(task.input, ""),
+                score=candidate.train_scores[task.input],
+                feedback=candidate.train_feedbacks.get(task.input, ""),
             )
         )
     return examples
@@ -129,7 +134,7 @@ class InstructionMutator:
         model: str | ModelConfig | None = None,
     ) -> None:
         if model is None:
-            self._model = resolve_model_config(get_meta_model())
+            self._model = resolve_model_config(get_reflection_model())
         else:
             self._model = resolve_model_config(model)
 

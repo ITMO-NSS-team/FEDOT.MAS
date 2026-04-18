@@ -92,6 +92,38 @@ class TestParetoCandidateSelector:
         # c0 wins t1, t2, t3 (freq=3), c1 wins t4 (freq=1) → ratio ~3:1
         assert counts[0] > counts[1] * 1.5  # conservative check
 
+    def test_train_scores_dont_inflate_frequency(self):
+        """Train minibatch scores must NOT contribute to frequency-weighted Pareto.
+
+        Regression test: previously train minibatch tasks were stored alongside
+        val tasks in candidate.scores. A weak parent that had been selected many
+        times accumulated unique train tasks (no other candidate had them) and
+        got "free" Pareto wins for each, biasing future selections toward weak
+        parents.
+        """
+        import random
+        from collections import Counter
+
+        # Both have the same val scores → would normally be 50/50.
+        c0 = Candidate(index=0, config=_config("a"), config_hash="h0")
+        c0.scores = {"v1": 0.5}
+        c0.on_pareto_front = True
+
+        c1 = Candidate(index=1, config=_config("a"), config_hash="h1")
+        c1.scores = {"v1": 0.5}
+        c1.on_pareto_front = True
+
+        # c0 has many "private" train tasks (no other candidate has them).
+        # If train_scores leaked into Pareto frequency weighting, c0 would
+        # win these tasks by default → inflated selection rate.
+        c0.train_scores = {f"t{i}": 1.0 for i in range(20)}
+
+        sel = ParetoCandidateSelector(rng=random.Random(42))
+        counts = Counter(sel.select([c0, c1]).index for _ in range(400))
+
+        # Selections should be roughly 50/50 (within ~25% slack).
+        assert 0.4 < counts[0] / 400 < 0.6
+
 
 class TestEpsilonGreedySelector:
     def test_greedy_picks_best(self):

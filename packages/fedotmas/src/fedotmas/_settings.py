@@ -41,6 +41,10 @@ def get_meta_model() -> str:
     )
 
 
+def get_reflection_model() -> str:
+    return os.getenv("FEDOTMAS_REFLECTION_MODEL") or get_meta_model()
+
+
 def get_worker_models() -> list[str]:
     env = os.getenv("FEDOTMAS_WORKER_MODELS")
     if env:
