@@ -161,6 +161,7 @@ async def run_optimization(
             iteration += 1
             state.iteration = iteration
             _log.info("--- Iteration {} ---", iteration)
+            _log.info("Pool: {}", _format_pool(state))
             dispatcher.on_iteration_start(iteration, state)
 
             eval_runs, consecutive_failures = await _run_loop_step(
@@ -582,6 +583,17 @@ async def _evaluate_candidate(
         state.record_task_result(candidate, result, split=split)
 
     return len(tasks_to_run)
+
+
+def _format_pool(state: OptimizationState) -> str:
+    """One-line summary of all candidates with val mean_score; ★ marks Pareto."""
+    parts: list[str] = []
+    for c in state.candidates:
+        score = c.mean_score
+        score_str = f"{score:.3f}" if score is not None else "-"
+        marker = "★" if c.on_pareto_front else ""
+        parts.append(f"#{c.index}{marker}={score_str}")
+    return "[" + " ".join(parts) + "]"
 
 
 def _mean_score_on(candidate: Candidate, tasks: set[str]) -> float:

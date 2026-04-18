@@ -194,6 +194,44 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
         else 0.0
     )
 
+    if opt_result is not None:
+        m = opt_result.metrics
+        optimizer_metrics = {
+            "accepted": m.accepted,
+            "rejected": m.rejected,
+            "merge_attempts": m.merge_attempts,
+            "cache_hits": m.cache_hits,
+            "cache_misses": m.cache_misses,
+            "acceptance_rate": m.acceptance_rate,
+            "cache_hit_rate": m.cache_hit_rate,
+            "best_score_history": list(m.best_score_history),
+        } if m is not None else None
+
+        candidates_dump = [
+            {
+                "index": c.index,
+                "origin": c.origin,
+                "parent_index": c.parent_index,
+                "merge_parent_indices": list(c.merge_parent_indices)
+                    if c.merge_parent_indices else None,
+                "on_pareto_front": c.on_pareto_front,
+                "mean_score": c.mean_score,
+                "min_score": c.min_score,
+                "n_val_scores": len(c.scores),
+                "n_train_scores": len(c.train_scores),
+                "val_scores": dict(c.scores),
+                "train_scores": dict(c.train_scores),
+                "agents": [
+                    {"name": a.name, "instruction": a.instruction}
+                    for a in c.config.agents
+                ],
+            }
+            for c in opt_result.all_candidates
+        ]
+    else:
+        optimizer_metrics = None
+        candidates_dump = []
+
     result = BenchmarkResult(
         benchmark="aime_math",
         metrics={
@@ -202,6 +240,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
             "improvement": optimized_acc - baseline_acc,
         },
         iterations=opt_result.iterations if opt_result else 0,
+        total_evaluation_runs=opt_result.total_evaluation_runs if opt_result else None,
         cost=CostSummary(
             prompt_tokens=opt_result.total_prompt_tokens if opt_result else 0,
             completion_tokens=opt_result.total_completion_tokens if opt_result else 0,
@@ -212,9 +251,12 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
             ),
         ),
         per_task=optimized_tasks,
+        seed_config=seed_config.model_dump(),
         optimized_config=(
             opt_result.best_config.model_dump() if opt_result else None
         ),
+        optimizer_metrics=optimizer_metrics,
+        candidates=candidates_dump,
     )
 
     path = save_result(result, Path(settings.output_dir))
