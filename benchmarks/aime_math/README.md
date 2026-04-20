@@ -76,6 +76,7 @@ python benchmarks/aime_math/run.py \
 | `--max-output-tokens` | `None` | Cap completion tokens per LLM call. |
 | `--skip-baseline-test` | `False` | Skip baseline evaluation on test set. |
 | `--baseline-accuracy` | `None` | Use this value as baseline accuracy instead of evaluating. |
+| `--eval-best-on-train` | `False` | *(debug)* After optimization, evaluate best candidate on the full trainset (+45 evals) to surface train/val/test gaps. Val accuracy is reused from the optimizer's full-val eval. |
 
 All flags also work as env vars with `AIME_` prefix, e.g. `AIME_SOLVER_MODEL="qwen/qwen3-8b"`.
 

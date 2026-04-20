@@ -122,6 +122,9 @@ def report(result: BenchmarkResult) -> None:
     _log.info("Baseline accuracy:   {:.1%}", m.get("baseline_accuracy", 0))
     _log.info("Optimized accuracy:  {:.1%}", m.get("optimized_accuracy", 0))
     _log.info("Improvement:         {:+.1%}", m.get("improvement", 0))
+    if "train_accuracy" in m:
+        _log.info("Train accuracy:      {:.1%} (best on full trainset)", m["train_accuracy"])
+        _log.info("Val accuracy:        {:.1%} (best on full valset)", m.get("val_accuracy", 0))
     if result.cost:
         _log.info("Total tokens:        {:,}", result.cost.total_tokens)
 
@@ -148,6 +151,8 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
 
     maw = MAW(worker_models=[settings.solver_model])
     scorer = ExactIntScorer(solutions=solutions)
+
+    train_eval_tasks: list[TaskResult] = []
 
     if settings.max_iterations == 0:
         _log.info("max_iterations=0 — skipping optimizer, evaluating seed on testset only")
@@ -181,6 +186,18 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
             optimized_tasks = await evaluate_on(
                 opt_result.best_config, testset, maw, scorer,
                 stage="optimized", concurrency=settings.concurrency,
+            )
+
+        if settings.eval_best_on_train:
+            # Diagnostic: full-train eval of best_config to surface a train/val/test gap.
+            # Val accuracy is already known (best_score = mean over full valset, since
+            # every accepted candidate gets a full-val eval), so we only need fresh train.
+            # Train ≈ val ≪ test → distribution shift (train/val one set, test another).
+            # Train < val → selection bias on val (instruction overfit to val-fold).
+            _log.info("Evaluating best on full trainset ({} tasks)", len(trainset))
+            train_eval_tasks = await evaluate_on(
+                opt_result.best_config, trainset, maw, scorer,
+                stage="train-final", concurrency=settings.concurrency,
             )
 
     if baseline_tasks:
@@ -233,13 +250,19 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
         optimizer_metrics = None
         candidates_dump = []
 
+    metrics: dict[str, float] = {
+        "baseline_accuracy": baseline_acc,
+        "optimized_accuracy": optimized_acc,
+        "improvement": optimized_acc - baseline_acc,
+    }
+    if train_eval_tasks:
+        metrics["train_accuracy"] = sum(t.correct for t in train_eval_tasks) / len(train_eval_tasks)
+    if opt_result is not None:
+        metrics["val_accuracy"] = opt_result.best_score
+
     result = BenchmarkResult(
         benchmark="aime_math",
-        metrics={
-            "baseline_accuracy": baseline_acc,
-            "optimized_accuracy": optimized_acc,
-            "improvement": optimized_acc - baseline_acc,
-        },
+        metrics=metrics,
         iterations=opt_result.iterations if opt_result else 0,
         total_evaluation_runs=opt_result.total_evaluation_runs if opt_result else None,
         cost=CostSummary(
@@ -280,12 +303,12 @@ if __name__ == "__main__":
     parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--eval-concurrency", type=int, default=None)
     parser.add_argument("--max-output-tokens", type=int, default=None)
-    parser.add_argument("--skip-baseline-test", action="store_true")
+    parser.add_argument("--skip-baseline-test", action="store_true", default=None)
     parser.add_argument("--baseline-accuracy", type=float, default=None)
+    parser.add_argument("--eval-best-on-train", action="store_true", default=None)
     args = parser.parse_args()
 
     raw = vars(args)
-    # store_true flags: keep False (explicit default) only if flag was actually passed
     overrides = {k: v for k, v in raw.items() if v is not None}
     overrides = {k.replace("-", "_"): v for k, v in overrides.items()}
     settings = AimeMathSettings(**overrides)

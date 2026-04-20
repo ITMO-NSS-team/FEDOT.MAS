@@ -21,3 +21,4 @@ class AimeMathSettings(BaseSettings):
     max_output_tokens: int | None = None
     skip_baseline_test: bool = False
     baseline_accuracy: float | None = None
+    eval_best_on_train: bool = False
