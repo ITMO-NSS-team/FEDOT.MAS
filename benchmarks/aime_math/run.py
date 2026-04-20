@@ -143,6 +143,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
         patience=settings.patience,
         minibatch_size=settings.minibatch_size,
         use_merge=settings.use_merge,
+        eval_concurrency=settings.eval_concurrency,
     )
 
     maw = MAW(worker_models=[settings.solver_model])

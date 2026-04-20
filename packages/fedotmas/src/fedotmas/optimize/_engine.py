@@ -529,11 +529,14 @@ async def _evaluate_candidate(
     if not tasks_to_run:
         return 0
 
+    sem = asyncio.Semaphore(max(1, config.eval_concurrency))
+
+    async def _bounded(task: Task) -> ControlledRun:
+        async with sem:
+            return await Controller(maw).run(task.input, config=candidate.config)
+
     runs: list[ControlledRun | BaseException] = await asyncio.gather(
-        *[
-            Controller(maw).run(task.input, config=candidate.config)
-            for task in tasks_to_run
-        ],
+        *[_bounded(task) for task in tasks_to_run],
         return_exceptions=True,
     )
 

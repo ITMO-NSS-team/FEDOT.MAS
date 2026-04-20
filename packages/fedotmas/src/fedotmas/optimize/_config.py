@@ -84,6 +84,11 @@ class OptimizationConfig:
     mutate_structure: bool = False
     """Optimize pipeline structure (agent ordering, parallel/sequential). (Not yet implemented)"""
 
+    eval_concurrency: int = 8
+    """Max concurrent task evaluations during a single _evaluate_candidate call.
+    Bounds the request-rate spike from large valset evals. Lower = safer for
+    rate-limited APIs, slower wall-clock."""
+
     # Error recovery
     max_consecutive_failures: int = 3
     """Threshold before emergency shuffle of agents."""
