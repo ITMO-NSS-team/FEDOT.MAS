@@ -139,16 +139,21 @@ class OptimizationState:
         if not evaluated:
             return
 
-        for c in evaluated:
-            c.on_pareto_front = True
+        per_task_best = _per_task_best_set(evaluated)
+        if not per_task_best:
+            for c in evaluated:
+                c.on_pareto_front = True
+            return
 
-        for c in evaluated:
-            for other in evaluated:
-                if other is c:
-                    continue
-                if _dominates(other, c):
-                    c.on_pareto_front = False
-                    break
+        agg_scores = {c.index: c.mean_score or 0.0 for c in evaluated}
+        pruned = _remove_dominated_programs(per_task_best, agg_scores)
+
+        survivors: set[int] = set()
+        for front in pruned.values():
+            survivors.update(front)
+
+        for c in self.candidates:
+            c.on_pareto_front = c.index in survivors
 
     def get_pareto_candidates(self) -> list[Candidate]:
         return [c for c in self.candidates if c.on_pareto_front]
@@ -286,17 +291,71 @@ def is_ancestor_of(a: Candidate, b: Candidate, candidates: list[Candidate]) -> b
     return False
 
 
-def _dominates(a: Candidate, b: Candidate) -> bool:
-    """Compares only on intersection of tasks. Empty intersection → no domination."""
-    common_tasks = a.scores.keys() & b.scores.keys()
-    if not common_tasks:
-        return False
-    at_least_one_better = False
-    for task in common_tasks:
-        sa = a.scores[task]
-        sb = b.scores[task]
-        if sa < sb:
+def _per_task_best_set(candidates: list[Candidate]) -> dict[str, set[int]]:
+    """For each val task, return the set of candidate indices achieving the max score.
+
+    Mirrors GEPA's per-instance Pareto frontier (``program_at_pareto_front_valset``).
+    Tasks that no candidate has scored on are skipped.
+    """
+    all_tasks: set[str] = set()
+    for c in candidates:
+        all_tasks.update(c.scores.keys())
+
+    result: dict[str, set[int]] = {}
+    for task in all_tasks:
+        scored = [(c.index, c.scores[task]) for c in candidates if task in c.scores]
+        if not scored:
+            continue
+        best = max(s for _, s in scored)
+        result[task] = {idx for idx, s in scored if s == best}
+    return result
+
+
+def _is_dominated(
+    y: int, candidates: set[int], per_task_best: dict[str, set[int]]
+) -> bool:
+    """A candidate is dominated if every per-task front it sits on contains
+    another surviving candidate from ``candidates`` (i.e. it is never uniquely best).
+    """
+    y_fronts = [front for front in per_task_best.values() if y in front]
+    if not y_fronts:
+        return True
+    for front in y_fronts:
+        if not any(other in candidates for other in front):
             return False
-        if sa > sb:
-            at_least_one_better = True
-    return at_least_one_better
+    return True
+
+
+def _remove_dominated_programs(
+    per_task_best: dict[str, set[int]],
+    agg_scores: dict[int, float],
+) -> dict[str, set[int]]:
+    """Iteratively prune dominated candidates from the per-task front mapping.
+
+    Equivalent to GEPA's ``remove_dominated_programs``. Candidates with lower
+    aggregate score are considered for removal first.
+    """
+    freq: dict[int, int] = {}
+    for front in per_task_best.values():
+        for p in front:
+            freq[p] = freq.get(p, 0) + 1
+
+    candidates = sorted(freq.keys(), key=lambda x: agg_scores.get(x, 0.0))
+    dominated: set[int] = set()
+
+    found = True
+    while found:
+        found = False
+        for y in candidates:
+            if y in dominated:
+                continue
+            remaining = set(candidates) - {y} - dominated
+            if _is_dominated(y, remaining, per_task_best):
+                dominated.add(y)
+                found = True
+                break
+
+    return {
+        task: {p for p in front if p not in dominated}
+        for task, front in per_task_best.items()
+    }

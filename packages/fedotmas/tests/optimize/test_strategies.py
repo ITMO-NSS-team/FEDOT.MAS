@@ -104,14 +104,12 @@ class TestParetoCandidateSelector:
         import random
         from collections import Counter
 
-        # Both have the same val scores → would normally be 50/50.
+        # Each candidate is unique-best on one val task → both on front, ~50/50 sampling.
         c0 = Candidate(index=0, config=_config("a"), config_hash="h0")
-        c0.scores = {"v1": 0.5}
-        c0.on_pareto_front = True
+        c0.scores = {"v1": 0.9, "v2": 0.3}
 
         c1 = Candidate(index=1, config=_config("a"), config_hash="h1")
-        c1.scores = {"v1": 0.5}
-        c1.on_pareto_front = True
+        c1.scores = {"v1": 0.3, "v2": 0.9}
 
         # c0 has many "private" train tasks (no other candidate has them).
         # If train_scores leaked into Pareto frequency weighting, c0 would

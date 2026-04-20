@@ -67,9 +67,9 @@ class ExactIntScorer:
     async def evaluate(self, task: Task, state: dict[str, Any]) -> ScoringResult:
         raw = str(state.get(self._output_key, ""))
         predicted = _extract_int(raw)
-        suffix = self._solution_suffix(task)
 
         if predicted is None:
+            suffix = self._solution_suffix(task)
             return ScoringResult(
                 score=0.0,
                 feedback=(
@@ -82,9 +82,15 @@ class ExactIntScorer:
 
         expected = int(task.expected)  # type: ignore[arg-type]
         correct = predicted == expected
-        status = "correct" if correct else "incorrect"
+        if correct:
+            return ScoringResult(
+                score=1.0,
+                feedback=f"Your answer is correct. The correct answer is {expected!r}.",
+                reasoning=f"Exact int match: {predicted} == {expected} → True",
+            )
+        suffix = self._solution_suffix(task)
         return ScoringResult(
-            score=1.0 if correct else 0.0,
-            feedback=f"Your answer is {status}. The correct answer is {expected!r}.{suffix}",
-            reasoning=f"Exact int match: {predicted} == {expected} → {correct}",
+            score=0.0,
+            feedback=f"Your answer is incorrect. The correct answer is {expected!r}.{suffix}",
+            reasoning=f"Exact int match: {predicted} == {expected} → False",
         )

@@ -71,7 +71,8 @@ python benchmarks/aime_math/run.py \
 | `--val-limit` | `None` | Cap valset size (debug). |
 | `--test-limit` | `None` | Cap testset size (debug). |
 | `--test-repeats` | 1 | Repeat each test question N times. |
-| `--concurrency` | 8 | Parallel task evaluations (semaphore limit). |
+| `--concurrency` | 8 | Parallel task evaluations during baseline/optimized testset eval. |
+| `--eval-concurrency` | 8 | Parallel task evaluations inside the optimizer loop (lower for rate-limited models). |
 | `--max-output-tokens` | `None` | Cap completion tokens per LLM call. |
 | `--skip-baseline-test` | `False` | Skip baseline evaluation on test set. |
 | `--baseline-accuracy` | `None` | Use this value as baseline accuracy instead of evaluating. |

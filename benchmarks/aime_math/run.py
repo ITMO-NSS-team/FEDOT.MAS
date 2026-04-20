@@ -278,6 +278,7 @@ if __name__ == "__main__":
     parser.add_argument("--test-limit", type=int, default=None)
     parser.add_argument("--test-repeats", type=int, default=None)
     parser.add_argument("--concurrency", type=int, default=None)
+    parser.add_argument("--eval-concurrency", type=int, default=None)
     parser.add_argument("--max-output-tokens", type=int, default=None)
     parser.add_argument("--skip-baseline-test", action="store_true")
     parser.add_argument("--baseline-accuracy", type=float, default=None)

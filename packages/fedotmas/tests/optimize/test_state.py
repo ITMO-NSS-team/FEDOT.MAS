@@ -133,19 +133,19 @@ def test_pareto_front_disjoint_tasks_no_domination():
 
 
 def test_pareto_front_partial_overlap():
-    """With partial task overlap, domination uses only common tasks."""
+    """Per-task Pareto: a candidate that is uniquely best on at least one task survives."""
     state = OptimizationState()
     c1 = state.add_candidate(_config("a", instructions={"a": "v1"}))
     c1.scores = {"t1": 0.9, "t2": 0.8}
     c2 = state.add_candidate(
         _config("a", instructions={"a": "v2"}), parent_index=0, origin="mutation"
     )
-    # c2 is better on the shared task t1, but doesn't have t2
+    # c2 wins t1 (0.95 > 0.9) and t3 (only candidate); c1 is the only candidate on t2
     c2.scores = {"t1": 0.95, "t3": 0.1}
     state.update_pareto_front()
-    # c2 dominates c1 on {t1} (only common task)
+    # Both unique-best on at least one task → both on the front
+    assert c1.on_pareto_front is True
     assert c2.on_pareto_front is True
-    assert c1.on_pareto_front is False
 
 
 # --- 1c: mean_score / min_score return None for unevaluated ---
@@ -342,26 +342,25 @@ def test_train_scores_dont_affect_mean_score():
     assert c.mean_score == pytest.approx(0.6)
 
 
-def test_train_scores_dont_affect_pareto_dominance():
-    """Pareto dominance ignores train scores (uses only c.scores)."""
-    from fedotmas.optimize._state import _dominates
-
+def test_train_scores_dont_affect_pareto_front():
+    """Pareto front uses only val scores (c.scores), not train_scores."""
     state = OptimizationState()
     a = state.add_candidate(_config("a"))
     b = state.add_candidate(_config("a", instructions={"a": "v2"}))
-    # Same val scores
-    for cand in (a, b):
+    # a wins v1, b wins v2 → neither dominates on val.
+    state.record_task_result(a, TaskResult(task="v1", state={}, score=0.9, feedback=""), split="val")
+    state.record_task_result(a, TaskResult(task="v2", state={}, score=0.3, feedback=""), split="val")
+    state.record_task_result(b, TaskResult(task="v1", state={}, score=0.3, feedback=""), split="val")
+    state.record_task_result(b, TaskResult(task="v2", state={}, score=0.9, feedback=""), split="val")
+    # 'a' has many private train tasks with perfect scores — must not affect the front.
+    for i in range(5):
         state.record_task_result(
-            cand, TaskResult(task="v1", state={}, score=0.5, feedback=""),
-            split="val",
+            a, TaskResult(task=f"t{i}", state={}, score=1.0, feedback=""),
+            split="train",
         )
-    # 'a' has a private train task with perfect score — must not dominate.
-    state.record_task_result(
-        a, TaskResult(task="t1", state={}, score=1.0, feedback=""),
-        split="train",
-    )
-    assert _dominates(a, b) is False
-    assert _dominates(b, a) is False
+    state.update_pareto_front()
+    assert a.on_pareto_front is True
+    assert b.on_pareto_front is True
 
 
 def test_save_load_preserves_train_scores():
