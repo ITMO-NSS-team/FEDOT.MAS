@@ -160,7 +160,11 @@ async def run_optimization(
         while not _should_stop():
             iteration += 1
             state.iteration = iteration
-            _log.info("--- Iteration {} ---", iteration)
+            _log.info(
+                "--- Iteration {} | {} ---",
+                iteration,
+                _format_progress(iteration, total_eval_runs, cfg),
+            )
             _log.info("Pool: {}", _format_pool(state))
             dispatcher.on_iteration_start(iteration, state)
 
@@ -586,6 +590,30 @@ async def _evaluate_candidate(
         state.record_task_result(candidate, result, split=split)
 
     return len(tasks_to_run)
+
+
+def _format_progress(
+    iteration: int, total_eval_runs: int, cfg: OptimizationConfig
+) -> str:
+    """Compact progress string for iteration banner.
+
+    Shows ``iter X/Y`` and/or ``evals X/Y (pct%)`` depending on which
+    budgets are configured. With no budgets, falls back to raw counters.
+    """
+    parts: list[str] = []
+    if cfg.max_iterations is not None:
+        parts.append(
+            f"iter {iteration}/{cfg.max_iterations} "
+            f"({iteration / cfg.max_iterations:.0%})"
+        )
+    if cfg.max_evaluations is not None:
+        parts.append(
+            f"evals {total_eval_runs}/{cfg.max_evaluations} "
+            f"({total_eval_runs / cfg.max_evaluations:.0%})"
+        )
+    if not parts:
+        parts.append(f"evals {total_eval_runs}")
+    return " | ".join(parts)
 
 
 def _format_pool(state: OptimizationState) -> str:
