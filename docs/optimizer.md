@@ -123,9 +123,15 @@ config = OptimizationConfig(
     max_merge_attempts=5,           # max merge operations per run
 
     # --- LLM temperatures ---
-    temperature_reflect=0.7,   # mutation creativity
+    temperature_reflect=1.0,   # mutation creativity
     temperature_merge=0.5,     # merge creativity
     temperature_judge=0.1,     # scoring consistency (ignored with custom scorer)
+
+    # --- Mutation axes (toggle which aspects of the graph to optimize) ---
+    mutate_instructions=True,  # rewrite agent instructions via reflection
+    mutate_tools=False,        # not yet implemented
+    mutate_models=False,       # not yet implemented
+    mutate_structure=False,    # not yet implemented
 
     # --- Truncation (optional) ---
     max_state_chars=None,      # limit pipeline state passed to judge. None = no limit
@@ -134,6 +140,7 @@ config = OptimizationConfig(
     # --- Safety ---
     llm_timeout=120.0,             # seconds per LLM call
     max_consecutive_failures=3,    # before emergency agent reshuffle
+    eval_concurrency=8,            # max concurrent task evals per candidate (lower for rate-limited APIs)
 
     # --- Infrastructure ---
     checkpoint_path="state.json",  # save/restore state
@@ -160,7 +167,7 @@ The `candidate_selection` parameter controls how the parent is chosen for mutati
 
 | Strategy | Behavior |
 |---|---|
-| `"pareto"` (default) | Frequency-weighted selection from Pareto front. Candidates dominating more tasks are selected more often |
+| `"pareto"` (default) | Per-task best-set with iterative dominator pruning, then sample survivors weighted by per-task win count. Candidates uniquely best on more tasks are selected more often |
 | `"best"` | Always the highest mean score. Pure exploitation |
 | `"epsilon_greedy"` | 90% best, 10% random. Controlled exploration |
 
@@ -213,7 +220,7 @@ class ExactMatchScorer:
 
         return ScoringResult(
             score=0.0,
-            feedback=f"Expected '{expected}' not found in output.",
+            feedback=f"Expected '{task.expected}' not found in output.",
             reasoning="No match",
         )
 
@@ -374,10 +381,12 @@ for c in result.pareto_front():
 |---|---|---|
 | `index` | `int` | Unique candidate ID |
 | `config` | `MAWConfig` | Pipeline configuration |
-| `scores` | `dict[str, float]` | Per-task scores (keyed by `task.input`) |
-| `mean_score` | `float \| None` | Average across all scored tasks |
+| `scores` | `dict[str, float]` | Per-task **val** scores (keyed by `task.input`). Drive Pareto / `mean_score` / best selection |
+| `feedbacks` | `dict[str, str]` | Per-task **val** judge feedback |
+| `train_scores` | `dict[str, float]` | Per-task **train minibatch** scores. Used for accept/reject and reflection examples only — kept separate so they don't bias Pareto |
+| `train_feedbacks` | `dict[str, str]` | Per-task **train minibatch** judge feedback |
+| `mean_score` | `float \| None` | Average across val `scores` |
 | `parent_index` | `int \| None` | Parent candidate (mutation) |
 | `merge_parent_indices` | `tuple[int, int] \| None` | Parent candidates (merge) |
 | `origin` | `str` | `"seed"`, `"mutation"`, or `"merge"` |
 | `on_pareto_front` | `bool` | Whether on the Pareto front |
-| `feedbacks` | `dict[str, str]` | Per-task judge feedback |

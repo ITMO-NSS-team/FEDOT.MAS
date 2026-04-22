@@ -71,14 +71,20 @@ python benchmarks/aime_math/run.py \
 | `--val-limit` | `None` | Cap valset size (debug). |
 | `--test-limit` | `None` | Cap testset size (debug). |
 | `--test-repeats` | 1 | Repeat each test question N times. |
-| `--concurrency` | 8 | Parallel task evaluations during baseline/optimized testset eval. |
-| `--eval-concurrency` | 8 | Parallel task evaluations inside the optimizer loop (lower for rate-limited models). |
+| `--concurrency` | 8 | Parallel evals during baseline/optimized testset eval. |
+| `--eval-concurrency` | 8 | Parallel evals inside the optimizer loop. |
 | `--max-output-tokens` | `None` | Cap completion tokens per LLM call. |
 | `--skip-baseline-test` | `False` | Skip baseline evaluation on test set. |
-| `--baseline-accuracy` | `None` | Use this value as baseline accuracy instead of evaluating. |
-| `--eval-best-on-train` | `False` | *(debug)* After optimization, evaluate best candidate on the full trainset (+45 evals) to surface train/val/test gaps. Val accuracy is reused from the optimizer's full-val eval. |
+| `--baseline-accuracy` | `None` | Use this value instead of evaluating baseline. |
+| `--eval-best-on-train` | `False` | *(debug)* See note below. |
 
 All flags also work as env vars with `AIME_` prefix, e.g. `AIME_SOLVER_MODEL="qwen/qwen3-8b"`.
+
+**`--eval-best-on-train`** *(debug)* — after optimization, evaluates the best
+candidate on the full trainset (+45 evals) to surface train/val/test gaps.
+Val accuracy is reused from the optimizer's full-val eval (no extra cost).
+Useful for diagnosing whether a flat test result is due to distribution
+shift (`train ≈ val ≪ test`) or selection bias on the val-fold (`train < val`).
 
 ## Solver model
 
@@ -93,9 +99,19 @@ Non-OpenAI models are routed through `_ProxyClient` using `OPENAI_BASE_URL` (e.g
 
 ## Reference results
 
+### Baselines (no optimization)
+
 | Model | Accuracy | Time | Cost |
 |---|---|---|---|
-| `gpt-4.1-mini` baseline (16 runs, 480 trials) | 46.5% ± 4.5% | ~5 min/run | ~$0.19/run |
-| `qwen/qwen3-8b` baseline (4 runs averaged) | 63.3% | ~27 min/run | ~$0.22/run |
+| `gpt-4.1-mini` (16 runs, 480 trials) | 46.5% ± 4.5% | ~5 min/run | ~$0.19/run |
+| `qwen/qwen3-8b` (4 runs averaged) | 63.3% | ~27 min/run | ~$0.22/run |
+| `gpt-oss-120b` (5 repeats, 150 trials) | 74.7% | — | — |
 
-GEPA paper baselines: `gpt-4.1-mini` = 49.33%, `qwen3-8b` = 27.33%.
+### Optimization (baseline → optimized on test)
+
+| Model | Budget | Baseline | Optimized | Improvement | Time | Cost |
+|---|---|---|---|---|---|---|
+| `gpt-4.1-mini` (ours) | 500 evals | 46.5% | — | — | — | — |
+| `gpt-oss-120b` (ours) | 1839 evals | 74.7% | 82.0% | +7.3 pp | 19.8 h | $4.29 |
+| `gpt-4.1-mini` (GEPA paper) | 1839 evals | 49.33% | 59.44% | +10.11 pp | — | — |
+| `qwen3-8b` (GEPA paper) | 1839 evals | 27.33% | 32.00% | +4.67 pp | — | — |
