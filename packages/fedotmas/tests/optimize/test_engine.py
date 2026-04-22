@@ -61,8 +61,9 @@ def _mock_mutator(mutated_config: MAWConfig) -> MagicMock:
 
 
 def test_mean_score_on():
+    """_mean_score_on reads train_scores (used for accept/reject on minibatch)."""
     c = Candidate(index=0, config=_config("a"), config_hash="h")
-    c.scores = {"t1": 0.8, "t2": 0.6, "t3": 0.4}
+    c.train_scores = {"t1": 0.8, "t2": 0.6, "t3": 0.4}
     assert _mean_score_on(c, {"t1", "t3"}) == pytest.approx(0.6)
     assert _mean_score_on(c, {"nonexistent"}) == 0.0
 
@@ -92,7 +93,7 @@ async def test_evaluate_candidate_creates_controller_per_task():
 
         MockCtrl.side_effect = make_ctrl
 
-        await _evaluate_candidate(maw, scorer, candidate, [Task("t1"), Task("t2")], state, OptimizationConfig())
+        await _evaluate_candidate(maw, scorer, candidate, [Task("t1"), Task("t2")], state, OptimizationConfig(), split="val")
 
     # Should create 2 Controller instances (one per task)
     assert len(controller_instances) == 2
@@ -113,13 +114,13 @@ async def test_evaluate_candidate_caches():
         )
         MockCtrl.return_value = ctrl_instance
 
-        runs = await _evaluate_candidate(maw, scorer, candidate, [Task("t1")], state, OptimizationConfig())
+        runs = await _evaluate_candidate(maw, scorer, candidate, [Task("t1")], state, OptimizationConfig(), split="val")
         assert runs == 1
         assert candidate.scores["t1"] == 0.8
 
         # Second eval should use cache
         candidate2 = state.add_candidate(config, origin="mutation")
-        runs2 = await _evaluate_candidate(maw, scorer, candidate2, [Task("t1")], state, OptimizationConfig())
+        runs2 = await _evaluate_candidate(maw, scorer, candidate2, [Task("t1")], state, OptimizationConfig(), split="val")
         assert runs2 == 0
         assert candidate2.scores["t1"] == 0.8
 
@@ -137,7 +138,7 @@ async def test_evaluate_candidate_handles_error():
         ctrl_instance.run = AsyncMock(side_effect=RuntimeError("boom"))
         MockCtrl.return_value = ctrl_instance
 
-        runs = await _evaluate_candidate(maw, scorer, candidate, [Task("t1")], state, OptimizationConfig())
+        runs = await _evaluate_candidate(maw, scorer, candidate, [Task("t1")], state, OptimizationConfig(), split="val")
         assert runs == 1
         assert candidate.scores["t1"] == 0.0
         assert "boom" in candidate.feedbacks["t1"]
@@ -186,7 +187,10 @@ async def test_run_optimization_basic():
 
     assert result.best_score >= 0.0
     assert result.iterations == 2
-    assert len(result.all_candidates) >= 2
+    # Rejected children are removed from the pool — with mock scorer returning
+    # the same score for parent and child, all mutations are rejected, so only
+    # seed remains.
+    assert len(result.all_candidates) >= 1
 
 
 @pytest.mark.asyncio

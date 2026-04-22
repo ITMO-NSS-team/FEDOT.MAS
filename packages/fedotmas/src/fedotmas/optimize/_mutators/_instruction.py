@@ -6,12 +6,16 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from fedotmas._settings import ModelConfig, resolve_model_config, get_meta_model
+from fedotmas._settings import ModelConfig, resolve_model_config, get_reflection_model
 from fedotmas.common.logging import get_logger
 from fedotmas.meta._adk_runner import run_meta_agent_call
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig
 from fedotmas.optimize._config import OptimizationConfig
-from fedotmas.optimize._prompts import REFLECTION_SYSTEM_PROMPT, MERGE_SYSTEM_PROMPT
+from fedotmas.optimize._prompts import (
+    MERGE_SYSTEM_PROMPT,
+    REFLECTION_SYSTEM_PROMPT,
+    REFLECTION_USER_TEMPLATE,
+)
 from fedotmas.optimize._state import Candidate, Task
 
 _log = get_logger("fedotmas.optimize._mutators._instruction")
@@ -77,11 +81,16 @@ def _unique_agent_names(*configs: MAWConfig) -> list[str]:
 def _build_reflection_examples(
     candidate: Candidate, agent: MAWAgentConfig, tasks: list[Task]
 ) -> list[ReflectionExample]:
+    """Build reflection examples from the train minibatch just evaluated.
+
+    Reads from ``train_*`` fields — these are the freshly evaluated minibatch
+    tasks that motivated this mutation.
+    """
     examples: list[ReflectionExample] = []
     for task in tasks:
-        if task.input not in candidate.scores:
+        if task.input not in candidate.train_scores:
             continue
-        state = candidate.states.get(task.input, {})
+        state = candidate.train_states.get(task.input, {})
         agent_output = state.get(agent.output_key)
         examples.append(
             ReflectionExample(
@@ -89,8 +98,8 @@ def _build_reflection_examples(
                 agent_instruction=agent.instruction,
                 agent_output=str(agent_output) if agent_output is not None else None,
                 pipeline_output=state,
-                score=candidate.scores[task.input],
-                feedback=candidate.feedbacks.get(task.input, ""),
+                score=candidate.train_scores[task.input],
+                feedback=candidate.train_feedbacks.get(task.input, ""),
             )
         )
     return examples
@@ -99,45 +108,20 @@ def _build_reflection_examples(
 def _format_reflection_examples(
     examples: list[ReflectionExample], max_output_chars: int | None = None
 ) -> str:
+    """Render examples in GEPA-style markdown (``# Example N`` / ``## key``)."""
     parts: list[str] = []
     for i, ex in enumerate(examples, 1):
         agent_out = ex.agent_output or "(no output)"
         if max_output_chars is not None and len(agent_out) > max_output_chars:
             agent_out = agent_out[:max_output_chars] + "... (truncated)"
 
-        pipeline_ctx = _format_pipeline_context(ex.pipeline_output, max_output_chars)
-
         parts.append(
-            f"### Example {i}\n"
-            f"**Task:** {ex.task}\n"
-            f"**Agent output:** {agent_out}\n"
-            f"**Pipeline context (other agents):**\n{pipeline_ctx}\n"
-            f"**Score:** {ex.score:.2f}\n"
-            f"**Feedback:** {ex.feedback}"
+            f"# Example {i}\n"
+            f"## Inputs\n{ex.task}\n\n"
+            f"## Generated Outputs\n{agent_out}\n\n"
+            f"## Feedback\n{ex.feedback}"
         )
     return "\n\n".join(parts)
-
-
-def _format_pipeline_context(
-    state: dict[str, Any], max_chars: int | None = None
-) -> str:
-    if not state:
-        return "(no pipeline context)"
-    parts: list[str] = []
-    if max_chars is not None:
-        budget = max_chars
-        for key, value in state.items():
-            text = str(value)
-            if len(text) > budget // max(len(state), 1):
-                text = text[: budget // max(len(state), 1)] + "... (truncated)"
-            parts.append(f"- **{key}:** {text}")
-            budget -= len(text)
-            if budget <= 0:
-                break
-    else:
-        for key, value in state.items():
-            parts.append(f"- **{key}:** {str(value)}")
-    return "\n".join(parts)
 
 
 class InstructionMutator:
@@ -150,7 +134,7 @@ class InstructionMutator:
         model: str | ModelConfig | None = None,
     ) -> None:
         if model is None:
-            self._model = resolve_model_config(get_meta_model())
+            self._model = resolve_model_config(get_reflection_model())
         else:
             self._model = resolve_model_config(model)
 
@@ -303,11 +287,11 @@ class InstructionMutator:
         max_output_chars: int | None = None,
     ) -> str | None:
         examples_text = _format_reflection_examples(examples, max_output_chars)
-        user_message = (
-            f"## Agent: {agent_name}\n\n"
-            f"## Current instruction\n{current_instruction}\n\n"
-            f"## Evaluation examples\n{examples_text}"
+        user_message = REFLECTION_USER_TEMPLATE.format(
+            current_instruction=current_instruction,
+            examples=examples_text,
         )
+        _log.debug("Reflection input for {}:\n{}", agent_name, user_message)
 
         try:
             coro = run_meta_agent_call(
