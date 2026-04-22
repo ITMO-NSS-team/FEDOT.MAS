@@ -243,6 +243,15 @@ def _setup_state(
         iteration = state.iteration
         return state, seed, iteration
 
+    if cp is None:
+        _log.info(
+            "Checkpointing disabled — set OptimizationConfig.checkpoint_path "
+            "(or pass --checkpoint-path in the AIME benchmark) to enable "
+            "resume on failure for long runs."
+        )
+    else:
+        _log.info("Checkpoint path set, will write state to {} after each iteration", cp)
+
     state = OptimizationState()
     seed = state.add_candidate(seed_config, origin="seed")
     return state, seed, 0

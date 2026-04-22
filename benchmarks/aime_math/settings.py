@@ -22,3 +22,4 @@ class AimeMathSettings(BaseSettings):
     skip_baseline_test: bool = False
     baseline_accuracy: float | None = None
     eval_best_on_train: bool = False
+    checkpoint_path: str | None = None

@@ -77,6 +77,7 @@ python benchmarks/aime_math/run.py \
 | `--skip-baseline-test` | `False` | Skip baseline evaluation on test set. |
 | `--baseline-accuracy` | `None` | Use this value instead of evaluating baseline. |
 | `--eval-best-on-train` | `False` | *(debug)* See note below. |
+| `--checkpoint-path` | `None` | Save/resume optimizer state. See note below. |
 
 All flags also work as env vars with `AIME_` prefix, e.g. `AIME_SOLVER_MODEL="qwen/qwen3-8b"`.
 
@@ -85,6 +86,13 @@ candidate on the full trainset (+45 evals) to surface train/val/test gaps.
 Val accuracy is reused from the optimizer's full-val eval (no extra cost).
 Useful for diagnosing whether a flat test result is due to distribution
 shift (`train ≈ val ≪ test`) or selection bias on the val-fold (`train < val`).
+
+**`--checkpoint-path`** — path to a JSON file where the optimizer writes its
+state after every iteration. If the file already exists at startup, the run
+resumes from it (skipping completed iterations and reusing cached evals).
+Useful for long runs where a crash, OOM, or `Ctrl+C` would otherwise lose
+hours of work. Pass the same `--seed` on resume so the train/val split and
+batch sequence stay consistent.
 
 ## Solver model
 

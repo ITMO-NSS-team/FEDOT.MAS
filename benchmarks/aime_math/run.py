@@ -147,6 +147,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
         minibatch_size=settings.minibatch_size,
         use_merge=settings.use_merge,
         eval_concurrency=settings.eval_concurrency,
+        checkpoint_path=settings.checkpoint_path,
     )
 
     maw = MAW(worker_models=[settings.solver_model])
@@ -306,6 +307,7 @@ if __name__ == "__main__":
     parser.add_argument("--skip-baseline-test", action="store_true", default=None)
     parser.add_argument("--baseline-accuracy", type=float, default=None)
     parser.add_argument("--eval-best-on-train", action="store_true", default=None)
+    parser.add_argument("--checkpoint-path", default=None)
     args = parser.parse_args()
 
     raw = vars(args)
