@@ -1,0 +1,99 @@
+# HotpotQA Benchmark
+
+Evaluation of FEDOT.MAS on the [HotpotQA](https://hotpotqa.github.io/)
+multi-hop QA dataset (distractor setting). Setup follows the GEPA paper
+([arxiv.org/abs/2507.19457](https://arxiv.org/abs/2507.19457)) for
+comparable results.
+
+## Datasets
+
+HotpotQA's HuggingFace `validation` split (~7k items, the only public
+split with gold answers) is shuffled and sliced:
+
+- **Train**: first 50 items.
+- **Val**: next 50 items.
+- **Test**: next 100 items.
+
+Each task input bundles the question with all 10 distractor paragraphs
+(2 gold + 8 distractors). The expected answer is a short string
+(entity, phrase, or number).
+
+## Scoring
+
+SQuAD-style normalization (lowercase, strip articles / punctuation /
+extra whitespace) followed by:
+
+- **F1**: token-overlap F1 between predicted and gold tokens. This is
+  the primary score the optimizer accepts/rejects on, so partial
+  overlaps still produce a usable gradient.
+- **Exact match (EM)**: reported separately as `accuracy` in the result
+  JSON. EM is true iff F1 == 1.0 after normalization.
+
+## Install
+
+```bash
+pip install -r benchmarks/hotpot_qa/requirements.txt
+```
+
+Set required env vars for the solver model:
+
+- `OPENAI_API_KEY` (or provider-specific key)
+- `OPENAI_BASE_URL` (e.g. `https://openrouter.ai/api/v1` for OpenRouter)
+
+## Run
+
+### Baseline (no optimization)
+
+```bash
+python benchmarks/hotpot_qa/run.py --max-iterations 0
+```
+
+### Full optimization run
+
+```bash
+python benchmarks/hotpot_qa/run.py \
+    --max-evaluations 1839 --test-repeats 1 \
+    2>&1 | tee logs/hotpot_$(date +%Y%m%d_%H%M%S).log
+```
+
+### Quick debug run
+
+```bash
+python benchmarks/hotpot_qa/run.py \
+    --max-iterations 2 \
+    --train-limit 3 --val-limit 3 --test-limit 3
+```
+
+## CLI flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--max-iterations` | 10000 | Optimizer iterations. `0` skips optimization entirely. |
+| `--max-evaluations` | `None` | Stop after N total evaluation runs (rollout budget). |
+| `--seed` | 42 | RNG seed for dataset shuffle and optimizer. |
+| `--output-dir` | `outputs/hotpot_qa` | Where to write result JSON. |
+| `--train-limit` | `None` | Cap trainset size (debug). |
+| `--val-limit` | `None` | Cap valset size (debug). |
+| `--test-limit` | `None` | Cap testset size (debug). |
+| `--test-repeats` | 1 | Repeat each test question N times. |
+| `--concurrency` | 8 | Parallel evals during baseline/optimized testset eval. |
+| `--eval-concurrency` | 8 | Parallel evals inside the optimizer loop. |
+| `--max-output-tokens` | `None` | Cap completion tokens per LLM call. |
+| `--skip-baseline-test` | `False` | Skip baseline evaluation on test set. |
+| `--baseline-accuracy` | `None` | Use this value instead of evaluating baseline. |
+| `--eval-best-on-train` | `False` | *(debug)* Evaluate best on full trainset for diagnosing train/val/test gap. |
+| `--checkpoint-path` | `None` | Save/resume optimizer state. See AIME README for usage. |
+
+All flags also work as env vars with `HOTPOT_` prefix, e.g. `HOTPOT_SOLVER_MODEL="qwen/qwen3-8b"`.
+
+## Solver model
+
+```bash
+HOTPOT_SOLVER_MODEL="openai/gpt-4.1-mini" python benchmarks/hotpot_qa/run.py --max-iterations 0
+HOTPOT_SOLVER_MODEL="qwen/qwen3-8b"       python benchmarks/hotpot_qa/run.py --max-iterations 0
+```
+
+## Reference results
+
+GEPA paper baselines: `gpt-4.1-mini` ≈ 38%, `qwen3-8b` ≈ 30%; optimized
+≈ 50% on both. Our numbers will populate this section as runs complete.
