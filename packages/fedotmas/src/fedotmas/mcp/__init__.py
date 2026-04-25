@@ -2,6 +2,7 @@ from typing import Literal
 
 from fedotmas.mcp._config import HttpMCPServer, MCPServerConfig, StdioMCPServer
 from fedotmas.mcp.discovery import discover_local_servers
+from fedotmas.mcp.pulsemcp import discover_relevant_servers
 from fedotmas.mcp.registry import (
     create_toolset,
     get_mcp_servers,
@@ -33,6 +34,7 @@ __all__ = [
     "MCPServerConfig",
     "StdioMCPServer",
     "discover_local_servers",
+    "discover_relevant_servers",
     "get_server_descriptions",
     "create_toolset",
 ]

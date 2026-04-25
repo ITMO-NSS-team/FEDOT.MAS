@@ -102,7 +102,7 @@ class MAW(BaseMAS[MAWConfig]):
             meta_model=self._meta_model,
             worker_models=self._worker_models,
             temperature=self._temperature,
-            mcp_registry=self._mcp_registry,
+            mcp_registry=pool_gen.effective_registry or self._mcp_registry,
             session_service=self._session_service,
             max_retries=self._max_retries,
             plugins=self._plugins,
