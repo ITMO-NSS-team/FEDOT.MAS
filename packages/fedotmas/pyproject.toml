@@ -16,6 +16,7 @@ classifiers = [
 ]
 dependencies = [
   "google-adk>=1.26",
+  "httpx>=0.27",
   "litellm>=1.80.16",
   "loguru>=0.7.3",
   "platformdirs>=4.9.2",
