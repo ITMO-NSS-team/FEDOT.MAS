@@ -8,34 +8,50 @@ from pathlib import Path
 from fedotmas.common.logging import get_logger
 from fedotmas.control._controller import Controller
 from fedotmas.maw.maw import MAW
-from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
+from fedotmas.maw.models import MAWConfig, MAWStepConfig
 from fedotmas.optimize._config import OptimizationConfig
 from fedotmas.optimize._optimizer import Optimizer
 from fedotmas.optimize._state import Task
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _utils import BenchmarkResult, CostSummary, TaskResult, save_result
-from config import INITIAL_PROMPT
 from dataset import load_math_dataset
 from scorer import ExactIntScorer
 from settings import AimeMathSettings
 
 _log = get_logger("fmbench.aime_math")
 
+_SEED_CONFIG_PATH = Path(__file__).parent / "seed_config.json"
 
-def _build_seed_config(settings: AimeMathSettings) -> MAWConfig:
-    return MAWConfig(
-        agents=[
-            MAWAgentConfig(
-                name="math_solver",
-                instruction=INITIAL_PROMPT,
-                model=settings.solver_model,
-                output_key="answer",
-                max_output_tokens=settings.max_output_tokens,
-            ),
-        ],
-        pipeline=MAWStepConfig(type="agent", agent_name="math_solver"),
-    )
+
+def _load_seed_config(settings: AimeMathSettings) -> MAWConfig:
+    if not _SEED_CONFIG_PATH.exists():
+        raise FileNotFoundError(
+            f"Seed config not found at {_SEED_CONFIG_PATH}. "
+            f"Run `python benchmarks/aime_math/generate_seed.py` first."
+        )
+    _log.info("Loading seed config from {}", _SEED_CONFIG_PATH)
+    config = MAWConfig.model_validate_json(_SEED_CONFIG_PATH.read_text())
+    if settings.max_output_tokens is not None:
+        for agent in config.agents:
+            agent.max_output_tokens = settings.max_output_tokens
+    return config
+
+
+def _final_output_key(config: MAWConfig) -> str:
+    """Walk the pipeline tree to find the output_key of the last-executing agent."""
+    def _last_agent_name(node: MAWStepConfig) -> str | None:
+        if node.type == "agent":
+            return node.agent_name
+        if node.children:
+            return _last_agent_name(node.children[-1])
+        return None
+
+    name = _last_agent_name(config.pipeline)
+    if name is None:
+        raise ValueError("Could not locate final agent in pipeline")
+    agent = next(a for a in config.agents if a.name == name)
+    return agent.output_key
 
 
 async def _solve_one(
@@ -62,7 +78,7 @@ async def _solve_one(
                 output = f"ERROR: {err_msg}"
             else:
                 scoring = await scorer.evaluate(task, run.state)
-                output = str(run.state.get("answer", ""))
+                output = str(run.state.get(_final_output_key(config), ""))
         except Exception as exc:
             _log.warning("[{}] Task {}/{} failed: {}", stage, i + 1, total, exc)
             scoring = None
@@ -137,7 +153,9 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
         test_limit=settings.test_limit,
         test_repeats=settings.test_repeats,
     )
-    seed_config = _build_seed_config(settings)
+    seed_config = _load_seed_config(settings)
+    answer_key = _final_output_key(seed_config)
+    _log.info("Final agent output_key detected as {!r}", answer_key)
 
     opt_config = OptimizationConfig(
         seed=settings.seed,
@@ -151,7 +169,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
     )
 
     maw = MAW(worker_models=[settings.solver_model])
-    scorer = ExactIntScorer(solutions=solutions)
+    scorer = ExactIntScorer(output_key=answer_key, solutions=solutions)
 
     train_eval_tasks: list[TaskResult] = []
 
