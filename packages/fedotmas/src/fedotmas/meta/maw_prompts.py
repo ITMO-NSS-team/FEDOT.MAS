@@ -63,7 +63,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 
 **IMPORTANT — syntax for state references in generated instructions:**
-Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output.
+Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output. Preserve any literal XML or answer tags from the user task, such as <solution>...</solution>, exactly as written.
 
 ---
 
@@ -386,7 +386,7 @@ ${available_models}
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 
 **IMPORTANT — syntax for state references in generated instructions:**
-Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output.
+Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output. Preserve any literal XML or answer tags from the user task, such as <solution>...</solution>, exactly as written.
 
 ---
 

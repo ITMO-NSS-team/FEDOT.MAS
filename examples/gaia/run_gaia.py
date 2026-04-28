@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -12,6 +13,7 @@ from tqdm import tqdm
 
 from fedotmas import MAW
 from fedotmas.common.logging import get_logger
+from fedotmas.plugins import LangfusePlugin, LoggingPlugin
 
 from examples.gaia.data import GaiaBenchmark
 
@@ -33,12 +35,14 @@ def extract_solution(text: str) -> str:
 def extract_answer_from_state(state: dict[str, Any]) -> str:
     """Extract final answer from session state.
 
-    First looks for <solution> tags in any state value.
+    First looks for <solution> tags in any non-query state value.
     Falls back to the last non-null, non-user_query value.
     """
     # Search all values for <solution> tags (last match wins)
     solution = None
-    for value in state.values():
+    for key, value in state.items():
+        if key == "user_query":
+            continue
         if value is None:
             continue
         text = str(value)
@@ -58,6 +62,30 @@ def extract_answer_from_state(state: dict[str, Any]) -> str:
             return str(value).strip()
 
     return ""
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def build_plugins(task, enable_langfuse: bool) -> list:
+    plugins = [LoggingPlugin()]
+    if enable_langfuse:
+        plugins.append(
+            LangfusePlugin(
+                trace_name=f"gaia:{RUN_ID}:{task.task_id}",
+                tags=["gaia", f"difficulty:{task.difficulty}"],
+                metadata={
+                    "task_id": task.task_id,
+                    "difficulty": task.difficulty,
+                    "file_name": task.file_name,
+                },
+            ),
+        )
+    return plugins
 
 
 def compute_metrics_by_level(results: list) -> dict:
@@ -175,6 +203,8 @@ async def process_task(
     task,
     gaia_benchmark: GaiaBenchmark,
     task_log_dir: Path,
+    *,
+    enable_langfuse: bool,
 ) -> dict:
     """Process a single GAIA task using FEDOT.MAS MAW."""
     instruction = (
@@ -189,7 +219,10 @@ async def process_task(
         query += f"File name: {task.file_name}\n"
     query += f"Question: {task.question}"
 
-    maw = MAW(mcp_servers="all")
+    maw = MAW(
+        mcp_servers="all",
+        plugins=build_plugins(task, enable_langfuse),
+    )
     state = await maw.run(query)
 
     answer = extract_answer_from_state(state)
@@ -228,7 +261,7 @@ async def process_task(
     return result
 
 
-async def run_gaia(difficulty: str, split: str) -> Any:
+async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any:
     """Run GAIA benchmark using FEDOT.MAS MAW."""
     base_log_dir = Path(__file__).resolve().parent / "gaia_logs" / f"run_{RUN_ID}"
     base_log_dir.mkdir(parents=True, exist_ok=True)
@@ -244,7 +277,12 @@ async def run_gaia(difficulty: str, split: str) -> Any:
     for task in tqdm(gaia, desc="Processing GAIA tasks"):
         task_log_dir = base_log_dir / f"task_{task.task_id}"
         try:
-            result = await process_task(task, gaia, task_log_dir)
+            result = await process_task(
+                task,
+                gaia,
+                task_log_dir,
+                enable_langfuse=enable_langfuse,
+            )
             status = "CORRECT" if result["is_correct"] else "WRONG"
             _log.info(
                 "[{}] task={} answer='{}' gt='{}'",
@@ -272,6 +310,7 @@ async def run_gaia(difficulty: str, split: str) -> Any:
             "difficulty": difficulty,
             "split": split,
             "num_tasks": len(results),
+            "langfuse_enabled": enable_langfuse,
         },
         "metrics": metrics_by_level,
         "token_summary": token_summary,
@@ -302,9 +341,21 @@ def main():
         default="validation[:1]",
         help="Dataset split (default: validation[:1])",
     )
+    parser.add_argument(
+        "--no-langfuse",
+        action="store_true",
+        help="Disable Langfuse tracing for this GAIA run.",
+    )
     args = parser.parse_args()
 
-    asyncio.run(run_gaia(difficulty=args.difficulty, split=args.split))
+    enable_langfuse = _env_flag("GAIA_ENABLE_LANGFUSE", True) and not args.no_langfuse
+    asyncio.run(
+        run_gaia(
+            difficulty=args.difficulty,
+            split=args.split,
+            enable_langfuse=enable_langfuse,
+        )
+    )
 
 
 if __name__ == "__main__":

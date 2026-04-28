@@ -230,13 +230,15 @@ class SynapsePlugin(BasePlugin):
 
     async def close(self) -> None:
         """Release resources held by sub-components."""
-        if self._otel and hasattr(self._otel, "close"):
+        otel_close = getattr(self._otel, "close", None)
+        if callable(otel_close):
             try:
-                self._otel.close()
+                otel_close()
             except Exception:
                 _log.warning("otel close failed", exc_info=True)
-        if hasattr(self.session_service, "close"):
+        session_close = getattr(self.session_service, "close", None)
+        if callable(session_close):
             try:
-                await self.session_service.close()
+                await session_close()
             except Exception:
                 _log.warning("session_service close failed", exc_info=True)

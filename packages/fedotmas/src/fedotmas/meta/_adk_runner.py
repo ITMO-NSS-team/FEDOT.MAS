@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -45,6 +46,7 @@ async def run_meta_agent_call(
     max_retries: int = 2,
     allowed_models: list[str] | None = None,
     plugins: list[BasePlugin] | None = None,
+    timeout_s: float | None = None,
 ) -> LLMCallResult:
     """Run a single ADK LlmAgent call and return the structured result.
 
@@ -58,9 +60,10 @@ async def run_meta_agent_call(
         raise ValueError(f"max_retries must be >= 0, got {max_retries}")
     last_error: Exception | None = None
     effective_message = user_message
+    effective_timeout_s = _resolve_timeout(timeout_s)
     for attempt in range(max_retries + 1):
         try:
-            return await _execute_meta_call(
+            call = _execute_meta_call(
                 agent_name=agent_name,
                 instruction=instruction,
                 user_message=effective_message,
@@ -72,7 +75,11 @@ async def run_meta_agent_call(
                 allowed_models=allowed_models,
                 plugins=plugins,
             )
-        except (RuntimeError, ValueError, TypeError) as e:
+            if effective_timeout_s is None:
+                return await call
+            async with asyncio.timeout(effective_timeout_s):
+                return await call
+        except (RuntimeError, ValueError, TypeError, TimeoutError) as e:
             last_error = e
             if attempt < max_retries:
                 delay = 2**attempt
@@ -157,22 +164,22 @@ async def _execute_meta_call(
     start = time.monotonic()
 
     if plugins:
-        runner_kwargs: dict[str, Any] = {
-            "app": App(
+        runner = Runner(
+            app=App(
                 name=app_name,
                 root_agent=agent,
                 plugins=list(plugins),
             ),
-            "session_service": session_service,
-        }
+            session_service=session_service,
+        )
     else:
-        runner_kwargs = {
-            "app_name": app_name,
-            "agent": agent,
-            "session_service": session_service,
-        }
+        runner = Runner(
+            app_name=app_name,
+            agent=agent,
+            session_service=session_service,
+        )
 
-    async with Runner(**runner_kwargs) as runner:
+    async with runner:
         async for event in runner.run_async(
             user_id="system",
             session_id=session.id,
@@ -247,3 +254,16 @@ async def _execute_meta_call(
         completion_tokens=total_completion,
         elapsed=elapsed,
     )
+
+
+def _resolve_timeout(timeout_s: float | None) -> float | None:
+    if timeout_s is not None:
+        return timeout_s if timeout_s > 0 else None
+
+    value = os.getenv("FEDOTMAS_META_AGENT_TIMEOUT_S", "180")
+    try:
+        resolved = float(value)
+    except ValueError:
+        _log.warning("Invalid FEDOTMAS_META_AGENT_TIMEOUT_S={!r}; using 180", value)
+        resolved = 180.0
+    return resolved if resolved > 0 else None

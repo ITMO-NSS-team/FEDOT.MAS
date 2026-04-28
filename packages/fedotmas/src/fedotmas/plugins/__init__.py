@@ -14,7 +14,7 @@ __all__ = [
 ]
 
 try:
-    from fedotmas.plugins._langfuse import LangfusePlugin
+    from fedotmas.plugins._langfuse import LangfusePlugin  # noqa: F401
 
     __all__.append("LangfusePlugin")
 except ImportError:

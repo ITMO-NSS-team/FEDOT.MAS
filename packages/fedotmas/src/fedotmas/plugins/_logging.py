@@ -71,7 +71,10 @@ class LoggingPlugin(BasePlugin):
         # Tool responses
         for fr in event.get_function_responses():
             resp_str = str(fr.response)[:200] if fr.response else ""
-            if fr.response and "error" in resp_str.lower():
+            is_error = (
+                isinstance(fr.response, dict) and fr.response.get("isError") is True
+            )
+            if is_error:
                 _log.warning(
                     "Tool error | agent={} tool={} response={}",
                     event.author,

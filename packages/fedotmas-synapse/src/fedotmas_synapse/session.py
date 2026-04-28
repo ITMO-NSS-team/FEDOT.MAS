@@ -172,10 +172,9 @@ class MongoSessionService(BaseSessionService):
 
     async def append_event(
         self,
-        *,
         session: Session,
         event: Event,
-    ) -> Session:
+    ) -> Event:
         """Persist an event and apply its ``state_delta`` to the stored session.
 
         ``temp:`` prefixed keys in the delta are stripped before persisting.
@@ -212,4 +211,4 @@ class MongoSessionService(BaseSessionService):
         session.events.append(event)
         session.last_update_time = now.timestamp()
 
-        return session
+        return event

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar, cast
 
 from fastapi import FastAPI
 from google.adk.agents.base_agent import BaseAgent
@@ -20,6 +20,10 @@ from fedotmas.plugins import LoggingPlugin
 _log = get_logger("fedotmas.core.base")
 
 ConfigT = TypeVar("ConfigT")
+
+
+class _TraceFinalizer(Protocol):
+    def end_trace(self) -> None: ...
 
 
 class BaseMAS(ABC, Generic[ConfigT]):
@@ -56,7 +60,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
         self._session_service = session_service
         self._memory_service = memory_service
         if plugins is not None:
-            self._plugins = list(plugins)
+            self._plugins: list[BasePlugin] = list(plugins)
         else:
             self._plugins = [LoggingPlugin()]
         self._max_retries = max_retries
@@ -217,7 +221,10 @@ class BaseMAS(ABC, Generic[ConfigT]):
         """End Langfuse trace if a LangfusePlugin is among the plugins."""
         for plugin in self._plugins:
             if hasattr(plugin, "end_trace"):
-                plugin.end_trace()
+                try:
+                    cast(_TraceFinalizer, plugin).end_trace()
+                except Exception as exc:
+                    _log.warning("Plugin finalization failed: {}", exc)
 
     async def run(
         self,
@@ -230,7 +237,8 @@ class BaseMAS(ABC, Generic[ConfigT]):
         Equivalent to ``generate_config`` followed by ``build_and_run``.
         """
         _log.info("Full-auto run for task: {}", task)
-        config = await self.generate_config(task)
-        result = await self.build_and_run(config, task, initial_state=initial_state)
-        self._finalize_langfuse()
-        return result
+        try:
+            config = await self.generate_config(task)
+            return await self.build_and_run(config, task, initial_state=initial_state)
+        finally:
+            self._finalize_langfuse()

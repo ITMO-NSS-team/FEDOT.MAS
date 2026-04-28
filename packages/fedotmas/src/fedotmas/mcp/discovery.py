@@ -122,15 +122,13 @@ def discover_local_servers(
 
         command = mcp_meta.get("command")
         if command:
-            kwargs: dict[str, object] = dict(
-                command=command,
+            result[name] = StdioMCPServer(
+                command=str(command),
                 args=tuple(mcp_meta.get("args", ())),
-                description=description,
+                timeout=int(timeout) if timeout is not None else 60,
+                description=str(description),
                 tags=tags,
             )
-            if timeout is not None:
-                kwargs["timeout"] = int(timeout)
-            result[name] = StdioMCPServer(**kwargs)  # type: ignore[arg-type]
             _log.debug("Discovered external MCP server: {} -> {}", name, command)
             continue
 
@@ -140,16 +138,13 @@ def discover_local_servers(
             continue
         entry_point = next(iter(scripts))
 
-        dir_kwargs: dict[str, object] = dict(
+        result[name] = _directory_server(
             directory=str(server_dir),
-            entry_point=entry_point,
-            description=description,
+            entry_point=str(entry_point),
+            timeout=int(timeout) if timeout is not None else 60,
+            description=str(description),
             tags=tags,
         )
-        if timeout is not None:
-            dir_kwargs["timeout"] = int(timeout)
-
-        result[name] = _directory_server(**dir_kwargs)  # type: ignore[arg-type]
         _log.debug("Discovered MCP server: {} -> {}", name, server_dir)
 
     return result

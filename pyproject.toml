@@ -12,6 +12,7 @@ classifiers = [
 dependencies = [
   "fedotmas",
   "fedotmas-synapse",
+  "langfuse>=4.3.1",
 ]
 
 [dependency-groups]

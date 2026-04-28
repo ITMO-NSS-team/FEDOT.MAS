@@ -140,8 +140,54 @@ class TestModelValidation:
         assert cfg.model is None
 
 
+class TestInstructionNormalization:
+    """Rule 10: state references are normalized without corrupting XML tags."""
+
+    def test_curly_state_reference_becomes_optional(self):
+        cfg = MAWAgentConfig(
+            name="a",
+            instruction="Use {research_result} to answer.",
+            output_key="k1",
+        )
+        assert cfg.instruction == "Use {research_result?} to answer."
+
+    def test_solution_tags_are_preserved(self):
+        cfg = MAWAgentConfig(
+            name="a",
+            instruction="Return only <solution>answer</solution>.",
+            output_key="k1",
+        )
+        assert cfg.instruction == "Return only <solution>answer</solution>."
+
+    def test_known_angle_state_reference_becomes_optional_in_config(self):
+        cfg = MAWConfig(
+            agents=[
+                {
+                    "name": "a",
+                    "instruction": "Use <user_query> and <research_result>.",
+                    "output_key": "research_result",
+                },
+            ],
+            pipeline={"type": "agent", "agent_name": "a"},
+        )
+        assert cfg.agents[0].instruction == "Use {user_query?} and {research_result?}."
+
+    def test_solution_tags_are_preserved_in_config(self):
+        cfg = MAWConfig(
+            agents=[
+                {
+                    "name": "a",
+                    "instruction": "Return only <solution>answer</solution>.",
+                    "output_key": "solution",
+                },
+            ],
+            pipeline={"type": "agent", "agent_name": "a"},
+        )
+        assert cfg.agents[0].instruction == "Return only <solution>answer</solution>."
+
+
 class TestAgentNameChildrenConflict:
-    """Rule 10: agent_name + children together → ValueError."""
+    """Rule 11: agent_name + children together → ValueError."""
 
     def test_agent_name_and_children_rejected(self):
         with pytest.raises(ValidationError, match="Cannot specify both"):

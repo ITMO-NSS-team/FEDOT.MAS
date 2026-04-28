@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import itertools
-from typing import TypeAlias
+from typing import Any, TypeAlias, cast
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
@@ -127,7 +127,7 @@ def _inject_exit_loop(children: list[BaseAgent]) -> None:
             if agent.tools is None:
                 agent.tools = [exit_loop]
             elif exit_loop not in agent.tools:
-                agent.tools.append(exit_loop)  # type: ignore[arg-type]
+                agent.tools.append(cast(Any, exit_loop))
             _log.debug("Injected exit_loop into agent={}", agent.name)
             break
 
