@@ -246,8 +246,7 @@ def _setup_state(
     if cp is None:
         _log.info(
             "Checkpointing disabled — set OptimizationConfig.checkpoint_path "
-            "(or pass --checkpoint-path in the AIME benchmark) to enable "
-            "resume on failure for long runs."
+            "to enable resume on failure for long runs."
         )
     else:
         _log.info("Checkpoint path set, will write state to {} after each iteration", cp)

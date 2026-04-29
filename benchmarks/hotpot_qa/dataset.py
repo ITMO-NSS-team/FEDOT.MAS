@@ -41,9 +41,7 @@ def load_hotpot_dataset(
     distractor paragraphs with the question; the expected output is the
     short answer string.
     """
-    raw = load_dataset(
-        "hotpot_qa", "distractor", split="validation", trust_remote_code=True
-    )
+    raw = load_dataset("hotpot_qa", "distractor", split="validation")
     all_tasks: list[Task] = []
     for item in raw:
         text = _build_input(item["question"], item["context"])
@@ -59,11 +57,11 @@ def load_hotpot_dataset(
     valset = all_tasks[a:b]
     testset = all_tasks[b:c]
 
-    if train_limit:
+    if train_limit is not None:
         trainset = trainset[:train_limit]
-    if val_limit:
+    if val_limit is not None:
         valset = valset[:val_limit]
-    if test_limit:
+    if test_limit is not None:
         testset = testset[:test_limit]
     if test_repeats > 1:
         testset = testset * test_repeats

@@ -37,16 +37,16 @@ def load_math_dataset(
     trainset = all_tasks[:mid]
     valset = all_tasks[mid:]
 
-    if train_limit:
+    if train_limit is not None:
         trainset = trainset[:train_limit]
-    if val_limit:
+    if val_limit is not None:
         valset = valset[:val_limit]
 
     test_raw = load_dataset("MathArena/aime_2025", "default", split="train")
     testset = [
         Task(input=item["problem"], expected=str(item["answer"])) for item in test_raw
     ]
-    if test_limit:
+    if test_limit is not None:
         testset = testset[:test_limit]
     if test_repeats > 1:
         testset = testset * test_repeats

@@ -50,7 +50,12 @@ def _final_output_key(config: MAWConfig) -> str:
     name = _last_agent_name(config.pipeline)
     if name is None:
         raise ValueError("Could not locate final agent in pipeline")
-    agent = next(a for a in config.agents if a.name == name)
+    agent = next((a for a in config.agents if a.name == name), None)
+    if agent is None:
+        raise ValueError(
+            f"Pipeline references agent {name!r} but it is not defined in "
+            f"config.agents (available: {[a.name for a in config.agents]})"
+        )
     return agent.output_key
 
 
@@ -58,6 +63,7 @@ async def _solve_one(
     i: int,
     task: Task,
     config: MAWConfig,
+    answer_key: str,
     maw: MAW,
     scorer: HotpotQAScorer,
     sem: asyncio.Semaphore,
@@ -78,7 +84,7 @@ async def _solve_one(
                 output = f"ERROR: {err_msg}"
             else:
                 scoring = await scorer.evaluate(task, run.state)
-                output = str(run.state.get(_final_output_key(config), ""))
+                output = str(run.state.get(answer_key, ""))
         except Exception as exc:
             _log.warning("[{}] Task {}/{} failed: {}", stage, i + 1, total, exc)
             scoring = None
@@ -121,11 +127,12 @@ async def evaluate_on(
     total = len(tasks)
     sem = asyncio.Semaphore(max(1, concurrency))
     progress = {"done": 0.0, "em": 0.0, "f1_sum": 0.0}
+    answer_key = _final_output_key(config)
     _log.info(
         "[{}] Evaluating {} tasks with concurrency={}", stage, total, concurrency
     )
     coros = [
-        _solve_one(i, t, config, maw, scorer, sem, stage, total, progress)
+        _solve_one(i, t, config, answer_key, maw, scorer, sem, stage, total, progress)
         for i, t in enumerate(tasks)
     ]
     return await asyncio.gather(*coros)
@@ -142,7 +149,7 @@ def report(result: BenchmarkResult) -> None:
     _log.info("Optimized F1:        {:.3f}", m.get("optimized_f1", 0))
     if "train_accuracy" in m:
         _log.info("Train EM:            {:.1%}", m["train_accuracy"])
-        _log.info("Val F1:              {:.3f} (best on full valset)", m.get("val_accuracy", 0))
+        _log.info("Val F1:              {:.3f} (best on full valset)", m.get("val_f1", 0))
     if result.cost:
         _log.info("Total tokens:        {:,}", result.cost.total_tokens)
 
@@ -286,7 +293,7 @@ async def main(settings: HotpotQASettings) -> BenchmarkResult:
         metrics["train_accuracy"] = _em_rate(train_eval_tasks)
         metrics["train_f1"] = _f1_mean(train_eval_tasks)
     if opt_result is not None:
-        metrics["val_accuracy"] = opt_result.best_score
+        metrics["val_f1"] = opt_result.best_score
 
     result = BenchmarkResult(
         benchmark="hotpot_qa",
