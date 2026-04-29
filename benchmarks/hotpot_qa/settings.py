@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class HotpotQASettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="HOTPOT_")
 
-    solver_model: str = "openai/gpt-4.1-mini"
+    solver_model: str = "openai/gpt-oss-120b"
     max_iterations: int = 10_000
     max_evaluations: int | None = None
     patience: int = 10_000

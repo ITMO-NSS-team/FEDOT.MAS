@@ -16,7 +16,7 @@ from fedotmas.optimize._state import Task
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _utils import BenchmarkResult, CostSummary, TaskResult, save_result
 from dataset import load_hotpot_dataset
-from scorer import HotpotQAScorer
+from scorer import HotpotQAScorer, exact_match
 from settings import HotpotQASettings
 
 _log = get_logger("fmbench.hotpot_qa")
@@ -32,6 +32,19 @@ def _load_seed_config(settings: HotpotQASettings) -> MAWConfig:
         )
     _log.info("Loading seed config from {}", _SEED_CONFIG_PATH)
     config = MAWConfig.model_validate_json(_SEED_CONFIG_PATH.read_text())
+    # settings.solver_model takes precedence over the model embedded in the
+    # seed config: the user sets it explicitly (env var / CLI), while the seed
+    # config's model is a generation-time artefact that's easy to overlook.
+    original_models = sorted({a.model for a in config.agents if a.model})
+    for agent in config.agents:
+        agent.model = settings.solver_model
+    if original_models and original_models != [settings.solver_model]:
+        _log.info(
+            "Overriding seed_config agent models {} with settings.solver_model={!r}. "
+            "Note: instructions in the seed may have been tuned for the original model.",
+            original_models,
+            settings.solver_model,
+        )
     if settings.max_output_tokens is not None:
         for agent in config.agents:
             agent.max_output_tokens = settings.max_output_tokens
@@ -91,7 +104,10 @@ async def _solve_one(
             output = f"ERROR: {exc}"
 
         score = scoring.score if scoring else 0.0
-        is_em = score == 1.0
+        # EM and F1 are independent: bag-of-words F1 can hit 1.0 on
+        # word-order swaps that fail normalized string equality, so compute
+        # EM via the same normalization the scorer uses rather than score==1.0.
+        is_em = bool(scoring) and exact_match(output, task.expected or "")
         progress["done"] += 1
         progress["em"] += float(is_em)
         progress["f1_sum"] += score
@@ -186,6 +202,11 @@ async def main(settings: HotpotQASettings) -> BenchmarkResult:
     )
 
     maw = MAW(worker_models=[settings.solver_model])
+    # Scorer is created once from seed_config's output_key and reused across all
+    # candidates. Safe while InstructionMutator only edits instructions; if a
+    # future mutator changes pipeline topology / agent names / output_keys, the
+    # scorer will read a stale key — make Scorer.evaluate accept the current
+    # config (or recompute the key) before adding such mutators.
     scorer = HotpotQAScorer(output_key=answer_key)
 
     train_eval_tasks: list[TaskResult] = []

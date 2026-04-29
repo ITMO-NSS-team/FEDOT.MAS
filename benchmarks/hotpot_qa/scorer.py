@@ -9,7 +9,7 @@ from fedotmas.optimize._scoring import ScoringResult
 from fedotmas.optimize._state import Task
 
 
-def _normalize(s: str) -> str:
+def normalize(s: str) -> str:
     """SQuAD-style normalization: lowercase, strip articles/punct/extra ws."""
     s = s.lower()
     s = re.sub(r"\b(a|an|the)\b", " ", s)
@@ -18,8 +18,8 @@ def _normalize(s: str) -> str:
 
 
 def _f1(pred: str, gold: str) -> float:
-    pred_tokens = _normalize(pred).split()
-    gold_tokens = _normalize(gold).split()
+    pred_tokens = normalize(pred).split()
+    gold_tokens = normalize(gold).split()
     if not pred_tokens or not gold_tokens:
         return float(pred_tokens == gold_tokens)
     common = Counter(pred_tokens) & Counter(gold_tokens)
@@ -31,8 +31,8 @@ def _f1(pred: str, gold: str) -> float:
     return 2 * precision * recall / (precision + recall)
 
 
-def _exact_match(pred: str, gold: str) -> bool:
-    return _normalize(pred) == _normalize(gold)
+def exact_match(pred: str, gold: str) -> bool:
+    return normalize(pred) == normalize(gold)
 
 
 class HotpotQAScorer:
@@ -60,7 +60,7 @@ class HotpotQAScorer:
             )
 
         f1 = _f1(raw, expected)
-        em = _exact_match(raw, expected)
+        em = exact_match(raw, expected)
 
         if em:
             return ScoringResult(

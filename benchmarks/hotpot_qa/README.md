@@ -20,14 +20,18 @@ Each task input bundles the question with all 10 distractor paragraphs
 
 ## Scoring
 
-SQuAD-style normalization (lowercase, strip articles / punctuation /
-extra whitespace) followed by:
+Both metrics use SQuAD-style normalization (lowercase, strip articles /
+punctuation / extra whitespace) and are reported independently:
 
-- **F1**: token-overlap F1 between predicted and gold tokens. This is
-  the primary score the optimizer accepts/rejects on, so partial
-  overlaps still produce a usable gradient.
-- **Exact match (EM)**: reported separately as `accuracy` in the result
-  JSON. EM is true iff F1 == 1.0 after normalization.
+- **F1**: bag-of-words token-overlap F1 between predicted and gold
+  tokens. This is the primary score the optimizer accepts/rejects on,
+  so partial overlaps still produce a usable gradient.
+- **Exact match (EM)**: equality of the normalized prediction and the
+  normalized gold string. Reported as `accuracy` in the result JSON.
+
+EM and F1 are computed independently. F1 = 1.0 does not imply EM
+(e.g. token-order swaps yield F1 = 1.0 but EM = false), so use the
+explicit EM column rather than treating F1 = 1.0 as an exact match.
 
 ## Install
 
