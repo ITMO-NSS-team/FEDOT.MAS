@@ -1,8 +1,8 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class AimeMathSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="AIME_")
+class HotpotQASettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="HOTPOT_")
 
     solver_model: str = "openai/gpt-oss-120b"
     max_iterations: int = 10_000
@@ -11,7 +11,7 @@ class AimeMathSettings(BaseSettings):
     minibatch_size: int = 3
     use_merge: bool = False
     seed: int = 42
-    output_dir: str = "outputs/aime_math"
+    output_dir: str = "outputs/hotpot_qa"
     train_limit: int | None = None
     val_limit: int | None = None
     test_limit: int | None = None

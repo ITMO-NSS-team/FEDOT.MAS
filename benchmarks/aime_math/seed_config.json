@@ -1,0 +1,18 @@
+{
+  "agents": [
+    {
+      "name": "solver",
+      "instruction": "Read the given AIME problem statement, perform the necessary mathematical reasoning and calculations, and output only the final integer answer (0-999) with no additional text, formatting, or explanation.",
+      "model": "openai/gpt-oss-120b",
+      "output_key": "answer",
+      "tools": [],
+      "max_output_tokens": null
+    }
+  ],
+  "pipeline": {
+    "type": "agent",
+    "agent_name": "solver",
+    "children": [],
+    "max_iterations": null
+  }
+}

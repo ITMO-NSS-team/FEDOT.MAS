@@ -15,20 +15,20 @@ from fedotmas.optimize._state import Task
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _utils import BenchmarkResult, CostSummary, TaskResult, save_result
-from dataset import load_math_dataset
-from scorer import ExactIntScorer
-from settings import AimeMathSettings
+from dataset import load_hotpot_dataset
+from scorer import HotpotQAScorer, exact_match
+from settings import HotpotQASettings
 
-_log = get_logger("fmbench.aime_math")
+_log = get_logger("fmbench.hotpot_qa")
 
 _SEED_CONFIG_PATH = Path(__file__).parent / "seed_config.json"
 
 
-def _load_seed_config(settings: AimeMathSettings) -> MAWConfig:
+def _load_seed_config(settings: HotpotQASettings) -> MAWConfig:
     if not _SEED_CONFIG_PATH.exists():
         raise FileNotFoundError(
             f"Seed config not found at {_SEED_CONFIG_PATH}. "
-            f"Run `python benchmarks/aime_math/generate_seed.py` first."
+            f"Run `python benchmarks/hotpot_qa/generate_seed.py` first."
         )
     _log.info("Loading seed config from {}", _SEED_CONFIG_PATH)
     config = MAWConfig.model_validate_json(_SEED_CONFIG_PATH.read_text())
@@ -78,11 +78,11 @@ async def _solve_one(
     config: MAWConfig,
     answer_key: str,
     maw: MAW,
-    scorer: ExactIntScorer,
+    scorer: HotpotQAScorer,
     sem: asyncio.Semaphore,
     stage: str,
     total: int,
-    progress: dict[str, int],
+    progress: dict[str, float],
 ) -> TaskResult:
     async with sem:
         _log.info("[{}] Task {}/{} — solving...", stage, i + 1, total)
@@ -103,20 +103,23 @@ async def _solve_one(
             scoring = None
             output = f"ERROR: {exc}"
 
-        is_correct = (scoring.score == 1.0) if scoring else False
+        score = scoring.score if scoring else 0.0
+        # EM and F1 are independent: bag-of-words F1 can hit 1.0 on
+        # word-order swaps that fail normalized string equality, so compute
+        # EM via the same normalization the scorer uses rather than score==1.0.
+        is_em = bool(scoring) and exact_match(output, task.expected or "")
         progress["done"] += 1
-        if is_correct:
-            progress["correct"] += 1
+        progress["em"] += float(is_em)
+        progress["f1_sum"] += score
         _log.info(
-            "[{}] Task {}/{} {} | expected={} running_acc={}/{} ({:.1%})",
-            stage,
-            i + 1,
-            total,
-            "✓" if is_correct else "✗",
-            task.expected,
-            progress["correct"],
-            progress["done"],
-            progress["correct"] / progress["done"],
+            "[{}] Task {}/{} {} | f1={:.2f} expected={!r} | "
+            "running em={:.0f}/{:.0f} ({:.1%}) f1={:.2f}",
+            stage, i + 1, total,
+            "✓" if is_em else "✗",
+            score, task.expected,
+            progress["em"], progress["done"],
+            progress["em"] / progress["done"],
+            progress["f1_sum"] / progress["done"],
         )
 
         return TaskResult(
@@ -124,8 +127,8 @@ async def _solve_one(
             input=task.input[:200],
             expected=task.expected,
             output=output,
-            score=scoring.score if scoring else 0.0,
-            correct=is_correct,
+            score=score,
+            correct=is_em,
         )
 
 
@@ -133,13 +136,13 @@ async def evaluate_on(
     config: MAWConfig,
     tasks: list[Task],
     maw: MAW,
-    scorer: ExactIntScorer,
+    scorer: HotpotQAScorer,
     stage: str = "eval",
     concurrency: int = 1,
 ) -> list[TaskResult]:
     total = len(tasks)
     sem = asyncio.Semaphore(max(1, concurrency))
-    progress = {"done": 0, "correct": 0}
+    progress = {"done": 0.0, "em": 0.0, "f1_sum": 0.0}
     answer_key = _final_output_key(config)
     _log.info(
         "[{}] Evaluating {} tasks with concurrency={}", stage, total, concurrency
@@ -153,20 +156,30 @@ async def evaluate_on(
 
 def report(result: BenchmarkResult) -> None:
     m = result.metrics
-    _log.info("AIME Math Benchmark Results")
+    _log.info("HotpotQA Benchmark Results")
     _log.info("Iterations:          {}", result.iterations)
-    _log.info("Baseline accuracy:   {:.1%}", m.get("baseline_accuracy", 0))
-    _log.info("Optimized accuracy:  {:.1%}", m.get("optimized_accuracy", 0))
-    _log.info("Improvement:         {:+.1%}", m.get("improvement", 0))
+    _log.info("Baseline EM:         {:.1%}", m.get("baseline_accuracy", 0))
+    _log.info("Optimized EM:        {:.1%}", m.get("optimized_accuracy", 0))
+    _log.info("Improvement (EM):    {:+.1%}", m.get("improvement", 0))
+    _log.info("Baseline F1:         {:.3f}", m.get("baseline_f1", 0))
+    _log.info("Optimized F1:        {:.3f}", m.get("optimized_f1", 0))
     if "train_accuracy" in m:
-        _log.info("Train accuracy:      {:.1%} (best on full trainset)", m["train_accuracy"])
-        _log.info("Val accuracy:        {:.1%} (best on full valset)", m.get("val_accuracy", 0))
+        _log.info("Train EM:            {:.1%}", m["train_accuracy"])
+        _log.info("Val F1:              {:.3f} (best on full valset)", m.get("val_f1", 0))
     if result.cost:
         _log.info("Total tokens:        {:,}", result.cost.total_tokens)
 
 
-async def main(settings: AimeMathSettings) -> BenchmarkResult:
-    trainset, valset, testset, solutions = load_math_dataset(
+def _f1_mean(tasks: list[TaskResult]) -> float:
+    return sum(t.score for t in tasks) / len(tasks) if tasks else 0.0
+
+
+def _em_rate(tasks: list[TaskResult]) -> float:
+    return sum(t.correct for t in tasks) / len(tasks) if tasks else 0.0
+
+
+async def main(settings: HotpotQASettings) -> BenchmarkResult:
+    trainset, valset, testset = load_hotpot_dataset(
         seed=settings.seed,
         train_limit=settings.train_limit,
         val_limit=settings.val_limit,
@@ -194,7 +207,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
     # future mutator changes pipeline topology / agent names / output_keys, the
     # scorer will read a stale key — make Scorer.evaluate accept the current
     # config (or recompute the key) before adding such mutators.
-    scorer = ExactIntScorer(output_key=answer_key, solutions=solutions)
+    scorer = HotpotQAScorer(output_key=answer_key)
 
     train_eval_tasks: list[TaskResult] = []
 
@@ -233,11 +246,6 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
             )
 
         if settings.eval_best_on_train:
-            # Diagnostic: full-train eval of best_config to surface a train/val/test gap.
-            # Val accuracy is already known (best_score = mean over full valset, since
-            # every accepted candidate gets a full-val eval), so we only need fresh train.
-            # Train ≈ val ≪ test → distribution shift (train/val one set, test another).
-            # Train < val → selection bias on val (instruction overfit to val-fold).
             _log.info("Evaluating best on full trainset ({} tasks)", len(trainset))
             train_eval_tasks = await evaluate_on(
                 opt_result.best_config, trainset, maw, scorer,
@@ -245,16 +253,17 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
             )
 
     if baseline_tasks:
-        baseline_acc = sum(t.correct for t in baseline_tasks) / len(baseline_tasks)
+        baseline_em = _em_rate(baseline_tasks)
+        baseline_f1 = _f1_mean(baseline_tasks)
     elif settings.baseline_accuracy is not None:
-        baseline_acc = settings.baseline_accuracy
+        baseline_em = settings.baseline_accuracy
+        baseline_f1 = 0.0
     else:
-        baseline_acc = 0.0
-    optimized_acc = (
-        sum(t.correct for t in optimized_tasks) / len(optimized_tasks)
-        if optimized_tasks
-        else 0.0
-    )
+        baseline_em = 0.0
+        baseline_f1 = 0.0
+
+    optimized_em = _em_rate(optimized_tasks)
+    optimized_f1 = _f1_mean(optimized_tasks)
 
     if opt_result is not None:
         m = opt_result.metrics
@@ -295,17 +304,20 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
         candidates_dump = []
 
     metrics: dict[str, float] = {
-        "baseline_accuracy": baseline_acc,
-        "optimized_accuracy": optimized_acc,
-        "improvement": optimized_acc - baseline_acc,
+        "baseline_accuracy": baseline_em,
+        "optimized_accuracy": optimized_em,
+        "improvement": optimized_em - baseline_em,
+        "baseline_f1": baseline_f1,
+        "optimized_f1": optimized_f1,
     }
     if train_eval_tasks:
-        metrics["train_accuracy"] = sum(t.correct for t in train_eval_tasks) / len(train_eval_tasks)
+        metrics["train_accuracy"] = _em_rate(train_eval_tasks)
+        metrics["train_f1"] = _f1_mean(train_eval_tasks)
     if opt_result is not None:
-        metrics["val_accuracy"] = opt_result.best_score
+        metrics["val_f1"] = opt_result.best_score
 
     result = BenchmarkResult(
-        benchmark="aime_math",
+        benchmark="hotpot_qa",
         metrics=metrics,
         iterations=opt_result.iterations if opt_result else 0,
         total_evaluation_runs=opt_result.total_evaluation_runs if opt_result else None,
@@ -335,7 +347,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="AIME Math benchmark")
+    parser = argparse.ArgumentParser(description="HotpotQA benchmark")
     parser.add_argument("--max-iterations", type=int, default=None)
     parser.add_argument("--max-evaluations", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -354,6 +366,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     overrides = {k: v for k, v in vars(args).items() if v is not None}
-    settings = AimeMathSettings(**overrides)
+    settings = HotpotQASettings(**overrides)
 
     asyncio.run(main(settings))

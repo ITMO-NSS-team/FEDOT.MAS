@@ -166,6 +166,7 @@ class OptimizationState:
 
     def save(self, path: str | Path) -> None:
         path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         candidates_data = []
         for c in self.candidates:
             expected_answers: dict[str, str] = {}

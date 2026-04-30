@@ -1,4 +1,0 @@
-INITIAL_PROMPT = (
-    "Solve the math problem carefully. "
-    "Break down the steps and provide the final answer as a single number."
-)
