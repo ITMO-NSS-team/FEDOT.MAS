@@ -353,9 +353,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint-path", default=None)
     args = parser.parse_args()
 
-    raw = vars(args)
-    overrides = {k: v for k, v in raw.items() if v is not None}
-    overrides = {k.replace("-", "_"): v for k, v in overrides.items()}
+    overrides = {k: v for k, v in vars(args).items() if v is not None}
     settings = AimeMathSettings(**overrides)
 
     asyncio.run(main(settings))
