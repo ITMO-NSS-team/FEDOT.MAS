@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_META_MODEL = "qwen/qwen3.6-plus"
-DEFAULT_WORKER_MODELS: list[str] = ["qwen/qwen3.6-plus"]
+DEFAULT_META_MODEL = "qwen/qwen3.6-27b"
+DEFAULT_WORKER_MODELS: list[str] = ["qwen/qwen3.6-27b"]
 DEFAULT_META_TEMPERATURE = 0.3
 DEFAULT_MAX_LOOP_ITERATIONS = 3
 

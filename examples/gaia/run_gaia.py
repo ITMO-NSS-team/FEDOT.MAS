@@ -108,7 +108,9 @@ def compute_metrics_by_level(results: list) -> dict:
 
     for difficulty in sorted(difficulty_stats.keys()):
         stats = difficulty_stats[difficulty]
-        accuracy = (stats["correct"] / stats["total"]) * 100 if stats["total"] > 0 else 0
+        accuracy = (
+            (stats["correct"] / stats["total"]) * 100 if stats["total"] > 0 else 0
+        )
 
         metrics_by_level[f"level_{difficulty}"] = {
             "total_tasks": stats["total"],
@@ -119,7 +121,9 @@ def compute_metrics_by_level(results: list) -> dict:
         overall_total += stats["total"]
         overall_correct += stats["correct"]
 
-    overall_accuracy = (overall_correct / overall_total) * 100 if overall_total > 0 else 0
+    overall_accuracy = (
+        (overall_correct / overall_total) * 100 if overall_total > 0 else 0
+    )
     metrics_by_level["overall"] = {
         "total_tasks": overall_total,
         "correct": overall_correct,
@@ -159,8 +163,10 @@ def compute_token_summary(results: list) -> dict:
             "prompt_tokens": total_meta_prompt + total_pipeline_prompt,
             "completion_tokens": total_meta_completion + total_pipeline_completion,
             "total_tokens": (
-                total_meta_prompt + total_meta_completion
-                + total_pipeline_prompt + total_pipeline_completion
+                total_meta_prompt
+                + total_meta_completion
+                + total_pipeline_prompt
+                + total_pipeline_completion
             ),
         },
     }
@@ -175,10 +181,14 @@ def print_score_by_level(metrics_by_level: dict) -> None:
         if key.startswith("level_"):
             level = key.split("_")[1]
             stats = metrics_by_level[key]
-            print(f"Level {level}: {stats['accuracy']:.2f}%  ({stats['correct']}/{stats['total_tasks']})")
+            print(
+                f"Level {level}: {stats['accuracy']:.2f}%  ({stats['correct']}/{stats['total_tasks']})"
+            )
 
     overall = metrics_by_level["overall"]
-    print(f"Overall:   {overall['accuracy']:.2f}%  ({overall['correct']}/{overall['total_tasks']})")
+    print(
+        f"Overall:   {overall['accuracy']:.2f}%  ({overall['correct']}/{overall['total_tasks']})"
+    )
     print("=" * 50)
 
 
@@ -189,9 +199,15 @@ def print_token_summary(token_summary: dict) -> None:
     meta = token_summary["meta_agent"]
     pipe = token_summary["pipeline"]
     grand = token_summary["grand_total"]
-    print(f"Meta-agent:  {meta['total_tokens']:>10,}  (prompt: {meta['prompt_tokens']:,}, completion: {meta['completion_tokens']:,})")
-    print(f"Pipeline:    {pipe['total_tokens']:>10,}  (prompt: {pipe['prompt_tokens']:,}, completion: {pipe['completion_tokens']:,})")
-    print(f"Grand total: {grand['total_tokens']:>10,}  (prompt: {grand['prompt_tokens']:,}, completion: {grand['completion_tokens']:,})")
+    print(
+        f"Meta-agent:  {meta['total_tokens']:>10,}  (prompt: {meta['prompt_tokens']:,}, completion: {meta['completion_tokens']:,})"
+    )
+    print(
+        f"Pipeline:    {pipe['total_tokens']:>10,}  (prompt: {pipe['prompt_tokens']:,}, completion: {pipe['completion_tokens']:,})"
+    )
+    print(
+        f"Grand total: {grand['total_tokens']:>10,}  (prompt: {grand['prompt_tokens']:,}, completion: {grand['completion_tokens']:,})"
+    )
     print("=" * 50)
 
 
@@ -226,6 +242,8 @@ async def process_task(
     state = await maw.run(query)
 
     answer = extract_answer_from_state(state)
+    if not answer:
+        raise ValueError("MAW produced no non-empty answer")
     is_correct = gaia_benchmark.is_correct_answer(answer, task.ground_truth)
 
     pipeline_result = maw.last_result
@@ -241,8 +259,12 @@ async def process_task(
         "tokens": {
             "meta_prompt": maw.meta_prompt_tokens,
             "meta_completion": maw.meta_completion_tokens,
-            "pipeline_prompt": pipeline_result.total_prompt_tokens if pipeline_result else 0,
-            "pipeline_completion": pipeline_result.total_completion_tokens if pipeline_result else 0,
+            "pipeline_prompt": pipeline_result.total_prompt_tokens
+            if pipeline_result
+            else 0,
+            "pipeline_completion": pipeline_result.total_completion_tokens
+            if pipeline_result
+            else 0,
             "total_prompt": maw.total_prompt_tokens,
             "total_completion": maw.total_completion_tokens,
         },
@@ -286,7 +308,10 @@ async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any
             status = "CORRECT" if result["is_correct"] else "WRONG"
             _log.info(
                 "[{}] task={} answer='{}' gt='{}'",
-                status, task.task_id, result["response"][:60], task.ground_truth,
+                status,
+                task.task_id,
+                result["response"][:60],
+                task.ground_truth,
             )
         except Exception as e:
             _log.error("Failed task {} after all retries: {}", task.task_id, e)
@@ -299,6 +324,15 @@ async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any
                 "is_correct": False,
                 "error": str(e),
             }
+            task_log_dir.mkdir(parents=True, exist_ok=True)
+            with open(task_log_dir / "result.json", "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2, ensure_ascii=False, default=str)
+            with open(task_log_dir / "leaderboard.json", "w", encoding="utf-8") as f:
+                json.dump(
+                    {"task_id": task.task_id, "model_answer": ""},
+                    f,
+                    indent=2,
+                )
 
         results.append(result)
 

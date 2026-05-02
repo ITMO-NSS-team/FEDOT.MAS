@@ -77,6 +77,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 6. **Instructions must be specific and actionable** — tell the agent exactly what to do.
 7. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
 8. **Never end with parallel.** A `parallel` node MUST be followed by a synthesizer agent that reads the `output_key` of every parallel sub-agent from state and produces a combined answer. Wrap the parallel node and the synthesizer in a `sequential` node.
+9. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
 
 ---
 
@@ -309,6 +310,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 - Ensure all agent names are unique.
 - Assign MCP tools only when actually needed.
 - **ONLY use exact tool names from the AVAILABLE MCP TOOLS list. NEVER invent tool names.** If no listed tool fits, use `"tools": []`.
+- For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
 - Do NOT include output_key or any curly-brace state references in instructions.
 
 ---
@@ -399,6 +401,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 5. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 6. **Instructions must include state references** using curly braces around the state key name, so agents can read upstream outputs.
 7. **Never end with parallel.** A `parallel` node MUST be followed by a synthesizer agent that reads the `output_key` of every parallel sub-agent from state and produces a combined answer. Wrap the parallel node and the synthesizer in a `sequential` node.
+8. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
 
 ---
 
