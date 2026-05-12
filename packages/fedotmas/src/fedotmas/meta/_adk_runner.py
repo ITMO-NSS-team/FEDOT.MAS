@@ -12,6 +12,7 @@ from google.adk.agents import LlmAgent
 from google.adk.apps.app import App
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService, InMemorySessionService
+from google.adk.planners import BuiltInPlanner
 from google.genai import types
 from pydantic import BaseModel
 
@@ -61,6 +62,7 @@ async def run_meta_agent_call(
     last_error: Exception | None = None
     effective_message = user_message
     effective_timeout_s = _resolve_timeout(timeout_s)
+    max_output_tokens = _resolve_max_output_tokens()
     for attempt in range(max_retries + 1):
         try:
             call = _execute_meta_call(
@@ -74,6 +76,7 @@ async def run_meta_agent_call(
                 session_service=session_service,
                 allowed_models=allowed_models,
                 plugins=plugins,
+                max_output_tokens=max_output_tokens,
             )
             if effective_timeout_s is None:
                 return await call
@@ -81,6 +84,13 @@ async def run_meta_agent_call(
                 return await call
         except (RuntimeError, ValueError, TypeError, TimeoutError) as e:
             last_error = e
+            if isinstance(e, TimeoutError):
+                _log.error(
+                    "{} timed out after {:.1f}s; not retrying the same prompt",
+                    agent_name,
+                    effective_timeout_s or 0.0,
+                )
+                raise
             if attempt < max_retries:
                 delay = 2**attempt
                 _log.warning(
@@ -121,6 +131,7 @@ async def _execute_meta_call(
     session_service: BaseSessionService | None = None,
     allowed_models: list[str] | None = None,
     plugins: list[BasePlugin] | None = None,
+    max_output_tokens: int | None = None,
 ) -> LLMCallResult:
     """Core execution logic for a single meta-agent LLM call."""
     _log.info(
@@ -140,6 +151,13 @@ async def _execute_meta_call(
         output_key=output_key,
         generate_content_config=types.GenerateContentConfig(
             temperature=temperature,
+            max_output_tokens=max_output_tokens,
+        ),
+        planner=BuiltInPlanner(
+            thinking_config=types.ThinkingConfig(
+                thinking_budget=0,
+                include_thoughts=False,
+            )
         ),
     )
 
@@ -266,4 +284,17 @@ def _resolve_timeout(timeout_s: float | None) -> float | None:
     except ValueError:
         _log.warning("Invalid FEDOTMAS_META_AGENT_TIMEOUT_S={!r}; using 180", value)
         resolved = 180.0
+    return resolved if resolved > 0 else None
+
+
+def _resolve_max_output_tokens() -> int | None:
+    value = os.getenv("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", "2048")
+    try:
+        resolved = int(value)
+    except ValueError:
+        _log.warning(
+            "Invalid FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS={!r}; using 2048",
+            value,
+        )
+        resolved = 2048
     return resolved if resolved > 0 else None

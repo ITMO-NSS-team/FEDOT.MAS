@@ -21,6 +21,7 @@ load_dotenv()
 
 RUN_ID = uuid.uuid4()
 _log = get_logger("fedotmas.examples.gaia")
+DEFAULT_GAIA_MCP_SERVERS = ["websearch-searxng", "web-scraping", "sandbox-light"]
 
 
 def extract_solution(text: str) -> str:
@@ -69,6 +70,26 @@ def _env_flag(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        _log.warning("Invalid {}={!r}; using {}", name, value, default)
+        return default
+
+
+def _gaia_mcp_servers() -> list[str] | str:
+    value = os.getenv("FEDOTMAS_GAIA_MCP_SERVERS")
+    if value is None:
+        return DEFAULT_GAIA_MCP_SERVERS
+    if value.strip().lower() == "all":
+        return "all"
+    return [name.strip() for name in value.split(",") if name.strip()]
 
 
 def build_plugins(task, enable_langfuse: bool) -> list:
@@ -212,7 +233,7 @@ def print_token_summary(token_summary: dict) -> None:
 
 
 @retry(
-    stop=stop_after_attempt(3),
+    stop=stop_after_attempt(_env_int("FEDOTMAS_GAIA_TASK_ATTEMPTS", 1)),
     wait=wait_exponential(multiplier=1, min=4, max=10),
 )
 async def process_task(
@@ -236,8 +257,10 @@ async def process_task(
     query += f"Question: {task.question}"
 
     maw = MAW(
-        mcp_servers="all",
+        mcp_servers=_gaia_mcp_servers(),
         plugins=build_plugins(task, enable_langfuse),
+        max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
+        two_stage=False
     )
     state = await maw.run(query)
 

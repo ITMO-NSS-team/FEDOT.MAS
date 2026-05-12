@@ -139,10 +139,22 @@ class MAWStepConfig(BaseModel):
         """Auto-fill missing ``type`` based on other fields present."""
         if not isinstance(data, dict):
             return data
-        if data.get("agent_name") and data.get("children"):
+        data = dict(data)  # avoid mutating the original
+        node_type = data.get("type")
+
+        # Trust the explicit node type and discard impossible
+        # branch fields instead of retrying the whole meta-agent call
+        if node_type == "agent":
+            data.pop("children", None)
+            data.pop("max_iterations", None)
+        elif node_type in {"sequential", "parallel"}:
+            data.pop("agent_name", None)
+            data.pop("max_iterations", None)
+        elif node_type == "loop":
+            data.pop("agent_name", None)
+        elif data.get("agent_name") and data.get("children"):
             raise ValueError("Cannot specify both 'agent_name' and 'children'")
-        if "type" not in data:
-            data = dict(data)  # avoid mutating the original
+        elif "type" not in data:
             if data.get("agent_name"):
                 data["type"] = "agent"
             elif data.get("children"):

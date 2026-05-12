@@ -125,9 +125,7 @@ class TestModelValidation:
 
     def test_bare_model_rejected(self):
         with pytest.raises(ValidationError, match="must include a provider prefix"):
-            MAWAgentConfig(
-                name="a", instruction="x", output_key="k1", model="gpt-4o"
-            )
+            MAWAgentConfig(name="a", instruction="x", output_key="k1", model="gpt-4o")
 
     def test_prefixed_model_accepted(self):
         cfg = MAWAgentConfig(
@@ -187,11 +185,37 @@ class TestInstructionNormalization:
 
 
 class TestAgentNameChildrenConflict:
-    """Rule 11: agent_name + children together → ValueError."""
+    """Rule 11: ambiguous agent_name + children handling."""
 
-    def test_agent_name_and_children_rejected(self):
+    def test_untyped_agent_name_and_children_rejected(self):
         with pytest.raises(ValidationError, match="Cannot specify both"):
             MAWStepConfig(
                 agent_name="a",
                 children=[MAWStepConfig(type="agent", agent_name="b")],
             )
+
+    def test_typed_sequential_drops_agent_name(self):
+        step = MAWStepConfig.model_validate(
+            {
+                "type": "sequential",
+                "agent_name": "ignored",
+                "children": [{"type": "agent", "agent_name": "a"}],
+                "max_iterations": 0,
+            }
+        )
+        assert step.type == "sequential"
+        assert step.agent_name is None
+        assert step.max_iterations is None
+        assert step.children[0].agent_name == "a"
+
+    def test_typed_agent_drops_children(self):
+        step = MAWStepConfig.model_validate(
+            {
+                "type": "agent",
+                "agent_name": "a",
+                "children": [{"type": "agent", "agent_name": "ignored"}],
+            }
+        )
+        assert step.type == "agent"
+        assert step.agent_name == "a"
+        assert step.children == []

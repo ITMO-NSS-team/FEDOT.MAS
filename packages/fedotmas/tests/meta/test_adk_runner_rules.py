@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import BaseModel
 
-from fedotmas.meta._adk_runner import run_meta_agent_call
+from fedotmas.meta._adk_runner import _resolve_max_output_tokens, run_meta_agent_call
 
 
 # ---------------------------------------------------------------------------
@@ -18,6 +18,25 @@ from fedotmas.meta._adk_runner import run_meta_agent_call
 class _DummySchema(BaseModel):
     name: str
     model: str | None = None
+
+
+class TestMaxOutputTokens:
+    """Meta-agent output token limit comes from env with a finite default."""
+
+    def test_default(self, monkeypatch):
+        monkeypatch.delenv("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", raising=False)
+
+        assert _resolve_max_output_tokens() == 2048
+
+    def test_disabled_with_zero(self, monkeypatch):
+        monkeypatch.setenv("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", "0")
+
+        assert _resolve_max_output_tokens() is None
+
+    def test_invalid_falls_back(self, monkeypatch):
+        monkeypatch.setenv("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", "bad")
+
+        assert _resolve_max_output_tokens() == 2048
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +109,37 @@ class TestRetriesExhausted:
                     temperature=0.3,
                     max_retries=1,
                 )
+
+
+class TestTimeoutFailFast:
+    """Timeouts should not retry the same meta prompt."""
+
+    async def test_timeout_does_not_retry(self, model_config):
+        call_count = 0
+
+        async def _timeout(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise TimeoutError()
+
+        with (
+            patch("fedotmas.meta._adk_runner._execute_meta_call", side_effect=_timeout),
+            patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
+            with pytest.raises(TimeoutError):
+                await run_meta_agent_call(
+                    agent_name="test",
+                    instruction="test",
+                    user_message="test",
+                    output_schema=_DummySchema,
+                    output_key="result",
+                    model=model_config,
+                    temperature=0.3,
+                    max_retries=3,
+                )
+
+        assert call_count == 1
+        mock_sleep.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
