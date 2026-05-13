@@ -57,36 +57,42 @@ searxng-install:
     set -euo pipefail
     dir="{{ searxng_dir }}"
     dir="${dir/#\~/$HOME}"
-    if [ -d "$dir" ]; then
+
+    if [ -d "$dir" ] && [ -f "$dir/docker-compose.yml" ]; then
         echo "SearXNG already installed at $dir"
         exit 0
     fi
+
     mkdir -p "$dir"
-    git clone https://github.com/searxng/searxng-docker.git "$dir"
     cd "$dir"
-    # Enable JSON output format
-    mkdir -p searxng
-    cat > searxng/settings.yml <<'SETTINGS'
-    use_default_settings: true
-    server:
-      secret_key: "$(openssl rand -hex 32)"
-    search:
-      formats:
-        - html
-        - json
-    SETTINGS
-    # Set port in .env
-    sed -i "s|^SEARXNG_HOSTNAME=.*|SEARXNG_HOSTNAME=localhost|" .env 2>/dev/null || true
-    sed -i "s|127.0.0.1:8080|127.0.0.1:{{ searxng_port }}|" docker-compose.yaml 2>/dev/null || true
+
+    curl -fsSLO https://raw.githubusercontent.com/searxng/searxng/master/container/docker-compose.yml
+    curl -fsSLO https://raw.githubusercontent.com/searxng/searxng/master/container/.env.example
+
+    cp -f .env.example .env
+
+    sed -i.bak "s|^SEARXNG_HOSTNAME=.*|SEARXNG_HOSTNAME=localhost:{{ searxng_port }}|" .env 
+    sed -i.bak "s|8080:8080|{{ searxng_port }}:8080|g" docker-compose.yml 
+    sed -i.bak "s|127.0.0.1:8080:8080|127.0.0.1:{{ searxng_port }}:8080|g" docker-compose.yml 
+
     echo "SearXNG installed at $dir — run: just searxng-start"
 
 searxng-start:
     #!/usr/bin/env bash
     set -euo pipefail
+
     dir="{{ searxng_dir }}"
     dir="${dir/#\~/$HOME}"
+
     cd "$dir"
-    docker compose up -d
+
+    if [ ! -f docker-compose.yml ]; then
+        echo "ERROR: docker-compose.yml not found in $dir"
+        echo "Run: just searxng-install"
+        exit 1
+    fi
+
+    docker compose -f docker-compose.yml up -d
     echo "SearXNG running at http://localhost:{{ searxng_port }}"
 
 searxng-stop:

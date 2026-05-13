@@ -7,9 +7,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_META_MODEL = "google/gemma-4-26b-a4b-it"
-DEFAULT_WORKER_MODELS: list[str] = ["google/gemma-4-26b-a4b-it"]
-DEFAULT_META_TEMPERATURE = 0.1
+DEFAULT_META_MODEL = "qwen/qwen3.6-finetuned"
+DEFAULT_WORKER_MODELS: list[str] = ["qwen/qwen3.6-finetuned"]
+DEFAULT_META_TEMPERATURE = 0.3
 DEFAULT_MAX_LOOP_ITERATIONS = 3
 
 
