@@ -62,90 +62,85 @@ searxng-install:
 
     mkdir -p "$dir"
 
-    # Stop an older compose project before rewriting docker-compose.yml.
     if [ -f "$dir/docker-compose.yml" ]; then
         docker compose -f "$dir/docker-compose.yml" down --remove-orphans 2>/dev/null || true
     fi
 
-    # Remove old named containers from previous broken/manual installs.
     docker rm -f searxng-core searxng-valkey searxng 2>/dev/null || true
 
-    # Fix ownership problems caused by previous sudo/docker writes.
-    if [ -d "$dir" ]; then
-        if ! touch "$dir/.fedotmas-write-test" 2>/dev/null; then
-            echo "Fixing ownership for $dir"
-            sudo chown -R "$USER:$USER" "$dir"
-        else
-            rm -f "$dir/.fedotmas-write-test"
-        fi
+    if ! touch "$dir/.fedotmas-write-test" 2>/dev/null; then
+        echo "Fixing ownership for $dir"
+        sudo chown -R "$USER:$USER" "$dir"
+    else
+        rm -f "$dir/.fedotmas-write-test"
     fi
 
     mkdir -p "$dir/core-config"
 
     secret_file="$dir/.searxng_secret"
+
     if [ ! -f "$secret_file" ]; then
         if command -v openssl >/dev/null 2>&1; then
             openssl rand -hex 32 > "$secret_file"
+        elif command -v python3 >/dev/null 2>&1; then
+            python3 -c 'import secrets; print(secrets.token_hex(32))' > "$secret_file"
         else
-            python3 - <<'PY' > "$secret_file"
-import secrets
-print(secrets.token_hex(32))
-PY
+            date +%s | sha256sum | awk '{print $1}' > "$secret_file"
         fi
     fi
 
     secret="$(cat "$secret_file")"
 
-    cat > "$dir/core-config/settings.yml" <<EOF
-use_default_settings: true
+    {
+        printf '%s\n' 'use_default_settings: true'
+        printf '%s\n' ''
+        printf '%s\n' 'general:'
+        printf '%s\n' '  debug: false'
+        printf '%s\n' '  instance_name: "FEDOT.MAS SearXNG"'
+        printf '%s\n' ''
+        printf '%s\n' 'search:'
+        printf '%s\n' '  safe_search: 0'
+        printf '%s\n' '  autocomplete: ""'
+        printf '%s\n' '  formats:'
+        printf '%s\n' '    - html'
+        printf '%s\n' '    - json'
+        printf '%s\n' ''
+        printf '%s\n' 'server:'
+        printf '%s\n' "  secret_key: \"$secret\""
+        printf '%s\n' '  limiter: false'
+        printf '%s\n' '  image_proxy: false'
+        printf '%s\n' '  method: "GET"'
+        printf '%s\n' ''
+        printf '%s\n' 'engines:'
+        printf '%s\n' '  - name: wikidata'
+        printf '%s\n' '    disabled: true'
+        printf '%s\n' '  - name: ahmia'
+        printf '%s\n' '    disabled: true'
+        printf '%s\n' '  - name: torch'
+        printf '%s\n' '    disabled: true'
+        printf '%s\n' '  - name: google'
+        printf '%s\n' '    disabled: true'
+        printf '%s\n' '  - name: brave'
+        printf '%s\n' '    disabled: true'
+    } > "$dir/core-config/settings.yml"
 
-general:
-  debug: false
-  instance_name: "FEDOT.MAS SearXNG"
-
-search:
-  safe_search: 0
-  autocomplete: ""
-  formats:
-    - html
-    - json
-
-server:
-  secret_key: "$secret"
-  limiter: false
-  image_proxy: false
-  method: "GET"
-
-engines:
-  - name: wikidata
-    disabled: true
-  - name: ahmia
-    disabled: true
-  - name: torch
-    disabled: true
-EOF
-
-    # If a broken limiter.toml exists from previous attempts, remove it.
-    # Limiter is disabled through server.limiter=false in settings.yml.
     rm -f "$dir/core-config/limiter.toml"
 
-    cat > "$dir/docker-compose.yml" <<EOF
-services:
-  searxng:
-    image: searxng/searxng:latest
-    container_name: searxng-core
-    restart: unless-stopped
-    ports:
-      - "{{ searxng_host }}:{{ searxng_port }}:8080"
-    volumes:
-      - ./core-config:/etc/searxng
-      - core-data:/var/cache/searxng
-    environment:
-      - SEARXNG_SECRET=$secret
-
-volumes:
-  core-data:
-EOF
+    {
+        printf '%s\n' 'services:'
+        printf '%s\n' '  searxng:'
+        printf '%s\n' '    image: searxng/searxng:latest'
+        printf '%s\n' '    container_name: searxng-core'
+        printf '%s\n' '    restart: unless-stopped'
+        printf '%s\n' '    ports:'
+        printf '%s\n' '      - "{{ searxng_host }}:{{ searxng_port }}:8080"'
+        printf '%s\n' '    volumes:'
+        printf '%s\n' '      - ./core-config:/etc/searxng'
+        printf '%s\n' '      - core-data:/var/cache/searxng'
+        printf '%s\n' ''
+        printf '%s\n' 'volumes:'
+        printf '%s\n' '  core-data:'
+    } > "$dir/docker-compose.yml"
 
     echo "SearXNG installed at $dir"
     echo "JSON API will be available at: http://localhost:{{ searxng_port }}/search?q=test&format=json"
@@ -202,7 +197,16 @@ searxng-reinstall:
 
     docker rm -f searxng-core searxng-valkey searxng 2>/dev/null || true
 
-    rm -rf "$dir"
+    if [ -n "$dir" ] && [ "$dir" != "/" ] && [ "$dir" != "$HOME" ]; then
+        if [ -d "$dir" ]; then
+            sudo chown -R "$USER:$USER" "$dir" 2>/dev/null || true
+            chmod -R u+rwX "$dir" 2>/dev/null || true
+        fi
+        rm -rf "$dir"
+    else
+        echo "ERROR: unsafe searxng_dir: $dir"
+        exit 1
+    fi
 
     just searxng-install
     just searxng-start
@@ -260,8 +264,12 @@ searxng-check:
 
     echo "Checking $url"
 
-    response="$(curl -fsS "$url")"
-    echo "$response" | python3 -m json.tool >/dev/null
+    if command -v python3 >/dev/null 2>&1; then
+        response="$(curl -fsS "$url")"
+        echo "$response" | python3 -m json.tool >/dev/null
+    else
+        curl -fsS "$url" >/dev/null
+    fi
 
     echo "SearXNG JSON API OK"
 
