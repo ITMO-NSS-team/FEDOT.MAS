@@ -55,27 +55,99 @@ bifrost-stop:
 searxng-install:
     #!/usr/bin/env bash
     set -euo pipefail
+
     dir="{{ searxng_dir }}"
     dir="${dir/#\~/$HOME}"
 
-    if [ -d "$dir" ] && [ -f "$dir/docker-compose.yml" ]; then
-        echo "SearXNG already installed at $dir"
-        exit 0
+    mkdir -p "$dir"
+
+    # Stop an older compose project before rewriting docker-compose.yml.
+    if [ -f "$dir/docker-compose.yml" ]; then
+        docker compose -f "$dir/docker-compose.yml" down --remove-orphans 2>/dev/null || true
     fi
 
-    mkdir -p "$dir"
-    cd "$dir"
+    # Remove old named containers from previous broken/manual installs.
+    docker rm -f searxng-core searxng-valkey searxng 2>/dev/null || true
 
-    curl -fsSLO https://raw.githubusercontent.com/searxng/searxng/master/container/docker-compose.yml
-    curl -fsSLO https://raw.githubusercontent.com/searxng/searxng/master/container/.env.example
+    # Fix ownership problems caused by previous sudo/docker writes.
+    if [ -d "$dir" ]; then
+        if ! touch "$dir/.fedotmas-write-test" 2>/dev/null; then
+            echo "Fixing ownership for $dir"
+            sudo chown -R "$USER:$USER" "$dir"
+        else
+            rm -f "$dir/.fedotmas-write-test"
+        fi
+    fi
 
-    cp -f .env.example .env
+    mkdir -p "$dir/core-config"
 
-    sed -i.bak "s|^SEARXNG_HOSTNAME=.*|SEARXNG_HOSTNAME=localhost:{{ searxng_port }}|" .env 
-    sed -i.bak "s|8080:8080|{{ searxng_port }}:8080|g" docker-compose.yml 
-    sed -i.bak "s|127.0.0.1:8080:8080|127.0.0.1:{{ searxng_port }}:8080|g" docker-compose.yml 
+    secret_file="$dir/.searxng_secret"
+    if [ ! -f "$secret_file" ]; then
+        if command -v openssl >/dev/null 2>&1; then
+            openssl rand -hex 32 > "$secret_file"
+        else
+            python3 - <<'PY' > "$secret_file"
+import secrets
+print(secrets.token_hex(32))
+PY
+        fi
+    fi
 
-    echo "SearXNG installed at $dir — run: just searxng-start"
+    secret="$(cat "$secret_file")"
+
+    cat > "$dir/core-config/settings.yml" <<EOF
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "FEDOT.MAS SearXNG"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "$secret"
+  limiter: false
+  image_proxy: false
+  method: "GET"
+
+engines:
+  - name: wikidata
+    disabled: true
+  - name: ahmia
+    disabled: true
+  - name: torch
+    disabled: true
+EOF
+
+    # If a broken limiter.toml exists from previous attempts, remove it.
+    # Limiter is disabled through server.limiter=false in settings.yml.
+    rm -f "$dir/core-config/limiter.toml"
+
+    cat > "$dir/docker-compose.yml" <<EOF
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng-core
+    restart: unless-stopped
+    ports:
+      - "{{ searxng_host }}:{{ searxng_port }}:8080"
+    volumes:
+      - ./core-config:/etc/searxng
+      - core-data:/var/cache/searxng
+    environment:
+      - SEARXNG_SECRET=$secret
+
+volumes:
+  core-data:
+EOF
+
+    echo "SearXNG installed at $dir"
+    echo "JSON API will be available at: http://localhost:{{ searxng_port }}/search?q=test&format=json"
 
 searxng-start:
     #!/usr/bin/env bash
@@ -84,32 +156,113 @@ searxng-start:
     dir="{{ searxng_dir }}"
     dir="${dir/#\~/$HOME}"
 
-    cd "$dir"
-
-    if [ ! -f docker-compose.yml ]; then
-        echo "ERROR: docker-compose.yml not found in $dir"
-        echo "Run: just searxng-install"
-        exit 1
+    if [ ! -f "$dir/docker-compose.yml" ] || [ ! -f "$dir/core-config/settings.yml" ]; then
+        just searxng-install
     fi
 
-    docker compose -f docker-compose.yml up -d
+    cd "$dir"
+
+    docker compose up -d --force-recreate
+
     echo "SearXNG running at http://localhost:{{ searxng_port }}"
+    echo "Checking JSON API..."
+
+    for i in $(seq 1 30); do
+        if curl -fsS "http://localhost:{{ searxng_port }}/search?q=test&format=json" | python3 -m json.tool >/dev/null 2>&1; then
+            echo "SearXNG JSON API OK"
+            exit 0
+        fi
+        sleep 1
+    done
+
+    echo "ERROR: SearXNG started, but JSON API check failed."
+    echo ""
+    echo "Recent logs:"
+    docker compose logs --tail 160 searxng || docker logs searxng-core --tail 160
+    exit 1
+
+searxng-restart:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    just searxng-stop
+    just searxng-start
+
+searxng-reinstall:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    dir="{{ searxng_dir }}"
+    dir="${dir/#\~/$HOME}"
+
+    if [ -d "$dir" ] && [ -f "$dir/docker-compose.yml" ]; then
+        docker compose -f "$dir/docker-compose.yml" down --remove-orphans 2>/dev/null || true
+    fi
+
+    docker rm -f searxng-core searxng-valkey searxng 2>/dev/null || true
+
+    rm -rf "$dir"
+
+    just searxng-install
+    just searxng-start
 
 searxng-stop:
     #!/usr/bin/env bash
     set -euo pipefail
+
     dir="{{ searxng_dir }}"
     dir="${dir/#\~/$HOME}"
+
+    if [ ! -d "$dir" ] || [ ! -f "$dir/docker-compose.yml" ]; then
+        docker rm -f searxng-core searxng-valkey searxng 2>/dev/null || true
+        echo "SearXNG is not installed at $dir"
+        exit 0
+    fi
+
     cd "$dir"
-    docker compose down
+    docker compose down --remove-orphans
 
 searxng-status:
     #!/usr/bin/env bash
     set -euo pipefail
+
     dir="{{ searxng_dir }}"
     dir="${dir/#\~/$HOME}"
+
+    if [ ! -f "$dir/docker-compose.yml" ]; then
+        echo "SearXNG is not installed at $dir"
+        exit 1
+    fi
+
     cd "$dir"
     docker compose ps
+
+searxng-logs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    dir="{{ searxng_dir }}"
+    dir="${dir/#\~/$HOME}"
+
+    if [ -f "$dir/docker-compose.yml" ]; then
+        cd "$dir"
+        docker compose logs -f --tail 200 searxng
+    else
+        docker logs -f --tail 200 searxng-core
+    fi
+
+searxng-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    url="http://localhost:{{ searxng_port }}/search?q=test&format=json"
+
+    echo "Checking $url"
+
+    response="$(curl -fsS "$url")"
+    echo "$response" | python3 -m json.tool >/dev/null
+
+    echo "SearXNG JSON API OK"
 
 # Lightpanda browser (actually a scraper)
 
