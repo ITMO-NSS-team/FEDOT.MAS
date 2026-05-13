@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from fedotmas import MAW
 from fedotmas.common.logging import get_logger
-from fedotmas.plugins import LangfusePlugin, LoggingPlugin
+from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
 
 from examples.gaia.data import GaiaBenchmark
 
@@ -93,7 +93,12 @@ def _gaia_mcp_servers() -> list[str] | str:
 
 
 def build_plugins(task, enable_langfuse: bool) -> list:
-    plugins = [LoggingPlugin()]
+    plugins = [
+        LoggingPlugin(),
+        WebSearchLimitPlugin(
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 4)
+        ),
+    ]
     if enable_langfuse:
         plugins.append(
             LangfusePlugin(
@@ -260,7 +265,7 @@ async def process_task(
         mcp_servers=_gaia_mcp_servers(),
         plugins=build_plugins(task, enable_langfuse),
         max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
-        two_stage=False
+        two_stage=False,
     )
     state = await maw.run(query)
 

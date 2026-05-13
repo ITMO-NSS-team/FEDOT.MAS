@@ -15,7 +15,7 @@ from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.core.runner import PipelineResult, run_pipeline
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
 from fedotmas.meta._result import MetaAgentResult
-from fedotmas.plugins import LoggingPlugin
+from fedotmas.plugins import LoggingPlugin, WebSearchLimitPlugin
 
 _log = get_logger("fedotmas.core.base")
 
@@ -51,6 +51,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
         memory_service: BaseMemoryService | None = None,
         plugins: list[BasePlugin] | None = None,
         max_retries: int = 3,
+        web_search_limit: int | None = 4,
     ) -> None:
         setup_logging()
         self._meta_model = meta_model
@@ -63,6 +64,10 @@ class BaseMAS(ABC, Generic[ConfigT]):
             self._plugins: list[BasePlugin] = list(plugins)
         else:
             self._plugins = [LoggingPlugin()]
+            if web_search_limit is not None:
+                self._plugins.append(
+                    WebSearchLimitPlugin(max_calls_per_agent=web_search_limit)
+                )
         self._max_retries = max_retries
         self._last_result: PipelineResult | None = None
         self._last_meta_result: MetaAgentResult | None = None
