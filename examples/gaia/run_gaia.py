@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential
 from tqdm import tqdm
 
-from fedotmas import MAW
+from fedotmas import MAW, ModelConfig
 from fedotmas.common.logging import get_logger
 from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
 
@@ -22,6 +22,8 @@ load_dotenv()
 RUN_ID = uuid.uuid4()
 _log = get_logger("fedotmas.examples.gaia")
 DEFAULT_GAIA_MCP_SERVERS = ["websearch-searxng", "web-scraping", "sandbox-light"]
+DEFAULT_GAIA_WORKER_MODEL = "openai/gpt-5-mini"
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 def extract_solution(text: str) -> str:
@@ -90,6 +92,18 @@ def _gaia_mcp_servers() -> list[str] | str:
     if value.strip().lower() == "all":
         return "all"
     return [name.strip() for name in value.split(",") if name.strip()]
+
+
+def _gaia_worker_model() -> ModelConfig:
+    return ModelConfig(
+        model=os.getenv("FEDOTMAS_GAIA_WORKER_MODEL", DEFAULT_GAIA_WORKER_MODEL),
+        api_base=os.getenv(
+            "FEDOTMAS_GAIA_WORKER_BASE_URL", DEFAULT_OPENROUTER_BASE_URL
+        ),
+        api_key=os.getenv("FEDOTMAS_GAIA_WORKER_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY")
+        or os.getenv("OPENAI_API_KEY"),
+    )
 
 
 def build_plugins(task, enable_langfuse: bool) -> list:
@@ -263,6 +277,7 @@ async def process_task(
 
     maw = MAW(
         mcp_servers=_gaia_mcp_servers(),
+        worker_models=[_gaia_worker_model()],
         plugins=build_plugins(task, enable_langfuse),
         max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
         two_stage=False,
