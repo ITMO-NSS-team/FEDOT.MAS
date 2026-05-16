@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEFAULT_META_MODEL = "qwen/qwen3.6-finetuned"
-DEFAULT_WORKER_MODELS: list[str] = ["qwen/qwen3.6-finetuned"]
+DEFAULT_WORKER_MODELS: list[str] = ["openai/gpt-5-mini"]
 DEFAULT_META_TEMPERATURE = 0.3
 DEFAULT_MAX_LOOP_ITERATIONS = 3
 
