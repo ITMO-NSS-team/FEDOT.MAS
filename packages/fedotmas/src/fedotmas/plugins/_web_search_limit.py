@@ -41,11 +41,14 @@ class WebSearchLimitPlugin(BasePlugin):
         *,
         max_calls_per_agent: int = 4,
         tool_names: set[str] | None = None,
+        hard_fail: bool = False,
+        name: str = "fedotmas_web_search_limit",
     ) -> None:
         if max_calls_per_agent < 1:
             raise ValueError("max_calls_per_agent must be >= 1")
-        super().__init__(name="fedotmas_web_search_limit")
+        super().__init__(name=name)
         self.max_calls_per_agent = max_calls_per_agent
+        self.hard_fail = hard_fail
         self._tool_names = {
             name.lower() for name in (tool_names or DEFAULT_WEB_SEARCH_TOOL_NAMES)
         }
@@ -80,6 +83,8 @@ class WebSearchLimitPlugin(BasePlugin):
                 f"'{agent_name}': max {self.max_calls_per_agent} calls per run."
             )
             _log.warning(message)
+            if self.hard_fail:
+                raise WebSearchLimitExceeded(message)
             return {"isError": True, "error": message}
 
         self._counts[key] = used + 1
@@ -100,3 +105,7 @@ class WebSearchLimitPlugin(BasePlugin):
                 return any(hint in description for hint in WEB_SEARCH_HINTS)
             return True
         return False
+
+
+class WebSearchLimitExceeded(RuntimeError):
+    """Raised when a hard web-search/tool budget is exhausted."""

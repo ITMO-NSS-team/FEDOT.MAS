@@ -3,9 +3,13 @@ import asyncio
 import json
 import os
 import re
+import socket
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urljoin
+from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -13,7 +17,12 @@ from tqdm import tqdm
 
 from fedotmas import MAW, ModelConfig
 from fedotmas.common.logging import get_logger
-from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
+from fedotmas.plugins import (
+    LangfusePlugin,
+    LoggingPlugin,
+    ToolErrorCircuitBreakerPlugin,
+    WebSearchLimitPlugin,
+)
 
 from examples.gaia.data import GaiaBenchmark
 
@@ -24,6 +33,15 @@ _log = get_logger("fedotmas.examples.gaia")
 DEFAULT_GAIA_MCP_SERVERS = ["websearch-searxng", "web-scraping", "sandbox-light"]
 DEFAULT_GAIA_WORKER_MODEL = "openai/gpt-5-mini"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+GAIA_WEB_SCRAPING_TOOL_NAMES = {
+    "goto",
+    "markdown",
+    "links",
+    "extract",
+    "evaluate",
+    "screenshot",
+    "status",
+}
 
 
 def extract_solution(text: str) -> str:
@@ -106,11 +124,75 @@ def _gaia_worker_model() -> ModelConfig:
     )
 
 
+def _models_url(base_url: str) -> str:
+    return urljoin(base_url.rstrip("/") + "/", "models")
+
+
+def _check_models_endpoint(model: ModelConfig, *, timeout: float) -> None:
+    if not model.api_base:
+        return
+
+    request = Request(_models_url(model.api_base))
+    if model.api_key:
+        request.add_header("Authorization", f"Bearer {model.api_key}")
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            if response.status >= 400:
+                raise RuntimeError(
+                    f"Model endpoint healthcheck failed: HTTP {response.status} "
+                    f"from {_models_url(model.api_base)}"
+                )
+    except HTTPError as exc:
+        raise RuntimeError(
+            f"Model endpoint healthcheck failed: HTTP {exc.code} from "
+            f"{_models_url(model.api_base)}"
+        ) from exc
+    except (TimeoutError, URLError, socket.gaierror, OSError) as exc:
+        raise RuntimeError(
+            f"Model endpoint healthcheck failed for {_models_url(model.api_base)}: "
+            f"{exc}"
+        ) from exc
+
+
+async def preflight_model_endpoint(model: ModelConfig) -> None:
+    if not _env_flag("FEDOTMAS_GAIA_PREFLIGHT_MODELS", True):
+        return
+
+    attempts = _env_int("FEDOTMAS_GAIA_PREFLIGHT_ATTEMPTS", 3)
+    timeout = float(_env_int("FEDOTMAS_GAIA_PREFLIGHT_TIMEOUT", 10))
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            await asyncio.to_thread(_check_models_endpoint, model, timeout=timeout)
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt < attempts:
+                await asyncio.sleep(min(2**attempt, 10))
+
+    assert last_error is not None
+    raise last_error
+
+
 def build_plugins(task, enable_langfuse: bool) -> list:
     plugins = [
         LoggingPlugin(),
         WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 4)
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 4),
+            hard_fail=True,
+        ),
+        WebSearchLimitPlugin(
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 12),
+            tool_names=GAIA_WEB_SCRAPING_TOOL_NAMES,
+            hard_fail=True,
+            name="fedotmas_gaia_web_tool_limit",
+        ),
+        ToolErrorCircuitBreakerPlugin(
+            max_errors_per_agent=_env_int("FEDOTMAS_GAIA_MAX_TOOL_ERRORS", 10),
+            max_same_tool_error_type=_env_int(
+                "FEDOTMAS_GAIA_MAX_SAME_TOOL_ERROR_TYPE", 3
+            ),
         ),
     ]
     if enable_langfuse:
@@ -275,14 +357,20 @@ async def process_task(
         query += f"File name: {task.file_name}\n"
     query += f"Question: {task.question}"
 
+    worker_model = _gaia_worker_model()
+    await preflight_model_endpoint(worker_model)
+
     maw = MAW(
         mcp_servers=_gaia_mcp_servers(),
-        worker_models=[_gaia_worker_model()],
+        worker_models=[worker_model],
         plugins=build_plugins(task, enable_langfuse),
         max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
         two_stage=False,
     )
-    state = await maw.run(query)
+    state = await asyncio.wait_for(
+        maw.run(query),
+        timeout=_env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 300),
+    )
 
     answer = extract_answer_from_state(state)
     if not answer:

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from fedotmas.maw.maw import MAW
-from fedotmas.plugins import WebSearchLimitPlugin
+from fedotmas.plugins import WebSearchLimitExceeded, WebSearchLimitPlugin
 
 
 def _tool(name: str, description: str = "") -> MagicMock:
@@ -50,6 +50,21 @@ class TestWebSearchLimitPlugin:
         assert third is not None
         assert third["isError"] is True
         assert "max 2 calls" in third["error"]
+
+    @pytest.mark.asyncio
+    async def test_hard_fail_raises_when_limit_exceeded(self):
+        plugin = WebSearchLimitPlugin(max_calls_per_agent=1, hard_fail=True)
+        tool = _tool("search", "Search the web")
+        ctx = _tool_context()
+
+        await plugin.before_tool_callback(
+            tool=tool, tool_args={"query": "a"}, tool_context=ctx
+        )
+
+        with pytest.raises(WebSearchLimitExceeded, match="max 1 calls"):
+            await plugin.before_tool_callback(
+                tool=tool, tool_args={"query": "b"}, tool_context=ctx
+            )
 
     @pytest.mark.asyncio
     async def test_counts_are_per_agent(self):
