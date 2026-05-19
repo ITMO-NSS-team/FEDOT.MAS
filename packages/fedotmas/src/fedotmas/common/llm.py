@@ -36,8 +36,9 @@ class _ProxyClient:
     pass through as-is to the proxy.
     """
 
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(self, base_url: str, api_key: str, extra_body: dict[str, Any] | None):
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        self._extra_body = dict(extra_body or {})
 
     def __repr__(self) -> str:
         return f"_ProxyClient(base_url={self._client.base_url!r})"
@@ -48,6 +49,11 @@ class _ProxyClient:
             kw["tools"] = tools
         kw.pop("api_base", None)
         kw.pop("api_key", None)
+        if self._extra_body:
+            kw["extra_body"] = {
+                **self._extra_body,
+                **kw.get("extra_body", {}),
+            }
         stream = kw.get("stream", False)
         resp = await self._client.chat.completions.create(**kw)
         if stream:
@@ -66,10 +72,13 @@ def make_llm(cfg: ModelConfig) -> BaseLlm:
         llm.llm_client = _ProxyClient(  # type: ignore
             base_url=cfg.api_base,
             api_key=cfg.api_key or "no-key",
+            extra_body=cfg.extra_body,
         )
         return llm
 
     kwargs: dict[str, Any] = {}
     if cfg.api_key:
         kwargs["api_key"] = cfg.api_key
+    if cfg.extra_body:
+        kwargs["extra_body"] = cfg.extra_body
     return LiteLlm(model=cfg.model, **kwargs)

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import socket
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -12,10 +13,16 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 from tqdm import tqdm
 
 from fedotmas import MAW, ModelConfig
+from fedotmas._settings import get_meta_model
 from fedotmas.common.logging import get_logger
 from fedotmas.plugins import (
     LangfusePlugin,
@@ -42,6 +49,39 @@ GAIA_WEB_SCRAPING_TOOL_NAMES = {
     "screenshot",
     "status",
 }
+PROVIDER_ERROR_PATTERNS = (
+    "Provider returned error",
+    "provider_name",
+    "temporarily blocked",
+)
+
+
+class ProviderErrorCooldown(RuntimeError):
+    """Raised when the model provider asks us to back off."""
+
+
+class ProviderCooldown:
+    def __init__(self, seconds: int) -> None:
+        self._seconds = max(0, seconds)
+        self._until = 0.0
+        self._reason = ""
+
+    def activate(self, reason: str) -> None:
+        if self._seconds <= 0:
+            return
+        self._until = max(self._until, time.monotonic() + self._seconds)
+        self._reason = reason
+
+    async def wait_if_active(self) -> None:
+        remaining = self._until - time.monotonic()
+        if remaining <= 0:
+            return
+        _log.warning(
+            "Provider cooldown active for {:.0f}s after provider error: {}",
+            remaining,
+            self._reason[:300],
+        )
+        await asyncio.sleep(remaining)
 
 
 def extract_solution(text: str) -> str:
@@ -103,6 +143,14 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_list(name: str) -> list[str] | None:
+    value = os.getenv(name)
+    if not value:
+        return None
+    values = [item.strip() for item in value.split(",") if item.strip()]
+    return values or None
+
+
 def _gaia_mcp_servers() -> list[str] | str:
     value = os.getenv("FEDOTMAS_GAIA_MCP_SERVERS")
     if value is None:
@@ -110,6 +158,57 @@ def _gaia_mcp_servers() -> list[str] | str:
     if value.strip().lower() == "all":
         return "all"
     return [name.strip() for name in value.split(",") if name.strip()]
+
+
+def _gaia_provider_extra_body() -> dict[str, Any] | None:
+    provider: dict[str, Any] = {}
+    for field in ("order", "only", "ignore", "quantizations"):
+        values = _env_list(f"FEDOTMAS_GAIA_PROVIDER_{field.upper()}")
+        if values:
+            provider[field] = values
+    for field in (
+        "allow_fallbacks",
+        "require_parameters",
+        "zdr",
+        "enforce_distillable_text",
+    ):
+        name = f"FEDOTMAS_GAIA_PROVIDER_{field.upper()}"
+        if os.getenv(name) is not None:
+            provider[field] = _env_flag(name, False)
+    sort_by = os.getenv("FEDOTMAS_GAIA_PROVIDER_SORT_BY")
+    sort_partition = os.getenv("FEDOTMAS_GAIA_PROVIDER_SORT_PARTITION")
+    if sort_by or sort_partition:
+        sort: dict[str, str] = {}
+        if sort_by:
+            sort["by"] = sort_by
+        if sort_partition:
+            sort["partition"] = sort_partition
+        provider["sort"] = sort
+    else:
+        value = os.getenv("FEDOTMAS_GAIA_PROVIDER_SORT")
+        if value:
+            provider["sort"] = value
+
+    for field in ("data_collection",):
+        value = os.getenv(f"FEDOTMAS_GAIA_PROVIDER_{field.upper()}")
+        if value:
+            provider[field] = value
+
+    if not provider:
+        return None
+    return {"provider": provider}
+
+
+def _gaia_meta_model() -> ModelConfig:
+    return ModelConfig(
+        model=os.getenv("FEDOTMAS_GAIA_META_MODEL", get_meta_model()),
+        api_base=os.getenv("FEDOTMAS_GAIA_META_BASE_URL")
+        or os.getenv("OPENAI_BASE_URL"),
+        api_key=os.getenv("FEDOTMAS_GAIA_META_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY")
+        or os.getenv("OPENAI_API_KEY"),
+        extra_body=_gaia_provider_extra_body(),
+    )
 
 
 def _gaia_worker_model() -> ModelConfig:
@@ -121,7 +220,13 @@ def _gaia_worker_model() -> ModelConfig:
         api_key=os.getenv("FEDOTMAS_GAIA_WORKER_API_KEY")
         or os.getenv("OPENROUTER_API_KEY")
         or os.getenv("OPENAI_API_KEY"),
+        extra_body=_gaia_provider_extra_body(),
     )
+
+
+def _is_provider_error(error: BaseException) -> bool:
+    text = str(error).lower()
+    return any(pattern.lower() in text for pattern in PROVIDER_ERROR_PATTERNS)
 
 
 def _models_url(base_url: str) -> str:
@@ -336,6 +441,7 @@ def print_token_summary(token_summary: dict) -> None:
 @retry(
     stop=stop_after_attempt(_env_int("FEDOTMAS_GAIA_TASK_ATTEMPTS", 1)),
     wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_not_exception_type(ProviderErrorCooldown),
 )
 async def process_task(
     task,
@@ -357,20 +463,27 @@ async def process_task(
         query += f"File name: {task.file_name}\n"
     query += f"Question: {task.question}"
 
+    meta_model = _gaia_meta_model()
     worker_model = _gaia_worker_model()
     await preflight_model_endpoint(worker_model)
 
     maw = MAW(
+        meta_model=meta_model,
         mcp_servers=_gaia_mcp_servers(),
         worker_models=[worker_model],
         plugins=build_plugins(task, enable_langfuse),
         max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
         two_stage=False,
     )
-    state = await asyncio.wait_for(
-        maw.run(query),
-        timeout=_env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 300),
-    )
+    try:
+        state = await asyncio.wait_for(
+            maw.run(query),
+            timeout=_env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 300),
+        )
+    except Exception as exc:
+        if _is_provider_error(exc):
+            raise ProviderErrorCooldown(str(exc)) from exc
+        raise
 
     answer = extract_answer_from_state(state)
     if not answer:
@@ -426,8 +539,12 @@ async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any
     gaia.download()
 
     results = []
+    provider_cooldown = ProviderCooldown(
+        _env_int("FEDOTMAS_GAIA_PROVIDER_ERROR_COOLDOWN_SECONDS", 300)
+    )
 
     for task in tqdm(gaia, desc="Processing GAIA tasks"):
+        await provider_cooldown.wait_if_active()
         task_log_dir = base_log_dir / f"task_{task.task_id}"
         try:
             result = await process_task(
@@ -445,6 +562,8 @@ async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any
                 task.ground_truth,
             )
         except Exception as e:
+            if isinstance(e, ProviderErrorCooldown) or _is_provider_error(e):
+                provider_cooldown.activate(str(e))
             _log.error("Failed task {} after all retries: {}", task.task_id, e)
             result = {
                 "task_id": task.task_id,
