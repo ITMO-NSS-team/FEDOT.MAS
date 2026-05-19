@@ -1,4 +1,5 @@
 from examples.gaia.run_gaia import (
+    DEFAULT_GAIA_MCP_SERVERS,
     ProviderErrorCooldown,
     _gaia_provider_extra_body,
     _is_provider_error,
@@ -23,6 +24,11 @@ def test_extract_answer_uses_last_non_query_solution():
     }
 
     assert extract_answer_from_state(state) == "right"
+
+
+def test_gaia_default_servers_include_file_tools():
+    assert "document" in DEFAULT_GAIA_MCP_SERVERS
+    assert "media" in DEFAULT_GAIA_MCP_SERVERS
 
 
 def test_gaia_provider_extra_body_from_env(monkeypatch):

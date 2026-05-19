@@ -28,6 +28,7 @@ from fedotmas.plugins import (
     LangfusePlugin,
     LoggingPlugin,
     ToolErrorCircuitBreakerPlugin,
+    ToolResultTruncationPlugin,
     WebSearchLimitPlugin,
 )
 
@@ -37,7 +38,13 @@ load_dotenv()
 
 RUN_ID = uuid.uuid4()
 _log = get_logger("fedotmas.examples.gaia")
-DEFAULT_GAIA_MCP_SERVERS = ["websearch-searxng", "web-scraping", "sandbox-light"]
+DEFAULT_GAIA_MCP_SERVERS = [
+    "websearch-searxng",
+    "web-scraping",
+    "sandbox-light",
+    "document",
+    "media",
+]
 DEFAULT_GAIA_WORKER_MODEL = "openai/gpt-5-mini"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GAIA_WEB_SCRAPING_TOOL_NAMES = {
@@ -283,20 +290,23 @@ async def preflight_model_endpoint(model: ModelConfig) -> None:
 def build_plugins(task, enable_langfuse: bool) -> list:
     plugins = [
         LoggingPlugin(),
+        ToolResultTruncationPlugin(
+            max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 50000),
+        ),
         WebSearchLimitPlugin(
             max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 4),
             hard_fail=True,
         ),
         WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 12),
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 8),
             tool_names=GAIA_WEB_SCRAPING_TOOL_NAMES,
             hard_fail=True,
             name="fedotmas_gaia_web_tool_limit",
         ),
         ToolErrorCircuitBreakerPlugin(
-            max_errors_per_agent=_env_int("FEDOTMAS_GAIA_MAX_TOOL_ERRORS", 10),
+            max_errors_per_agent=_env_int("FEDOTMAS_GAIA_MAX_TOOL_ERRORS", 6),
             max_same_tool_error_type=_env_int(
-                "FEDOTMAS_GAIA_MAX_SAME_TOOL_ERROR_TYPE", 3
+                "FEDOTMAS_GAIA_MAX_SAME_TOOL_ERROR_TYPE", 2
             ),
         ),
     ]
@@ -458,6 +468,11 @@ async def process_task(
 
     query = instruction
     if task.file_path:
+        query += (
+            "Use available document, media, or sandbox tools to inspect the local file "
+            "directly. Do not claim you cannot access it before trying an appropriate "
+            "tool.\n"
+        )
         query += f"File path: {task.file_path}\n"
     if task.file_name:
         query += f"File name: {task.file_name}\n"

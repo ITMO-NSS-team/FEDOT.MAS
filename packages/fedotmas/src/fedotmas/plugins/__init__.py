@@ -6,6 +6,7 @@ from fedotmas.plugins._tool_error_circuit_breaker import (
     ToolErrorCircuitBreakerPlugin,
     ToolErrorCircuitOpen,
 )
+from fedotmas.plugins._tool_result_truncation import ToolResultTruncationPlugin
 from fedotmas.plugins._web_search_limit import (
     WebSearchLimitExceeded,
     WebSearchLimitPlugin,
@@ -21,6 +22,7 @@ __all__ = [
     "SkipCompletedPlugin",
     "ToolErrorCircuitBreakerPlugin",
     "ToolErrorCircuitOpen",
+    "ToolResultTruncationPlugin",
     "WebSearchLimitPlugin",
     "WebSearchLimitExceeded",
 ]
