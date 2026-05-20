@@ -1,3 +1,4 @@
+from fedotmas.plugins._browser_fallback_policy import BrowserFallbackPolicyPlugin
 from fedotmas.plugins._checkpoint import Checkpoint, CheckpointPlugin
 from fedotmas.plugins._eval import CheckFn, EvalPlugin, EvaluationError
 from fedotmas.plugins._logging import LoggingPlugin
@@ -14,6 +15,7 @@ from fedotmas.plugins._web_search_limit import (
 
 __all__ = [
     "CheckFn",
+    "BrowserFallbackPolicyPlugin",
     "Checkpoint",
     "CheckpointPlugin",
     "EvalPlugin",

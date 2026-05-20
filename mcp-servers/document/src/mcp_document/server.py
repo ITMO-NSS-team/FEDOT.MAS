@@ -25,7 +25,7 @@ def _md_with_vision() -> MarkItDown:
         base_url=os.getenv("OPENAI_BASE_URL"),
         api_key=os.getenv("OPENAI_API_KEY"),
     )
-    model = os.getenv("DOCUMENT_VISION_MODEL", "google/gemini-2.5-flash")
+    model = os.getenv("DOCUMENT_VISION_MODEL", "google/gemini-3-flash-preview")
     return MarkItDown(llm_client=client, llm_model=model)
 
 

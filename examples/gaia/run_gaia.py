@@ -6,6 +6,7 @@ import re
 import socket
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -14,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
 from tenacity import (
+    RetryError,
     retry,
     retry_if_not_exception_type,
     stop_after_attempt,
@@ -25,11 +27,14 @@ from fedotmas import MAW, ModelConfig
 from fedotmas._settings import get_meta_model
 from fedotmas.common.logging import get_logger
 from fedotmas.plugins import (
+    BrowserFallbackPolicyPlugin,
     LangfusePlugin,
     LoggingPlugin,
     ToolErrorCircuitBreakerPlugin,
+    ToolErrorCircuitOpen,
     ToolResultTruncationPlugin,
     WebSearchLimitPlugin,
+    WebSearchLimitExceeded,
 )
 
 from examples.gaia.data import GaiaBenchmark
@@ -46,6 +51,8 @@ DEFAULT_GAIA_MCP_SERVERS = [
     "media",
 ]
 DEFAULT_GAIA_WORKER_MODEL = "openai/gpt-5-mini"
+DEFAULT_MEDIA_MODEL = "openai/gpt-5-mini"
+DEFAULT_DOCUMENT_VISION_MODEL = "openai/gpt-5-mini"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GAIA_WEB_SCRAPING_TOOL_NAMES = {
     "goto",
@@ -66,6 +73,24 @@ PROVIDER_ERROR_PATTERNS = (
 
 class ProviderErrorCooldown(RuntimeError):
     """Raised when the model provider asks us to back off."""
+
+
+@dataclass(frozen=True)
+class RootCause:
+    root_cause: str
+    last_exception: str
+    message: str
+    wrapper_exception: str | None = None
+
+    def as_dict(self) -> dict[str, str]:
+        data = {
+            "root_cause": self.root_cause,
+            "last_exception": self.last_exception,
+            "message": self.message,
+        }
+        if self.wrapper_exception:
+            data["wrapper_exception"] = self.wrapper_exception
+        return data
 
 
 class ProviderCooldown:
@@ -232,9 +257,117 @@ def _gaia_worker_model() -> ModelConfig:
     )
 
 
+def _media_document_model_configs() -> list[tuple[str, ModelConfig]]:
+    api_base = os.getenv("OPENAI_BASE_URL")
+    api_key = os.getenv("OPENAI_API_KEY")
+    media_default = os.getenv("MEDIA_MODEL", DEFAULT_MEDIA_MODEL)
+    return [
+        (
+            "MEDIA_MODEL",
+            ModelConfig(model=media_default, api_base=api_base, api_key=api_key),
+        ),
+        (
+            "MEDIA_AUDIO_MODEL",
+            ModelConfig(
+                model=os.getenv("MEDIA_AUDIO_MODEL", media_default),
+                api_base=api_base,
+                api_key=api_key,
+            ),
+        ),
+        (
+            "MEDIA_IMAGE_MODEL",
+            ModelConfig(
+                model=os.getenv("MEDIA_IMAGE_MODEL", media_default),
+                api_base=api_base,
+                api_key=api_key,
+            ),
+        ),
+        (
+            "MEDIA_VIDEO_MODEL",
+            ModelConfig(
+                model=os.getenv("MEDIA_VIDEO_MODEL", media_default),
+                api_base=api_base,
+                api_key=api_key,
+            ),
+        ),
+        (
+            "DOCUMENT_VISION_MODEL",
+            ModelConfig(
+                model=os.getenv("DOCUMENT_VISION_MODEL", DEFAULT_DOCUMENT_VISION_MODEL),
+                api_base=api_base,
+                api_key=api_key,
+            ),
+        ),
+    ]
+
+
 def _is_provider_error(error: BaseException) -> bool:
     text = str(error).lower()
     return any(pattern.lower() in text for pattern in PROVIDER_ERROR_PATTERNS)
+
+
+def root_cause_summary(error: BaseException) -> dict[str, str]:
+    return _root_cause(error).as_dict()
+
+
+def _root_cause(error: BaseException) -> RootCause:
+    wrapper = type(error).__name__
+    leaf = _unwrap_exception(error)
+    leaf_type = type(leaf).__name__
+    return RootCause(
+        root_cause=_classify_exception(leaf),
+        last_exception=leaf_type,
+        message=str(leaf),
+        wrapper_exception=wrapper if wrapper != leaf_type else None,
+    )
+
+
+def _unwrap_exception(error: BaseException) -> BaseException:
+    if isinstance(error, RetryError):
+        try:
+            retry_exception = error.last_attempt.exception()
+        except Exception:
+            retry_exception = None
+        if isinstance(retry_exception, BaseException):
+            return _unwrap_exception(retry_exception)
+
+    if isinstance(error, BaseExceptionGroup) and error.exceptions:
+        return _unwrap_exception(error.exceptions[-1])
+
+    cause = error.__cause__ or error.__context__
+    if cause is not None and type(error).__name__ in {
+        "RuntimeError",
+        "Exception",
+        "ProviderErrorCooldown",
+    }:
+        return _unwrap_exception(cause)
+
+    return error
+
+
+def _classify_exception(error: BaseException) -> str:
+    text = str(error).lower()
+    if isinstance(error, WebSearchLimitExceeded) or "web search limit exceeded" in text:
+        return "resource_limit.web_search"
+    if isinstance(error, ToolErrorCircuitOpen) or "tool error circuit opened" in text:
+        return "tool_error_circuit.open"
+    if "model" in text and any(
+        marker in text for marker in ("does not exist", "notfounderror", "404")
+    ):
+        return "provider.model_not_found"
+    if _is_provider_error(error):
+        return "provider.error"
+    if "jsonrpcmessage" in text or "model_validate_json" in text:
+        return "mcp.jsonrpc_pollution"
+    if "tool result truncated" in text:
+        return "tool_result.truncated"
+    if "unsupportedprotocol" in text or "file://" in text:
+        return "browser.unsupported_protocol"
+    if "sslconnecterror" in text:
+        return "browser.ssl"
+    if "operationtimedout" in text or "timed out" in text:
+        return "timeout"
+    return f"exception.{type(error).__name__}"
 
 
 def _models_url(base_url: str) -> str:
@@ -256,6 +389,11 @@ def _check_models_endpoint(model: ModelConfig, *, timeout: float) -> None:
                     f"Model endpoint healthcheck failed: HTTP {response.status} "
                     f"from {_models_url(model.api_base)}"
                 )
+            _assert_model_list_contains(
+                response.read().decode("utf-8", errors="replace"),
+                model.model,
+                base_url=model.api_base,
+            )
     except HTTPError as exc:
         raise RuntimeError(
             f"Model endpoint healthcheck failed: HTTP {exc.code} from "
@@ -266,6 +404,42 @@ def _check_models_endpoint(model: ModelConfig, *, timeout: float) -> None:
             f"Model endpoint healthcheck failed for {_models_url(model.api_base)}: "
             f"{exc}"
         ) from exc
+
+
+def _assert_model_list_contains(payload: str, model_id: str, *, base_url: str) -> None:
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Model endpoint healthcheck failed: invalid JSON from {_models_url(base_url)}"
+        ) from exc
+
+    ids = _model_ids_from_response(data)
+    if ids and model_id not in ids:
+        raise RuntimeError(
+            f"Model endpoint healthcheck failed: model '{model_id}' was not found "
+            f"at {_models_url(base_url)}"
+        )
+
+
+def _model_ids_from_response(data: Any) -> set[str]:
+    if isinstance(data, dict):
+        items = data.get("data")
+        if isinstance(items, list):
+            return {
+                str(item["id"])
+                for item in items
+                if isinstance(item, dict) and item.get("id")
+            }
+        if data.get("id"):
+            return {str(data["id"])}
+    if isinstance(data, list):
+        return {
+            str(item["id"])
+            for item in data
+            if isinstance(item, dict) and item.get("id")
+        }
+    return set()
 
 
 async def preflight_model_endpoint(model: ModelConfig) -> None:
@@ -288,9 +462,31 @@ async def preflight_model_endpoint(model: ModelConfig) -> None:
     raise last_error
 
 
+async def preflight_startup_models() -> None:
+    if not _env_flag("FEDOTMAS_GAIA_PREFLIGHT_MODELS", True):
+        return
+
+    checked: set[tuple[str | None, str]] = set()
+    for name, model in [("FEDOTMAS_GAIA_WORKER_MODEL", _gaia_worker_model())] + [
+        item for item in _media_document_model_configs()
+    ]:
+        key = (model.api_base, model.model)
+        if key in checked:
+            continue
+        checked.add(key)
+        _log.info("Preflight model healthcheck | {}={}", name, model.model)
+        try:
+            await preflight_model_endpoint(model)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Startup model healthcheck failed for {name}={model.model}: {exc}"
+            ) from exc
+
+
 def build_plugins(task, enable_langfuse: bool) -> list:
     plugins = [
         LoggingPlugin(),
+        BrowserFallbackPolicyPlugin(),
         ToolResultTruncationPlugin(
             max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 12000),
         ),
@@ -484,7 +680,6 @@ async def process_task(
 
     meta_model = _gaia_meta_model()
     worker_model = _gaia_worker_model()
-    await preflight_model_endpoint(worker_model)
 
     maw = MAW(
         meta_model=meta_model,
@@ -553,6 +748,7 @@ async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any
 
     _log.info("Logs will be saved to: {}", base_log_dir)
     _log.info("Loading GAIA benchmark (difficulty={}, split={})", difficulty, split)
+    await preflight_startup_models()
 
     gaia = GaiaBenchmark({"difficulty": difficulty, "split": split})
     gaia.download()
@@ -581,9 +777,18 @@ async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any
                 task.ground_truth,
             )
         except Exception as e:
+            cause = root_cause_summary(e)
             if isinstance(e, ProviderErrorCooldown) or _is_provider_error(e):
                 provider_cooldown.activate(str(e))
-            _log.error("Failed task {} after all retries: {}", task.task_id, e)
+            _log.error(
+                "Failed task {} after all retries: {} | root_cause={} "
+                "last_exception={} wrapper_exception={}",
+                task.task_id,
+                e,
+                cause["root_cause"],
+                cause["last_exception"],
+                cause.get("wrapper_exception", ""),
+            )
             result = {
                 "task_id": task.task_id,
                 "question": task.question,
@@ -592,6 +797,7 @@ async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any
                 "difficulty": task.difficulty,
                 "is_correct": False,
                 "error": str(e),
+                **cause,
             }
             task_log_dir.mkdir(parents=True, exist_ok=True)
             with open(task_log_dir / "result.json", "w", encoding="utf-8") as f:
