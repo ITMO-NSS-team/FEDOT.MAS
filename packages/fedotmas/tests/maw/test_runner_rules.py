@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fedotmas.core.runner import PipelineResult, run_pipeline
+from fedotmas.core.runner import (
+    SEARCH_LIMIT_RECOVERY_PROMPT,
+    PipelineResult,
+    run_pipeline,
+)
+from fedotmas.plugins import WebSearchLimitExceeded
 
 from .conftest import FakeActions, FakeEvent, FakeSession, FakeUsageMetadata
 
@@ -227,3 +232,62 @@ class TestPluginsPassed:
         app = call_kwargs.kwargs.get("app")
         assert app is not None
         assert plugin in app.plugins
+
+
+class TestSearchLimitRecovery:
+    """Search-limit tool exceptions trigger final-answer synthesis."""
+
+    @pytest.mark.asyncio
+    async def test_web_search_limit_recovers_with_synthesis_prompt(
+        self, mock_session_service
+    ):
+        calls = []
+
+        async def failing_run_async(**kwargs):
+            calls.append(kwargs)
+            raise WebSearchLimitExceeded("limit hit")
+            yield  # pragma: no cover
+
+        async def recovery_run_async(**kwargs):
+            calls.append(kwargs)
+            yield FakeEvent(
+                usage_metadata=FakeUsageMetadata(
+                    prompt_token_count=7,
+                    candidates_token_count=3,
+                )
+            )
+
+        run_async_calls = [failing_run_async, recovery_run_async]
+
+        def run_async(**kwargs):
+            return run_async_calls.pop(0)(**kwargs)
+
+        runner_instance = MagicMock()
+        runner_instance.run_async = run_async
+
+        @asynccontextmanager
+        async def fake_runner_cm(*_args, **_kwargs):
+            yield runner_instance
+
+        class _FakeApp:
+            def __init__(self, *, name: str = "fedotmas", root_agent, plugins=None):
+                self.name = name
+                self.root_agent = root_agent
+                self.plugins = plugins or []
+
+        with (
+            patch("fedotmas.core.runner.App", _FakeApp),
+            patch("fedotmas.core.runner.Runner", side_effect=fake_runner_cm),
+        ):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        assert isinstance(result, PipelineResult)
+        assert result.total_prompt_tokens == 7
+        assert result.total_completion_tokens == 3
+        assert len(calls) == 2
+        recovery_text = calls[1]["new_message"].parts[0].text
+        assert recovery_text == SEARCH_LIMIT_RECOVERY_PROMPT

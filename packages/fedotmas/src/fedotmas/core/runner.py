@@ -14,8 +14,17 @@ from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
 from fedotmas.common.logging import get_logger
+from fedotmas.plugins import WebSearchLimitExceeded
 
 _log = get_logger("fedotmas.core.runner")
+
+SEARCH_LIMIT_RECOVERY_PROMPT = (
+    "SearchLimitExceeded: web/search exploration budget is exhausted. "
+    "Stop exploration immediately. Do not call any more web, browser, or search "
+    "tools. Synthesize the best possible final answer from the evidence already "
+    "available in the conversation and session state. If evidence is incomplete, "
+    "state the best supported answer concisely."
+)
 
 
 @dataclass
@@ -102,32 +111,34 @@ async def run_pipeline(
         session_service=session_service,
         memory_service=memory_service,
     ) as runner:
-        async for event in runner.run_async(
-            user_id=user_id,
-            session_id=session.id,
-            new_message=message,
-        ):
-            if event.partial:
-                continue
+        try:
+            total_prompt, total_completion = await _consume_runner_events(
+                runner=runner,
+                user_id=user_id,
+                session_id=session.id,
+                message=message,
+                total_prompt=total_prompt,
+                total_completion=total_completion,
+            )
+        except BaseException as exc:
+            if not _is_search_limit_exceeded(exc):
+                raise
 
-            # Token accumulation (business logic — stays in runner)
-            if event.usage_metadata:
-                um = event.usage_metadata
-                total_prompt += um.prompt_token_count or 0
-                total_completion += um.candidates_token_count or 0
-
-            # Error handling (control flow — stays in runner)
-            if event.error_code:
-                _log.error(
-                    "LLM error | agent={} code={} msg={}",
-                    event.author,
-                    event.error_code,
-                    event.error_message,
-                )
-                raise RuntimeError(
-                    f"Agent '{event.author}' failed with error {event.error_code}: "
-                    f"{event.error_message}"
-                )
+            _log.warning(
+                "Search limit exceeded; requesting final answer from current evidence"
+            )
+            recovery_message = types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=SEARCH_LIMIT_RECOVERY_PROMPT)],
+            )
+            total_prompt, total_completion = await _consume_runner_events(
+                runner=runner,
+                user_id=user_id,
+                session_id=session.id,
+                message=recovery_message,
+                total_prompt=total_prompt,
+                total_completion=total_completion,
+            )
 
     total_elapsed = time.monotonic() - pipeline_start
     _log.info(
@@ -153,3 +164,50 @@ async def run_pipeline(
         total_completion_tokens=total_completion,
         elapsed=total_elapsed,
     )
+
+
+async def _consume_runner_events(
+    *,
+    runner: Runner,
+    user_id: str,
+    session_id: str,
+    message: types.Content,
+    total_prompt: int,
+    total_completion: int,
+) -> tuple[int, int]:
+    async for event in runner.run_async(
+        user_id=user_id,
+        session_id=session_id,
+        new_message=message,
+    ):
+        if event.partial:
+            continue
+
+        # Token accumulation (business logic — stays in runner)
+        if event.usage_metadata:
+            um = event.usage_metadata
+            total_prompt += um.prompt_token_count or 0
+            total_completion += um.candidates_token_count or 0
+
+        # Error handling (control flow — stays in runner)
+        if event.error_code:
+            _log.error(
+                "LLM error | agent={} code={} msg={}",
+                event.author,
+                event.error_code,
+                event.error_message,
+            )
+            raise RuntimeError(
+                f"Agent '{event.author}' failed with error {event.error_code}: "
+                f"{event.error_message}"
+            )
+
+    return total_prompt, total_completion
+
+
+def _is_search_limit_exceeded(exc: BaseException) -> bool:
+    if isinstance(exc, WebSearchLimitExceeded):
+        return True
+    if isinstance(exc, BaseExceptionGroup):
+        return any(_is_search_limit_exceeded(item) for item in exc.exceptions)
+    return False
