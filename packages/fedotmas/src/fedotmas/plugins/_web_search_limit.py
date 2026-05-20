@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+from urllib.parse import urldefrag, urlsplit, urlunsplit
 
 from google.adk.plugins import BasePlugin
 from google.adk.runners import InvocationContext
@@ -41,6 +42,11 @@ class WebSearchLimitPlugin(BasePlugin):
         *,
         max_calls_per_agent: int = 4,
         tool_names: set[str] | None = None,
+        count_unique_urls: bool = False,
+        same_url_exempt_tool_names: set[str] | None = None,
+        ignore_local_urls: bool = True,
+        reject_empty_urls: bool = False,
+        dedupe_identical_calls: bool = True,
         hard_fail: bool = False,
         name: str = "fedotmas_web_search_limit",
     ) -> None:
@@ -49,10 +55,19 @@ class WebSearchLimitPlugin(BasePlugin):
         super().__init__(name=name)
         self.max_calls_per_agent = max_calls_per_agent
         self.hard_fail = hard_fail
+        self.count_unique_urls = count_unique_urls
+        self.ignore_local_urls = ignore_local_urls
+        self.reject_empty_urls = reject_empty_urls
+        self.dedupe_identical_calls = dedupe_identical_calls
         self._tool_names = {
             name.lower() for name in (tool_names or DEFAULT_WEB_SEARCH_TOOL_NAMES)
         }
+        self._same_url_exempt_tool_names = {
+            name.lower() for name in (same_url_exempt_tool_names or set())
+        }
         self._counts: dict[tuple[str, str], int] = {}
+        self._seen_calls: set[tuple[str, str, str]] = set()
+        self._seen_urls: set[tuple[str, str, str]] = set()
 
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
@@ -61,6 +76,8 @@ class WebSearchLimitPlugin(BasePlugin):
         self._counts = {
             key: count for key, count in self._counts.items() if key[0] != session_id
         }
+        self._seen_calls = {key for key in self._seen_calls if key[0] != session_id}
+        self._seen_urls = {key for key in self._seen_urls if key[0] != session_id}
         return None
 
     async def before_tool_callback(
@@ -75,7 +92,59 @@ class WebSearchLimitPlugin(BasePlugin):
 
         session_id = tool_context._invocation_context.session.id
         agent_name = tool_context._invocation_context.agent.name
+        tool_name = tool.name.lower()
         key = (session_id, agent_name)
+
+        url = _normalise_url(tool_args.get("url"))
+        if self.reject_empty_urls and "url" in tool_args and not url:
+            return _limit_result(
+                "Empty URL rejected for web tool "
+                f"'{tool.name}' on agent '{agent_name}'."
+            )
+        if self.ignore_local_urls and _is_local_url(url):
+            _log.debug(
+                "Web limit ignored local URL | agent={} tool={} url={}",
+                agent_name,
+                tool.name,
+                url,
+            )
+            return None
+
+        call_key: tuple[str, str, str] | None = None
+        if self.dedupe_identical_calls:
+            call_key = (session_id, agent_name, _call_fingerprint(tool, tool_args))
+            if call_key in self._seen_calls:
+                _log.debug(
+                    "Web limit ignored duplicate call | agent={} tool={}",
+                    agent_name,
+                    tool.name,
+                )
+                return None
+
+        url_key: tuple[str, str, str] | None = None
+        if url:
+            url_key = (session_id, agent_name, url)
+            if (
+                tool_name in self._same_url_exempt_tool_names
+                and url_key in self._seen_urls
+            ):
+                _log.debug(
+                    "Web limit ignored same-URL helper call | agent={} tool={} url={}",
+                    agent_name,
+                    tool.name,
+                    url,
+                )
+                return None
+            if self.count_unique_urls:
+                if url_key in self._seen_urls:
+                    _log.debug(
+                        "Web limit ignored already-counted URL | agent={} tool={} url={}",
+                        agent_name,
+                        tool.name,
+                        url,
+                    )
+                    return None
+
         used = self._counts.get(key, 0)
         if used >= self.max_calls_per_agent:
             message = (
@@ -85,9 +154,13 @@ class WebSearchLimitPlugin(BasePlugin):
             _log.warning(message)
             if self.hard_fail:
                 raise WebSearchLimitExceeded(message)
-            return {"isError": True, "error": message}
+            return _limit_result(message)
 
         self._counts[key] = used + 1
+        if call_key is not None:
+            self._seen_calls.add(call_key)
+        if url_key is not None:
+            self._seen_urls.add(url_key)
         _log.debug(
             "Web search call allowed | agent={} tool={} used={}/{}",
             agent_name,
@@ -109,3 +182,43 @@ class WebSearchLimitPlugin(BasePlugin):
 
 class WebSearchLimitExceeded(RuntimeError):
     """Raised when a hard web-search/tool budget is exhausted."""
+
+
+def _limit_result(message: str) -> dict[str, Any]:
+    return {"isError": True, "error": message}
+
+
+def _normalise_url(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if not value:
+        return ""
+    if value.startswith("file://"):
+        return value
+    try:
+        split = urlsplit(value)
+    except ValueError:
+        return value
+    if split.scheme not in {"http", "https"}:
+        return value
+    split = split._replace(query="&".join(sorted(split.query.split("&"))))
+    return urldefrag(urlunsplit(split)).url
+
+
+def _is_local_url(url: str) -> bool:
+    return url.startswith("file://")
+
+
+def _call_fingerprint(tool: BaseTool, tool_args: dict[str, Any]) -> str:
+    return f"{tool.name.lower()}:{_freeze(tool_args)!r}"
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, dict):
+        return tuple(sorted((key, _freeze(item)) for key, item in value.items()))
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted(_freeze(item) for item in value))
+    return value

@@ -52,6 +52,7 @@ GAIA_WEB_SCRAPING_TOOL_NAMES = {
     "markdown",
     "links",
     "extract",
+    "eval",
     "evaluate",
     "screenshot",
     "status",
@@ -291,7 +292,7 @@ def build_plugins(task, enable_langfuse: bool) -> list:
     plugins = [
         LoggingPlugin(),
         ToolResultTruncationPlugin(
-            max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 50000),
+            max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 12000),
         ),
         WebSearchLimitPlugin(
             max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 4),
@@ -300,6 +301,9 @@ def build_plugins(task, enable_langfuse: bool) -> list:
         WebSearchLimitPlugin(
             max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 8),
             tool_names=GAIA_WEB_SCRAPING_TOOL_NAMES,
+            count_unique_urls=True,
+            same_url_exempt_tool_names={"eval", "evaluate", "links", "status"},
+            reject_empty_urls=True,
             hard_fail=True,
             name="fedotmas_gaia_web_tool_limit",
         ),

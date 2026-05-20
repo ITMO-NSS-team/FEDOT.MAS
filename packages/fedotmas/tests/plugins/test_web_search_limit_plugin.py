@@ -107,6 +107,85 @@ class TestWebSearchLimitPlugin:
 
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_dedupes_identical_calls(self):
+        plugin = WebSearchLimitPlugin(max_calls_per_agent=1)
+        tool = _tool("search", "Search the internet")
+        ctx = _tool_context()
+
+        first = await plugin.before_tool_callback(
+            tool=tool, tool_args={"query": "same"}, tool_context=ctx
+        )
+        duplicate = await plugin.before_tool_callback(
+            tool=tool, tool_args={"query": "same"}, tool_context=ctx
+        )
+        over_limit = await plugin.before_tool_callback(
+            tool=tool, tool_args={"query": "new"}, tool_context=ctx
+        )
+
+        assert first is None
+        assert duplicate is None
+        assert over_limit is not None
+        assert over_limit["isError"] is True
+
+    @pytest.mark.asyncio
+    async def test_can_count_unique_remote_urls(self):
+        plugin = WebSearchLimitPlugin(
+            max_calls_per_agent=1,
+            tool_names={"goto", "markdown"},
+            count_unique_urls=True,
+        )
+        ctx = _tool_context()
+
+        first = await plugin.before_tool_callback(
+            tool=_tool("goto"),
+            tool_args={"url": "https://example.com/path?b=2&a=1#frag"},
+            tool_context=ctx,
+        )
+        same_url = await plugin.before_tool_callback(
+            tool=_tool("markdown"),
+            tool_args={"url": "https://example.com/path?a=1&b=2"},
+            tool_context=ctx,
+        )
+        over_limit = await plugin.before_tool_callback(
+            tool=_tool("goto"),
+            tool_args={"url": "https://example.org/"},
+            tool_context=ctx,
+        )
+
+        assert first is None
+        assert same_url is None
+        assert over_limit is not None
+        assert over_limit["isError"] is True
+
+    @pytest.mark.asyncio
+    async def test_ignores_local_urls_and_rejects_empty_urls(self):
+        plugin = WebSearchLimitPlugin(
+            max_calls_per_agent=1,
+            tool_names={"goto"},
+            reject_empty_urls=True,
+        )
+        ctx = _tool_context()
+
+        local = await plugin.before_tool_callback(
+            tool=_tool("goto"),
+            tool_args={"url": "file:///tmp/input.mp3"},
+            tool_context=ctx,
+        )
+        empty = await plugin.before_tool_callback(
+            tool=_tool("goto"), tool_args={"url": ""}, tool_context=ctx
+        )
+        remote = await plugin.before_tool_callback(
+            tool=_tool("goto"),
+            tool_args={"url": "https://example.com/"},
+            tool_context=ctx,
+        )
+
+        assert local is None
+        assert empty is not None
+        assert "Empty URL" in empty["error"]
+        assert remote is None
+
 
 class TestAutoAddWebSearchLimitPlugin:
     def test_default_has_web_search_limit_plugin(self):
