@@ -44,7 +44,18 @@ class ToolResultTruncationPlugin(BasePlugin):
             tool.name,
             self.max_string_chars,
         )
-        return truncated if isinstance(truncated, dict) else {"result": truncated}
+        if not isinstance(truncated, dict):
+            truncated = {"result": truncated}
+        return {
+            **truncated,
+            "truncated": True,
+            "complete": False,
+            "max_chars": self.max_string_chars,
+            "recommended_next_action": (
+                "Use targeted find, section extraction, table extraction, or chunked "
+                "read before giving a final answer."
+            ),
+        }
 
 
 def _truncate_value(value: Any, max_chars: int) -> tuple[Any, bool]:

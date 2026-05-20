@@ -48,3 +48,7 @@ class TestToolResultTruncationPlugin:
         text = result["content"][0]["text"]
         assert text.startswith("01234")
         assert "truncated to 5/10 chars" in text
+        assert result["truncated"] is True
+        assert result["complete"] is False
+        assert result["max_chars"] == 5
+        assert "targeted find" in result["recommended_next_action"]

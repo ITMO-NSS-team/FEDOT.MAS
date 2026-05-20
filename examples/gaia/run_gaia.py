@@ -664,6 +664,9 @@ async def process_task(
     instruction = (
         "Please encapsulate your final answer (answer ONLY) within <solution> and </solution>.\n"
         "For example: The answer to the question is <solution>42</solution>.\n\n"
+        "If a tool result has truncated=true or complete=false, do not answer from it "
+        "directly. Use targeted find, section extraction, table extraction, or chunked "
+        "read to get the missing evidence first.\n\n"
     )
 
     query = instruction
