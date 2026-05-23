@@ -179,10 +179,13 @@ class BaseMAS(ABC, Generic[ConfigT]):
         user_query: str,
         *,
         initial_state: dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Build the ADK agent tree from *config* and execute it.
 
-        Returns the final ``session.state`` dict.
+        Returns the final ``session.state`` dict. When *timeout* is set and
+        execution exceeds it, the partial state accumulated so far is returned
+        instead of raising (see :func:`run_pipeline`).
         """
         app = self.build_app(config)
         _log.info("Running pipeline")
@@ -192,6 +195,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
             session_service=self._session_service,
             memory_service=self._memory_service,
             initial_state=initial_state,
+            timeout=timeout,
         )
         return self._last_result.state
 
@@ -236,14 +240,19 @@ class BaseMAS(ABC, Generic[ConfigT]):
         task: str,
         *,
         initial_state: dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Generate a config and immediately execute it.
 
-        Equivalent to ``generate_config`` followed by ``build_and_run``.
+        Equivalent to ``generate_config`` followed by ``build_and_run``. When
+        *timeout* is set it bounds pipeline *execution*; on expiry the partial
+        state gathered so far is returned rather than raising.
         """
         _log.info("Full-auto run for task: {}", task)
         try:
             config = await self.generate_config(task)
-            return await self.build_and_run(config, task, initial_state=initial_state)
+            return await self.build_and_run(
+                config, task, initial_state=initial_state, timeout=timeout
+            )
         finally:
             self._finalize_langfuse()

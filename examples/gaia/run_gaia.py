@@ -14,15 +14,6 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_not_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
-from tqdm import tqdm
-
 from fedotmas import MAW, ModelConfig
 from fedotmas._settings import get_meta_model
 from fedotmas.common.logging import get_logger
@@ -33,9 +24,17 @@ from fedotmas.plugins import (
     ToolErrorCircuitBreakerPlugin,
     ToolErrorCircuitOpen,
     ToolResultTruncationPlugin,
-    WebSearchLimitPlugin,
     WebSearchLimitExceeded,
+    WebSearchLimitPlugin,
 )
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+from tqdm import tqdm
 
 from examples.gaia.data import GaiaBenchmark
 
@@ -156,6 +155,23 @@ def extract_answer_from_state(state: dict[str, Any]) -> str:
             return str(value).strip()
 
     return ""
+
+
+def normalize_answer(answer: str) -> str:
+    """Light, low-risk cleanup of a final answer before scoring/submission.
+
+    Strips wrapping whitespace/quotes, a leftover ``<solution>`` wrapper, and a
+    leading "final answer:"/"answer:" label. Intentionally conservative — it does
+    not strip units or prose (that could corrupt legitimate string answers); the
+    answer-format instruction is responsible for keeping the bare answer clean.
+    """
+    text = extract_solution(answer).strip()
+    text = re.sub(
+        r"^(?:final\s+answer|answer)\s*[:\-]\s*", "", text, flags=re.IGNORECASE
+    )
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    return text
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -488,14 +504,14 @@ def build_plugins(task, enable_langfuse: bool) -> list:
         LoggingPlugin(),
         BrowserFallbackPolicyPlugin(),
         ToolResultTruncationPlugin(
-            max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 12000),
+            max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 60000),
         ),
         WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 4),
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 10),
             hard_fail=True,
         ),
         WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 8),
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 12),
             tool_names=GAIA_WEB_SCRAPING_TOOL_NAMES,
             count_unique_urls=True,
             same_url_exempt_tool_names={"eval", "evaluate", "links", "status"},
@@ -649,7 +665,10 @@ def print_token_summary(token_summary: dict) -> None:
 
 
 @retry(
-    stop=stop_after_attempt(_env_int("FEDOTMAS_GAIA_TASK_ATTEMPTS", 1)),
+    # Default 2 attempts: a single transient worker-model/API timeout no longer
+    # loses the whole task. Wall-clock and budget exhaustion now salvage partial
+    # state instead of raising, so retries mostly catch genuine transient errors.
+    stop=stop_after_attempt(_env_int("FEDOTMAS_GAIA_TASK_ATTEMPTS", 2)),
     wait=wait_exponential(multiplier=1, min=4, max=10),
     retry=retry_if_not_exception_type(ProviderErrorCooldown),
 )
@@ -662,8 +681,22 @@ async def process_task(
 ) -> dict:
     """Process a single GAIA task using FEDOT.MAS MAW."""
     instruction = (
-        "Please encapsulate your final answer (answer ONLY) within <solution> and </solution>.\n"
+        "Encapsulate your final answer within <solution> and </solution> tags.\n"
         "For example: The answer to the question is <solution>42</solution>.\n\n"
+        "CRITICAL — the text inside <solution></solution> must be ONLY the bare answer, "
+        "with NO explanation, units, reasoning, evidence, or extra words:\n"
+        "- A number: write digits only, no thousands separators and no units or symbols "
+        "($, %, m, km, ...) unless the question explicitly asks for them "
+        "(e.g. write <solution>100000000</solution>, not <solution>100 million</solution> "
+        "or <solution>0.1777 m^3</solution>).\n"
+        "- A string: as few words as possible, no articles, no abbreviations, digits in "
+        "plain text unless asked otherwise (e.g. <solution>Li Peng</solution>, not "
+        "<solution>Li Peng — former Premier</solution>).\n"
+        "- Give a single value unless the question explicitly asks for several; only "
+        "then use a comma-separated list, applying the number/string rules to each "
+        "element. If the question asks 'how many', the answer is just the count "
+        "(e.g. <solution>3</solution>, never the count plus the items).\n"
+        "Put any reasoning or evidence OUTSIDE the tags.\n\n"
         "If a tool result has truncated=true or complete=false, do not answer from it "
         "directly. Use targeted find, section extraction, table extraction, or chunked "
         "read to get the missing evidence first.\n\n"
@@ -692,17 +725,24 @@ async def process_task(
         max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
         two_stage=False,
     )
+    task_timeout = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 600)
     try:
+        # The pipeline salvages and returns partial state on its own execution
+        # timeout (see run_pipeline), so most slow tasks still yield an answer.
+        # The outer wait_for is only a hard backstop for meta-generation hangs;
+        # it is set well above the execution budget so the inner timeout fires
+        # first and partial state is preserved.
         state = await asyncio.wait_for(
-            maw.run(query),
-            timeout=_env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 300),
+            maw.run(query, timeout=task_timeout),
+            timeout=task_timeout
+            + _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_BACKSTOP_SECONDS", 180),
         )
     except Exception as exc:
         if _is_provider_error(exc):
             raise ProviderErrorCooldown(str(exc)) from exc
         raise
 
-    answer = extract_answer_from_state(state)
+    answer = normalize_answer(extract_answer_from_state(state))
     if not answer:
         raise ValueError("MAW produced no non-empty answer")
     is_correct = gaia_benchmark.is_correct_answer(answer, task.ground_truth)
@@ -850,7 +890,7 @@ def main():
     parser.add_argument(
         "--split",
         type=str,
-        default="validation[:1]",
+        default="validation",
         help="Dataset split (default: validation[:1])",
     )
     parser.add_argument(

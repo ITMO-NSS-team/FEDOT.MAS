@@ -33,6 +33,13 @@ DOCUMENT_EXTENSIONS = frozenset(
         ".txt",
     }
 )
+# Remote URLs ending in these are better downloaded + parsed than browsed.
+# HTML pages are deliberately excluded: normal web articles should be navigated
+# with the browser, not forced through download + document.read_document (which
+# adds latency, tool errors, and retries that drive task timeouts).
+REMOTE_DOCUMENT_EXTENSIONS = frozenset(
+    {".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".json", ".xml"}
+)
 IMAGE_EXTENSIONS = frozenset(
     {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".svg", ".ico"}
 )
@@ -190,7 +197,7 @@ def _route_for_target(target: str) -> dict[str, str] | None:
             "download + media",
             "Download the URL directly, then call the matching media tool on the downloaded file.",
         )
-    if ext in DOCUMENT_EXTENSIONS:
+    if ext in REMOTE_DOCUMENT_EXTENSIONS:
         return _route(
             "direct document/data URLs are better handled by download/document tools",
             "download + document.read_document",

@@ -55,6 +55,10 @@ class WebSearchLimitPlugin(BasePlugin):
         super().__init__(name=name)
         self.max_calls_per_agent = max_calls_per_agent
         self.hard_fail = hard_fail
+        # When True, every matched web/search tool call is blocked with a soft
+        # "answer now" result (never raises). Set during the post-budget
+        # finalization turn so the agent stops exploring and commits an answer.
+        self.finalizing = False
         self.count_unique_urls = count_unique_urls
         self.ignore_local_urls = ignore_local_urls
         self.reject_empty_urls = reject_empty_urls
@@ -89,6 +93,13 @@ class WebSearchLimitPlugin(BasePlugin):
     ) -> Optional[dict]:
         if not self._is_web_search_tool(tool):
             return None
+
+        if self.finalizing:
+            return _limit_result(
+                "Search/exploration budget exhausted and tools are now disabled. "
+                "Do not call web, browser, or search tools. Provide your best final "
+                "answer from the evidence already gathered."
+            )
 
         session_id = tool_context._invocation_context.session.id
         agent_name = tool_context._invocation_context.agent.name

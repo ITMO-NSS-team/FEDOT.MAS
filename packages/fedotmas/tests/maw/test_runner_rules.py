@@ -2,19 +2,31 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import tenacity
+from tenacity import RetryError
 
 from fedotmas.core.runner import (
     SEARCH_LIMIT_RECOVERY_PROMPT,
     PipelineResult,
+    _enter_finalize_mode,
+    _is_search_limit_exceeded,
     run_pipeline,
 )
-from fedotmas.plugins import WebSearchLimitExceeded
+from fedotmas.plugins import WebSearchLimitExceeded, WebSearchLimitPlugin
 
 from .conftest import FakeActions, FakeEvent, FakeSession, FakeUsageMetadata
+
+
+def _retry_error_wrapping(exc: BaseException) -> RetryError:
+    """Build a ``RetryError`` whose last attempt raised *exc* (as in production)."""
+    future = tenacity.Future(1)
+    future.set_exception(exc)
+    return RetryError(future)
 
 
 # ---------------------------------------------------------------------------
@@ -291,3 +303,129 @@ class TestSearchLimitRecovery:
         assert len(calls) == 2
         recovery_text = calls[1]["new_message"].parts[0].text
         assert recovery_text == SEARCH_LIMIT_RECOVERY_PROMPT
+
+
+class TestSearchLimitDetection:
+    """`_is_search_limit_exceeded` must see through exception wrappers."""
+
+    def test_plain(self):
+        assert _is_search_limit_exceeded(WebSearchLimitExceeded("x")) is True
+
+    def test_wrapped_in_retry_error(self):
+        # The production failure mode: a worker-model retry wraps the plugin
+        # exception, so the outermost type is RetryError, not the limit error.
+        wrapped = _retry_error_wrapping(WebSearchLimitExceeded("x"))
+        assert _is_search_limit_exceeded(wrapped) is True
+
+    def test_wrapped_in_cause_chain(self):
+        try:
+            try:
+                raise WebSearchLimitExceeded("x")
+            except WebSearchLimitExceeded as inner:
+                raise RuntimeError("wrapper") from inner
+        except RuntimeError as outer:
+            assert _is_search_limit_exceeded(outer) is True
+
+    def test_unrelated_error(self):
+        assert _is_search_limit_exceeded(ValueError("nope")) is False
+        assert _is_search_limit_exceeded(_retry_error_wrapping(TimeoutError())) is False
+
+
+class TestFinalizeMode:
+    """Recovery disables web tools so the finalization turn cannot re-trip."""
+
+    def test_enter_finalize_mode_sets_flag(self):
+        plugin = WebSearchLimitPlugin(max_calls_per_agent=3)
+        assert plugin.finalizing is False
+        _enter_finalize_mode([plugin, object()])  # non-plugin ignored
+        assert plugin.finalizing is True
+
+    @pytest.mark.asyncio
+    async def test_recovery_fires_for_wrapped_exception_and_finalizes(
+        self, mock_session_service
+    ):
+        plugin = WebSearchLimitPlugin(max_calls_per_agent=3, hard_fail=True)
+        calls = []
+
+        async def failing_run_async(**kwargs):
+            calls.append(kwargs)
+            raise _retry_error_wrapping(WebSearchLimitExceeded("limit hit"))
+            yield  # pragma: no cover
+
+        async def recovery_run_async(**kwargs):
+            calls.append(kwargs)
+            yield FakeEvent(
+                usage_metadata=FakeUsageMetadata(
+                    prompt_token_count=7, candidates_token_count=3
+                )
+            )
+
+        run_async_calls = [failing_run_async, recovery_run_async]
+        runner_instance = MagicMock()
+        runner_instance.run_async = lambda **kw: run_async_calls.pop(0)(**kw)
+
+        @asynccontextmanager
+        async def fake_runner_cm(*_args, **_kwargs):
+            yield runner_instance
+
+        class _FakeApp:
+            def __init__(self, *, name: str = "fedotmas", root_agent, plugins=None):
+                self.name = name
+                self.root_agent = root_agent
+                self.plugins = plugins or []
+
+        with (
+            patch("fedotmas.core.runner.App", _FakeApp),
+            patch("fedotmas.core.runner.Runner", side_effect=fake_runner_cm),
+        ):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+                plugins=[plugin],
+            )
+
+        assert isinstance(result, PipelineResult)
+        assert len(calls) == 2  # recovery turn ran despite the RetryError wrapper
+        assert calls[1]["new_message"].parts[0].text == SEARCH_LIMIT_RECOVERY_PROMPT
+        assert plugin.finalizing is True
+
+
+class TestExecutionTimeoutSalvage:
+    """A pipeline that exceeds its timeout returns partial state, not an error."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_partial_state(self, mock_session_service):
+        partial = FakeSession(state={"sub_answer": "42", "user_query": "q"})
+        mock_session_service.get_session = AsyncMock(return_value=partial)
+
+        async def hanging_run_async(**_kwargs):
+            await asyncio.sleep(5)
+            yield  # pragma: no cover
+
+        runner_instance = MagicMock()
+        runner_instance.run_async = hanging_run_async
+
+        @asynccontextmanager
+        async def fake_runner_cm(*_args, **_kwargs):
+            yield runner_instance
+
+        class _FakeApp:
+            def __init__(self, *, name: str = "fedotmas", root_agent, plugins=None):
+                self.name = name
+                self.root_agent = root_agent
+                self.plugins = plugins or []
+
+        with (
+            patch("fedotmas.core.runner.App", _FakeApp),
+            patch("fedotmas.core.runner.Runner", side_effect=fake_runner_cm),
+        ):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+                timeout=0.05,
+            )
+
+        assert isinstance(result, PipelineResult)
+        assert result.state["sub_answer"] == "42"
