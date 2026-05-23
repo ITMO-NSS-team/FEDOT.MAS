@@ -4,7 +4,7 @@ from typing import Any
 
 import pydantic_monty
 from fastmcp import FastMCP
-from pydantic_monty import MontyError, MontyRepl
+from pydantic_monty import CollectString, MontyError, MontyRepl
 
 mcp = FastMCP(name="sandbox-light")
 
@@ -17,19 +17,31 @@ async def execute(
     inputs: dict[str, Any] | None = None,
     timeout: float = 30,
 ) -> dict[str, Any]:
-    """Execute Python code in a sandbox. Only builtins available — no imports, no third-party libraries, no file access."""
+    """Execute Python code in a sandbox. Only the standard library is available — no third-party libraries, no file access.
+
+    Returns the value of the last expression in ``output`` and anything the code
+    printed in ``stdout``.
+    """
     try:
         input_keys = list(inputs.keys()) if inputs else []
 
         def _run():
+            # CollectString captures ``print`` output via the native callback so
+            # it is returned to the caller instead of leaking to the process
+            # stdout, which is the MCP stdio JSON-RPC channel.
+            collector = CollectString()
             m = pydantic_monty.Monty(code, inputs=input_keys)
-            kwargs: dict[str, Any] = {"limits": {"max_duration_secs": timeout}}
+            kwargs: dict[str, Any] = {
+                "limits": {"max_duration_secs": timeout},
+                "print_callback": collector,
+            }
             if inputs:
                 kwargs["inputs"] = inputs
-            return m.run(**kwargs)
+            result = m.run(**kwargs)
+            return result, collector.output
 
-        result = await asyncio.to_thread(_run)
-        return {"success": True, "output": result}
+        result, stdout = await asyncio.to_thread(_run)
+        return {"success": True, "output": result, "stdout": stdout}
     except MontyError as exc:
         return {"success": False, "error": str(exc)}
     except Exception as exc:
@@ -41,20 +53,28 @@ async def repl(
     code: str,
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute code in a persistent REPL session. State preserved between calls. Only builtins available — no imports, no third-party libraries, no file access."""
+    """Execute code in a persistent REPL session. State preserved between calls. Only the standard library is available — no third-party libraries, no file access.
+
+    Returns the value of the last expression in ``output`` and anything the code
+    printed in ``stdout``.
+    """
     try:
-        if session_id and session_id in _repls:
-            output = await asyncio.to_thread(_repls[session_id].feed, code)
-            return {"success": True, "session_id": session_id, "output": output}
+        sid = session_id if session_id and session_id in _repls else str(uuid.uuid4())
+        repl_session = _repls.get(sid)
+        if repl_session is None:
+            repl_session = MontyRepl()
+            _repls[sid] = repl_session
 
-        sid = str(uuid.uuid4())
+        def _feed():
+            # ``feed_run`` executes one snippet against the persisted session
+            # state; CollectString diverts ``print`` away from the JSON-RPC
+            # stdio channel and back to the caller.
+            collector = CollectString()
+            result = repl_session.feed_run(code, print_callback=collector)
+            return result, collector.output
 
-        def _create():
-            return MontyRepl.create(code)
-
-        r, output = await asyncio.to_thread(_create)
-        _repls[sid] = r
-        return {"success": True, "session_id": sid, "output": output}
+        result, stdout = await asyncio.to_thread(_feed)
+        return {"success": True, "session_id": sid, "output": result, "stdout": stdout}
     except MontyError as exc:
         return {"success": False, "error": str(exc)}
     except Exception as exc:
