@@ -133,19 +133,19 @@ def test_pareto_front_disjoint_tasks_no_domination():
 
 
 def test_pareto_front_partial_overlap():
-    """With partial task overlap, domination uses only common tasks."""
+    """Per-task Pareto: a candidate that is uniquely best on at least one task survives."""
     state = OptimizationState()
     c1 = state.add_candidate(_config("a", instructions={"a": "v1"}))
     c1.scores = {"t1": 0.9, "t2": 0.8}
     c2 = state.add_candidate(
         _config("a", instructions={"a": "v2"}), parent_index=0, origin="mutation"
     )
-    # c2 is better on the shared task t1, but doesn't have t2
+    # c2 wins t1 (0.95 > 0.9) and t3 (only candidate); c1 is the only candidate on t2
     c2.scores = {"t1": 0.95, "t3": 0.1}
     state.update_pareto_front()
-    # c2 dominates c1 on {t1} (only common task)
+    # Both unique-best on at least one task → both on the front
+    assert c1.on_pareto_front is True
     assert c2.on_pareto_front is True
-    assert c1.on_pareto_front is False
 
 
 # --- 1c: mean_score / min_score return None for unevaluated ---
@@ -242,7 +242,7 @@ def test_state_record_and_cache():
     state = OptimizationState()
     c = state.add_candidate(_config("a"))
     result = TaskResult(task="t1", state={"a": "val"}, score=0.9, feedback="great")
-    state.record_task_result(c, result)
+    state.record_task_result(c, result, split="val")
     assert c.scores["t1"] == 0.9
     assert c.feedbacks["t1"] == "great"
     assert c.states["t1"] == {"a": "val"}
@@ -297,3 +297,140 @@ def test_is_ancestor_of_unrelated():
     # c1 and c2 are siblings, not ancestors of each other
     assert is_ancestor_of(c1, c2, state.candidates) is False
     assert is_ancestor_of(c2, c1, state.candidates) is False
+
+
+# --- Train/val score isolation ---
+
+
+def test_record_task_result_routes_to_split():
+    """split='train' writes to train_*; split='val' writes to scores/feedbacks/states."""
+    state = OptimizationState()
+    c = state.add_candidate(_config("a"))
+
+    state.record_task_result(
+        c, TaskResult(task="v1", state={"a": "v_out"}, score=0.7, feedback="vf"),
+        split="val",
+    )
+    state.record_task_result(
+        c, TaskResult(task="t1", state={"a": "t_out"}, score=0.4, feedback="tf"),
+        split="train",
+    )
+
+    assert c.scores == {"v1": 0.7}
+    assert c.feedbacks == {"v1": "vf"}
+    assert c.states == {"v1": {"a": "v_out"}}
+    assert c.train_scores == {"t1": 0.4}
+    assert c.train_feedbacks == {"t1": "tf"}
+    assert c.train_states == {"t1": {"a": "t_out"}}
+
+
+def test_train_scores_dont_affect_mean_score():
+    """mean_score reads only val scores, ignoring train minibatch evals."""
+    state = OptimizationState()
+    c = state.add_candidate(_config("a"))
+    for i, score in enumerate([0.5, 0.6, 0.7]):  # val
+        state.record_task_result(
+            c, TaskResult(task=f"v{i}", state={}, score=score, feedback=""),
+            split="val",
+        )
+    # Add poor train scores — must not drag mean_score down
+    for i in range(10):
+        state.record_task_result(
+            c, TaskResult(task=f"t{i}", state={}, score=0.0, feedback=""),
+            split="train",
+        )
+    assert c.mean_score == pytest.approx(0.6)
+
+
+def test_train_scores_dont_affect_pareto_front():
+    """Pareto front uses only val scores (c.scores), not train_scores."""
+    state = OptimizationState()
+    a = state.add_candidate(_config("a"))
+    b = state.add_candidate(_config("a", instructions={"a": "v2"}))
+    # a wins v1, b wins v2 → neither dominates on val.
+    state.record_task_result(a, TaskResult(task="v1", state={}, score=0.9, feedback=""), split="val")
+    state.record_task_result(a, TaskResult(task="v2", state={}, score=0.3, feedback=""), split="val")
+    state.record_task_result(b, TaskResult(task="v1", state={}, score=0.3, feedback=""), split="val")
+    state.record_task_result(b, TaskResult(task="v2", state={}, score=0.9, feedback=""), split="val")
+    # 'a' has many private train tasks with perfect scores — must not affect the front.
+    for i in range(5):
+        state.record_task_result(
+            a, TaskResult(task=f"t{i}", state={}, score=1.0, feedback=""),
+            split="train",
+        )
+    state.update_pareto_front()
+    assert a.on_pareto_front is True
+    assert b.on_pareto_front is True
+
+
+def test_save_load_preserves_train_scores():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    state = OptimizationState()
+    c = state.add_candidate(_config("a"))
+    state.record_task_result(
+        c, TaskResult(task="v1", state={"a": "vo"}, score=0.7, feedback="vf"),
+        split="val",
+    )
+    state.record_task_result(
+        c, TaskResult(task="t1", state={"a": "to"}, score=0.4, feedback="tf"),
+        split="train",
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        path = Path(f.name)
+    try:
+        state.save(path)
+        loaded = OptimizationState.load(path)
+        lc = loaded.candidates[0]
+        assert lc.scores == {"v1": 0.7}
+        assert lc.train_scores == {"t1": 0.4}
+        assert lc.train_feedbacks == {"t1": "tf"}
+        assert lc.train_states == {"t1": {"a": "to"}}
+        # Cache restored for both splits
+        assert loaded.cache.get(lc.config_hash, "v1") is not None
+        assert loaded.cache.get(lc.config_hash, "t1") is not None
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_load_old_checkpoint_without_train_fields():
+    """Backward compat: old JSONs without train_* should load with empty defaults."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    cfg = _config("a")
+    legacy = {
+        "next_index": 1,
+        "total_evaluations": 1,
+        "iteration": 0,
+        "candidates": [
+            {
+                "index": 0,
+                "config": json.loads(cfg.model_dump_json()),
+                "config_hash": config_hash(cfg),
+                "scores": {"v1": 0.5},
+                "feedbacks": {"v1": "ok"},
+                "states": {"v1": {"a": "out"}},
+                "parent_index": None,
+                "origin": "seed",
+                "on_pareto_front": True,
+                "merge_parent_indices": None,
+            }
+        ],
+    }
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(legacy, f)
+        path = Path(f.name)
+    try:
+        loaded = OptimizationState.load(path)
+        c = loaded.candidates[0]
+        assert c.scores == {"v1": 0.5}
+        assert c.train_scores == {}
+        assert c.train_feedbacks == {}
+        assert c.train_states == {}
+    finally:
+        path.unlink(missing_ok=True)

@@ -41,12 +41,12 @@ class TestMaxEvaluations:
         c = state.add_candidate(_config())
 
         state.record_task_result(
-            c, TaskResult(task="t1", state={}, score=0.5, feedback="")
+            c, TaskResult(task="t1", state={}, score=0.5, feedback=""), split="val"
         )
         assert s.should_stop(state, 0) is False
 
         state.record_task_result(
-            c, TaskResult(task="t2", state={}, score=0.5, feedback="")
+            c, TaskResult(task="t2", state={}, score=0.5, feedback=""), split="val"
         )
         assert s.should_stop(state, 0) is True
 
@@ -61,7 +61,9 @@ class TestMaxEvaluations:
 
         for i in range(4):
             state.record_task_result(
-                c, TaskResult(task=f"t{i}", state={}, score=0.5, feedback="")
+                c,
+                TaskResult(task=f"t{i}", state={}, score=0.5, feedback=""),
+                split="val",
             )
         # Cache only has 2 entries, but total_evaluations is 4
         assert len(state.cache) == 2
@@ -69,7 +71,7 @@ class TestMaxEvaluations:
         assert s.should_stop(state, 0) is False
 
         state.record_task_result(
-            c, TaskResult(task="t4", state={}, score=0.5, feedback="")
+            c, TaskResult(task="t4", state={}, score=0.5, feedback=""), split="val"
         )
         assert s.should_stop(state, 0) is True
 

@@ -108,7 +108,8 @@ async def run_pipeline(
         parts=[types.Part.from_text(text=user_query)],
     )
 
-    _log.info("Pipeline run started | pipeline={}", app.root_agent.name)
+    root_name = app.root_agent.name  # ty: ignore[unresolved-attribute]
+    _log.info("Pipeline run started | pipeline={}", root_name)
     total_prompt = 0
     total_completion = 0
     pipeline_start = time.monotonic()

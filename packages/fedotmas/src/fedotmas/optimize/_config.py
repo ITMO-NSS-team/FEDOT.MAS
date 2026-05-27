@@ -23,7 +23,7 @@ class OptimizationConfig:
     """Stop after this many total evaluation runs. None = disabled."""
 
     # LLM temperatures
-    temperature_reflect: float = 0.7
+    temperature_reflect: float = 1.0
     """LLM temperature for reflection (mutation) calls. Range: [0, 2]."""
 
     temperature_merge: float = 0.5
@@ -83,6 +83,11 @@ class OptimizationConfig:
 
     mutate_structure: bool = False
     """Optimize pipeline structure (agent ordering, parallel/sequential). (Not yet implemented)"""
+
+    eval_concurrency: int = 8
+    """Max concurrent task evaluations during a single _evaluate_candidate call.
+    Bounds the request-rate spike from large valset evals. Lower = safer for
+    rate-limited APIs, slower wall-clock."""
 
     # Error recovery
     max_consecutive_failures: int = 3

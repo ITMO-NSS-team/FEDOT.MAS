@@ -90,7 +90,7 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         error_type: str,
     ) -> None:
         session_id = tool_context._invocation_context.session.id
-        agent_name = tool_context._invocation_context.agent.name
+        agent_name = tool_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
         total_key = (session_id, agent_name)
         pattern_key = (session_id, agent_name, tool.name, error_type)
 

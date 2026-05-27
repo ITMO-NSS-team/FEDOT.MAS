@@ -457,7 +457,7 @@ def main() -> None:
         nargs="?",
         type=Path,
         default=DEFAULT_RUN_DIR,
-        help="Path to examples/gaia/gaia_logs/run_<uuid>.",
+        help="Path to benchmarks/gaia/gaia_logs/run_<uuid>.",
     )
     parser.add_argument(
         "--log-file",

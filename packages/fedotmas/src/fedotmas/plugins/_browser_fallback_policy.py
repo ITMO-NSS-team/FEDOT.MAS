@@ -89,7 +89,7 @@ class BrowserFallbackPolicyPlugin(BasePlugin):
         if route is None:
             return None
 
-        agent_name = tool_context._invocation_context.agent.name
+        agent_name = tool_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
         _log.warning(
             "Browser call blocked by fallback policy | agent={} tool={} target={} fallback={}",
             agent_name,
@@ -122,7 +122,7 @@ class BrowserFallbackPolicyPlugin(BasePlugin):
 
         target = _target_from_args(tool_args)
         fallback = _fallback_for_navigation_failure(target, result_text)
-        agent_name = tool_context._invocation_context.agent.name
+        agent_name = tool_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
         _log.warning(
             "Browser navigation fallback suggested | agent={} tool={} target={} fallback={}",
             agent_name,

@@ -295,11 +295,11 @@ browser-use-check:
 gaia-run script *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    SCRIPT_PATH="examples/gaia/{{script}}.py"
+    SCRIPT_PATH="benchmarks/gaia/{{script}}.py"
     if [ ! -f "$SCRIPT_PATH" ]; then
         echo "Error: script not found: $SCRIPT_PATH"
         echo "Available scripts:"
-        ls -1 examples/gaia/run_*.py | xargs -n1 basename | sed 's/\.py$//' | sed 's/^/  - /'
+        ls -1 benchmarks/gaia/run_*.py | xargs -n1 basename | sed 's/\.py$//' | sed 's/^/  - /'
         exit 1
     fi
     echo "Running $SCRIPT_PATH {{args}}"

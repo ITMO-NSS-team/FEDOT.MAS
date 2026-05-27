@@ -5,7 +5,12 @@ from enum import Enum
 from typing import Protocol, runtime_checkable
 
 from fedotmas.maw.models import MAWConfig
-from fedotmas.optimize._state import Candidate, Task
+from fedotmas.optimize._state import (
+    Candidate,
+    Task,
+    _per_task_best_set,
+    _remove_dominated_programs,
+)
 
 
 class MutationType(Enum):
@@ -26,45 +31,41 @@ class BestCandidateSelector:
 
 
 class ParetoCandidateSelector:
-    """Frequency-weighted Pareto selection.
+    """Frequency-weighted per-instance Pareto selection (GEPA-style).
 
-    Counts how many per-task Pareto fronts each candidate appears on
-    and samples proportionally.  Candidates that are best across more
-    tasks are selected more often.
+    For each val task, identifies the set of candidates achieving the max
+    score on that task; iteratively prunes candidates that are never uniquely
+    best (``_remove_dominated_programs``); samples surviving candidates
+    proportionally to the number of tasks they win.
     """
 
     def __init__(self, rng: random.Random | None = None) -> None:
         self._rng = rng or random.Random()
 
     def select(self, candidates: list[Candidate]) -> Candidate:
-        pareto = [c for c in candidates if c.on_pareto_front]
-        if not pareto:
-            pareto = candidates
+        evaluated = [c for c in candidates if c.scores]
+        if not evaluated:
+            return self._rng.choice(candidates)
 
-        all_tasks: set[str] = set()
-        for c in pareto:
-            all_tasks.update(c.scores.keys())
+        per_task_best = _per_task_best_set(evaluated)
+        if not per_task_best:
+            return self._rng.choice(evaluated)
 
-        if not all_tasks:
-            return self._rng.choice(pareto)
+        agg_scores = {c.index: c.mean_score or 0.0 for c in evaluated}
+        pruned = _remove_dominated_programs(per_task_best, agg_scores)
 
-        task_wins: dict[int, int] = {}
-        for task in all_tasks:
-            scored = [(c, c.scores[task]) for c in pareto if task in c.scores]
-            if not scored:
-                continue
-            best = max(s for _, s in scored)
-            for c, s in scored:
-                if s == best:
-                    task_wins[c.index] = task_wins.get(c.index, 0) + 1
+        freq: dict[int, int] = {}
+        for front in pruned.values():
+            for idx in front:
+                freq[idx] = freq.get(idx, 0) + 1
 
-        sampling_list: list[Candidate] = []
-        for c in pareto:
-            freq = task_wins.get(c.index, 1)
-            for _ in range(freq):
-                sampling_list.append(c)
+        if not freq:
+            return self._rng.choice(evaluated)
 
-        return self._rng.choice(sampling_list)
+        sampling_list = [idx for idx, f in freq.items() for _ in range(f)]
+        chosen_idx = self._rng.choice(sampling_list)
+        idx_map = {c.index: c for c in evaluated}
+        return idx_map[chosen_idx]
 
 
 class EpsilonGreedySelector:

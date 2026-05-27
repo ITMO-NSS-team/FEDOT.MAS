@@ -37,7 +37,7 @@ class ToolResultTruncationPlugin(BasePlugin):
         if not changed:
             return None
 
-        agent_name = tool_context._invocation_context.agent.name
+        agent_name = tool_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
         _log.warning(
             "Tool result truncated | agent={} tool={} max_string_chars={}",
             agent_name,

@@ -47,7 +47,7 @@ just gaia-resume 3
 Or directly:
 
 ```sh
-uv run python examples/gaia/run_gaia.py --difficulty 1 --split "validation[:10]"
+uv run python benchmarks/gaia/run_gaia.py --difficulty 1 --split "validation[:10]"
 ```
 
 ### Arguments
@@ -70,7 +70,7 @@ just searxng-start   # runs on http://localhost:18888 by default
 
 ## Results
 
-Each run saves results under `examples/gaia/gaia_logs/run_<uuid>/`:
+Each run saves results under `benchmarks/gaia/gaia_logs/run_<uuid>/`:
 
 ```
 run_<uuid>/

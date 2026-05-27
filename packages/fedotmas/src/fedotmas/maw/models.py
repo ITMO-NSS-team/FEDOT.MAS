@@ -110,6 +110,7 @@ class MAWAgentConfig(BaseModel):
     model: str | None = None
     output_key: str
     tools: list[str] = []
+    max_output_tokens: int | None = None
 
     @model_validator(mode="after")
     def _normalize_fields(self) -> MAWAgentConfig:

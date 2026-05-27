@@ -1,4 +1,4 @@
-from examples.gaia.run_gaia import (
+from benchmarks.gaia.run_gaia import (
     DEFAULT_GAIA_MCP_SERVERS,
     ProviderErrorCooldown,
     _assert_model_list_contains,

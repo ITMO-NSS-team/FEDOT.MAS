@@ -41,6 +41,16 @@ class CompositeMutator:
         chosen = self._weighted_choice()
         return await chosen.mutator.mutate(candidate, agent_names, tasks)
 
+    # TODO(composite-merge): merge() and genealogy_merge() below silently keep
+    # only the LAST mutator's output — every iteration calls the next mutator
+    # with the original candidates instead of feeding it the running `config`,
+    # so prior merges are overwritten and their token cost wasted. Not triggered
+    # today because Optimizer wires InstructionMutator directly (single mutator
+    # path), but will silently break once Tool/Model/Structure mutators are
+    # implemented and composed. Fix needs either a Candidate wrapper around the
+    # running config or a signature change to thread `running_config` through
+    # the Mutator.merge protocol.
+
     async def merge(
         self,
         candidate_a: Candidate,

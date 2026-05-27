@@ -41,7 +41,11 @@ class GaiaBenchmark:
         split = self.benchmark_settings["split"]
 
         self._data = load_dataset(
-            "gaia-benchmark/GAIA", config, split=split, trust_remote_code=True, token=HF_TOKEN
+            "gaia-benchmark/GAIA",
+            config,
+            split=split,
+            trust_remote_code=True,
+            token=HF_TOKEN,
         )
 
         huggingface_hub.snapshot_download(
@@ -132,7 +136,9 @@ class GaiaBenchmark:
             ma_elems = self.split_string(model_answer)
 
             if len(gt_elems) != len(ma_elems):
-                warnings.warn("Answer lists have different lengths, returning False.", UserWarning)
+                warnings.warn(
+                    "Answer lists have different lengths, returning False.", UserWarning
+                )
                 return False
 
             comparisons = []

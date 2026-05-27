@@ -36,12 +36,12 @@ from tenacity import (
 )
 from tqdm import tqdm
 
-from examples.gaia.data import GaiaBenchmark
+from benchmarks.gaia.data import GaiaBenchmark
 
 load_dotenv()
 
 RUN_ID = uuid.uuid4()
-_log = get_logger("fedotmas.examples.gaia")
+_log = get_logger("fedotmas.benchmarks.gaia")
 DEFAULT_GAIA_MCP_SERVERS = [
     "websearch-searxng",
     "web-scraping",
@@ -528,7 +528,7 @@ def build_plugins(task, enable_langfuse: bool) -> list:
     ]
     if enable_langfuse:
         plugins.append(
-            LangfusePlugin(
+            LangfusePlugin(  # ty: ignore[invalid-argument-type]
                 trace_name=f"gaia:{RUN_ID}:{task.task_id}",
                 tags=["gaia", f"difficulty:{task.difficulty}"],
                 metadata={

@@ -22,6 +22,7 @@ from fedotmas.optimize._scoring import Scorer, ScoringResult
 from fedotmas.optimize._state import (
     Candidate,
     OptimizationState,
+    Split,
     Task,
     TaskResult,
     config_hash,
@@ -112,7 +113,7 @@ async def run_optimization(
     if seed is not None and not seed.scores:
         _log.info("Evaluating seed candidate on valset ({} tasks)", len(valset))
         eval_runs = await _evaluate_candidate(
-            maw, scorer, seed, valset, state, cfg, metrics_cb
+            maw, scorer, seed, valset, state, cfg, metrics_cb, split="val"
         )
         total_eval_runs += eval_runs
         state.update_pareto_front()
@@ -159,7 +160,12 @@ async def run_optimization(
         while not _should_stop():
             iteration += 1
             state.iteration = iteration
-            _log.info("--- Iteration {} ---", iteration)
+            _log.info(
+                "--- Iteration {} | {} ---",
+                iteration,
+                _format_progress(iteration, total_eval_runs, cfg),
+            )
+            _log.info("Pool: {}", _format_pool(state))
             dispatcher.on_iteration_start(iteration, state)
 
             eval_runs, consecutive_failures = await _run_loop_step(
@@ -237,6 +243,14 @@ def _setup_state(
         iteration = state.iteration
         return state, seed, iteration
 
+    if cp is None:
+        _log.info(
+            "Checkpointing disabled — set OptimizationConfig.checkpoint_path "
+            "to enable resume on failure for long runs."
+        )
+    else:
+        _log.info("Checkpoint path set, will write state to {} after each iteration", cp)
+
     state = OptimizationState()
     seed = state.add_candidate(seed_config, origin="seed")
     return state, seed, 0
@@ -272,9 +286,18 @@ async def _run_iteration(
     )
 
     runs = await _evaluate_candidate(
-        ctx.maw, ctx.scorer, parent, batch, state, cfg, ctx.metrics_cb
+        ctx.maw, ctx.scorer, parent, batch, state, cfg, ctx.metrics_cb,
+        split="train",
     )
     eval_runs += runs
+
+    batch_inputs = {t.input for t in batch}
+    if _mean_score_on(parent, batch_inputs) >= 1.0:
+        _log.info(
+            "Skipping iteration: parent #{} already perfect on minibatch",
+            parent.index,
+        )
+        return eval_runs, False, consecutive_failures
 
     try:
         new_config = await ctx.mutator.mutate(parent, components, batch)
@@ -310,12 +333,12 @@ async def _run_iteration(
         new_config, parent_index=parent.index, origin="mutation"
     )
     runs = await _evaluate_candidate(
-        ctx.maw, ctx.scorer, child, batch, state, cfg, ctx.metrics_cb
+        ctx.maw, ctx.scorer, child, batch, state, cfg, ctx.metrics_cb,
+        split="train",
     )
     eval_runs += runs
     ctx.dispatcher.on_candidate_evaluated(child, batch)
 
-    batch_inputs = {t.input for t in batch}
     parent_batch_score = _mean_score_on(parent, batch_inputs)
     child_batch_score = _mean_score_on(child, batch_inputs)
 
@@ -330,7 +353,8 @@ async def _run_iteration(
         ctx.dispatcher.on_candidate_accepted(child, parent)
 
         runs = await _evaluate_candidate(
-            ctx.maw, ctx.scorer, child, ctx.valset, state, cfg, ctx.metrics_cb
+            ctx.maw, ctx.scorer, child, ctx.valset, state, cfg, ctx.metrics_cb,
+            split="val",
         )
         eval_runs += runs
         state.update_pareto_front()
@@ -343,6 +367,7 @@ async def _run_iteration(
             parent_batch_score,
         )
         ctx.dispatcher.on_candidate_rejected(child, parent)
+        state.remove_candidate(child.index)
         return eval_runs, False, consecutive_failures
 
 
@@ -419,7 +444,8 @@ async def _try_merge(ctx: _LoopContext) -> _MergeResult:
         origin="merge",
     )
     runs = await _evaluate_candidate(
-        ctx.maw, ctx.scorer, merged, ctx.valset, state, cfg, ctx.metrics_cb
+        ctx.maw, ctx.scorer, merged, ctx.valset, state, cfg, ctx.metrics_cb,
+        split="val",
     )
     eval_runs += runs
     ctx.dispatcher.on_candidate_evaluated(merged, ctx.valset)
@@ -445,6 +471,7 @@ async def _try_merge(ctx: _LoopContext) -> _MergeResult:
             parent_best,
         )
         ctx.dispatcher.on_candidate_rejected(merged, pair[0])
+        state.remove_candidate(merged.index)
         return _MergeResult(eval_runs=eval_runs, attempted=True)
 
 
@@ -464,10 +491,13 @@ def _build_result(
         raise RuntimeError("No candidates were evaluated")
 
     _log.info(
-        "Optimization complete | iterations={} candidates={} best_score={:.3f}",
+        "Optimization complete | iterations={} candidates={} best=#{} ({}) best_score={:.3f} eval_count={}",
         iteration,
         len(state.candidates),
+        best.index,
+        best.origin,
         best.mean_score or 0.0,
+        len(best.scores),
     )
 
     result = OptimizationResult(
@@ -492,13 +522,15 @@ async def _evaluate_candidate(
     state: OptimizationState,
     config: OptimizationConfig,
     metrics_cb: MetricsCallback | None = None,
+    *,
+    split: Split,
 ) -> int:
     """Returns number of new evaluation runs performed."""
     tasks_to_run: list[Task] = []
     for task in tasks:
         cached = state.cache.get(candidate.config_hash, task.input)
         if cached is not None:
-            state.record_task_result(candidate, cached)
+            state.record_task_result(candidate, cached, split=split)
             if metrics_cb is not None:
                 metrics_cb.metrics.cache_hits += 1
         else:
@@ -509,11 +541,14 @@ async def _evaluate_candidate(
     if not tasks_to_run:
         return 0
 
+    sem = asyncio.Semaphore(max(1, config.eval_concurrency))
+
+    async def _bounded(task: Task) -> ControlledRun:
+        async with sem:
+            return await Controller(maw).run(task.input, config=candidate.config)
+
     runs: list[ControlledRun | BaseException] = await asyncio.gather(
-        *[
-            Controller(maw).run(task.input, config=candidate.config)
-            for task in tasks_to_run
-        ],
+        *[_bounded(task) for task in tasks_to_run],
         return_exceptions=True,
     )
 
@@ -531,7 +566,7 @@ async def _evaluate_candidate(
                 expected=task.expected,
                 error=True,
             )
-            state.record_task_result(candidate, result)
+            state.record_task_result(candidate, result, split=split)
             if consecutive_errors >= max_failures:
                 _log.warning(
                     "Skipping remaining tasks after {} consecutive failures",
@@ -560,13 +595,55 @@ async def _evaluate_candidate(
                     expected=task.expected,
                     error=True,
                 )
-        state.record_task_result(candidate, result)
+        state.record_task_result(candidate, result, split=split)
 
     return len(tasks_to_run)
 
 
+def _format_progress(
+    iteration: int, total_eval_runs: int, cfg: OptimizationConfig
+) -> str:
+    """Compact progress string for iteration banner.
+
+    Shows ``iter X/Y`` and/or ``evals X/Y (pct%)`` depending on which
+    budgets are configured. With no budgets, falls back to raw counters.
+    """
+    parts: list[str] = []
+    if cfg.max_iterations is not None:
+        parts.append(
+            f"iter {iteration}/{cfg.max_iterations} "
+            f"({iteration / cfg.max_iterations:.0%})"
+        )
+    if cfg.max_evaluations is not None:
+        parts.append(
+            f"evals {total_eval_runs}/{cfg.max_evaluations} "
+            f"({total_eval_runs / cfg.max_evaluations:.0%})"
+        )
+    if not parts:
+        parts.append(f"evals {total_eval_runs}")
+    return " | ".join(parts)
+
+
+def _format_pool(state: OptimizationState) -> str:
+    """One-line summary of all candidates with val mean_score; ★ marks Pareto."""
+    parts: list[str] = []
+    for c in state.candidates:
+        score = c.mean_score
+        score_str = f"{score:.3f}" if score is not None else "-"
+        marker = "★" if c.on_pareto_front else ""
+        parts.append(f"#{c.index}{marker}={score_str}")
+    return "[" + " ".join(parts) + "]"
+
+
 def _mean_score_on(candidate: Candidate, tasks: set[str]) -> float:
-    scores = [candidate.scores[t] for t in tasks if t in candidate.scores]
+    """Mean score of candidate on a minibatch (uses train_scores).
+
+    Used for accept/reject decisions where the minibatch is freshly evaluated
+    train tasks, recorded into ``candidate.train_scores``.
+    """
+    scores = [
+        candidate.train_scores[t] for t in tasks if t in candidate.train_scores
+    ]
     if not scores:
         return 0.0
     return sum(scores) / len(scores)

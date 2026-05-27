@@ -148,7 +148,7 @@ class LangfusePlugin(BasePlugin):
         return self._trace
 
     def _get_agent_name(self, callback_context: CallbackContext) -> str:
-        return callback_context._invocation_context.agent.name
+        return callback_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
 
     def _get_parent_span(self, callback_context: CallbackContext) -> Any:
         """Find the parent span for the current agent using the branch hierarchy."""
@@ -167,7 +167,7 @@ class LangfusePlugin(BasePlugin):
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
     ) -> Optional[types.Content]:
-        root_name = invocation_context.agent.name
+        root_name = invocation_context.agent.name  # ty: ignore[unresolved-attribute]
         trace = self._ensure_trace(root_name)
         self._run_span = trace.start_observation(
             name=f"run:{root_name}",

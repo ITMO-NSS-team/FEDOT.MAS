@@ -7,32 +7,51 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from fedotmas._settings import ModelConfig
+from fedotmas._settings import DEFAULT_META_MODEL, ModelConfig
 from fedotmas.maw.builder import (
     _inject_exit_loop,
     _resolve_llm,
     build,
 )
-from fedotmas.maw.models import MAWAgentConfig, MAWConfig
+from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 
 
 # ---- Rules 1-3: text normalization (via MAWAgentConfig model_validator) ----
 
 
 class TestNormalizeAngleBrackets:
-    """Rule 1: <var> → {var} (via MAWAgentConfig)."""
+    """Rule 1: <state_key> → {state_key?} (via MAWConfig, context-aware)."""
 
-    def _make(self, instruction: str) -> MAWAgentConfig:
-        return MAWAgentConfig(name="t", instruction=instruction, output_key="k")
+    def _build(self, instruction: str, extra_keys: list[str] = []) -> str:
+        agents = [
+            MAWAgentConfig(name=f"a{i}", instruction="x", output_key=k)
+            for i, k in enumerate(extra_keys)
+        ]
+        agents.append(MAWAgentConfig(name="t", instruction=instruction, output_key="k"))
+        cfg = MAWConfig(
+            agents=agents,
+            pipeline=MAWStepConfig(
+                type="sequential",
+                children=[
+                    MAWStepConfig(type="agent", agent_name=a.name) for a in agents
+                ],
+            ),
+        )
+        return cfg.agents[-1].instruction
 
     def test_single_var(self):
-        assert self._make("<var>").instruction == "{var?}"
+        # user_query is always in state_keys
+        assert self._build("<user_query>") == "{user_query?}"
 
     def test_multiple_vars(self):
-        assert self._make("<a> and <b>").instruction == "{a?} and {b?}"
+        assert self._build("<a> and <b>", extra_keys=["a", "b"]) == "{a?} and {b?}"
 
     def test_no_vars(self):
-        assert self._make("plain text").instruction == "plain text"
+        assert self._build("plain text") == "plain text"
+
+    def test_unknown_key_preserved(self):
+        # Unknown keys (likely XML tags) are not rewritten.
+        assert self._build("<unknown>") == "<unknown>"
 
 
 class TestMakeVarsOptional:
@@ -56,15 +75,29 @@ class TestMakeVarsOptional:
 
 
 class TestAngleThenOptionalCombo:
-    """Rule 3: <var> → {var} → {var?} chain (via MAWAgentConfig)."""
+    """Rule 3: <key> → {key} → {key?} chain (via MAWConfig, context-aware)."""
 
     def test_chain(self):
-        cfg = MAWAgentConfig(
-            name="t",
-            instruction="Process <input> and <context>",
-            output_key="k",
+        cfg = MAWConfig(
+            agents=[
+                MAWAgentConfig(name="a", instruction="x", output_key="input"),
+                MAWAgentConfig(name="b", instruction="x", output_key="context"),
+                MAWAgentConfig(
+                    name="t",
+                    instruction="Process <input> and <context>",
+                    output_key="k",
+                ),
+            ],
+            pipeline=MAWStepConfig(
+                type="sequential",
+                children=[
+                    MAWStepConfig(type="agent", agent_name="a"),
+                    MAWStepConfig(type="agent", agent_name="b"),
+                    MAWStepConfig(type="agent", agent_name="t"),
+                ],
+            ),
         )
-        assert cfg.instruction == "Process {input?} and {context?}"
+        assert cfg.agents[-1].instruction == "Process {input?} and {context?}"
 
 
 # ---- Rules 4-5: model normalization (via MAWAgentConfig) ----
@@ -79,7 +112,7 @@ class TestNormalizeModelNameDefault:
 
     def test_resolve_none_gives_default(self):
         result = _resolve_llm(None, None)
-        assert result == "openai/gpt-oss-120b"
+        assert result == DEFAULT_META_MODEL
 
 
 class TestNormalizeModelNamePrefix:

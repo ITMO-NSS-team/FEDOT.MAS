@@ -1,0 +1,39 @@
+{
+  "agents": [
+    {
+      "name": "retriever",
+      "instruction": "Read the 10 numbered Wikipedia paragraphs and the question. Identify which paragraphs contain information needed to answer the question, ignoring distractors. Output the numbers of the relevant paragraphs as a comma‑separated list.",
+      "model": "openai/gpt-oss-120b",
+      "output_key": "relevant_paragraphs",
+      "tools": [],
+      "max_output_tokens": 200
+    },
+    {
+      "name": "reasoner",
+      "instruction": "Using only the paragraphs whose numbers appear in {relevant_paragraphs?} from the original input (which includes the 10 paragraphs and the question in {user_query?}), perform the required multi‑hop reasoning and output a short factual answer—just the answer itself, no explanation.",
+      "model": "openai/gpt-oss-120b",
+      "output_key": "final_answer",
+      "tools": [],
+      "max_output_tokens": 200
+    }
+  ],
+  "pipeline": {
+    "type": "sequential",
+    "agent_name": null,
+    "children": [
+      {
+        "type": "agent",
+        "agent_name": "retriever",
+        "children": [],
+        "max_iterations": 1
+      },
+      {
+        "type": "agent",
+        "agent_name": "reasoner",
+        "children": [],
+        "max_iterations": 1
+      }
+    ],
+    "max_iterations": 1
+  }
+}

@@ -7,16 +7,17 @@ from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgen
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.models.base_llm import BaseLlm
 from google.adk.tools.exit_loop_tool import exit_loop
+from google.genai import types as genai_types
 
-from fedotmas.common.logging import get_logger
 from fedotmas._settings import (
     DEFAULT_META_MODEL,
     ModelConfig,
     get_max_loop_iterations,
 )
 from fedotmas.common.llm import make_llm
-from fedotmas.mcp import MCPServerConfig, create_toolset
+from fedotmas.common.logging import get_logger
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
+from fedotmas.mcp import MCPServerConfig, create_toolset
 
 AgentTree: TypeAlias = BaseAgent
 
@@ -111,12 +112,18 @@ def _build_llm_agent(
 
     model = _resolve_llm(cfg.model, worker_models)
     _log.debug("Built agent | name={} model={}", cfg.name, model)
+    kwargs: dict = {}
+    if cfg.max_output_tokens is not None:
+        kwargs["generate_content_config"] = genai_types.GenerateContentConfig(
+            max_output_tokens=cfg.max_output_tokens,
+        )
     return LlmAgent(
         name=cfg.name,
         model=model,
         instruction=cfg.instruction,
         output_key=cfg.output_key,
         tools=tools,
+        **kwargs,
     )
 
 

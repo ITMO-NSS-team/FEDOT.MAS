@@ -227,7 +227,7 @@ def main() -> None:
         "run_dir",
         nargs="?",
         type=Path,
-        help="Path to examples/gaia/gaia_logs/run_<uuid>. Defaults to latest run.",
+        help="Path to benchmarks/gaia/gaia_logs/run_<uuid>. Defaults to latest run.",
     )
     parser.add_argument(
         "--json",
