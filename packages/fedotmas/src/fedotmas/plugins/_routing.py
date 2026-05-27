@@ -89,7 +89,6 @@ class _Pending:
     outcome: RoutingOutcome
     query: str
     tools: tuple[str, ...]
-    original_model: str | None
 
 
 class LLMRoutingPlugin(BasePlugin):
@@ -132,11 +131,10 @@ class LLMRoutingPlugin(BasePlugin):
         super().__init__(name="fedotmas_routing")
         self._pool = pool
         self._store: ExperienceStore = store or SQLiteExperienceStore(db_path)
-        self._embedder = embedder or Embedder()
         self._router = Router(
             pool=pool,
             store=self._store,
-            embedder=self._embedder,
+            embedder=embedder or Embedder(),
             weights=weights or Weights(),
             cold_start_threshold=cold_start_threshold,
             sim_threshold=sim_threshold,
@@ -145,7 +143,9 @@ class LLMRoutingPlugin(BasePlugin):
         # (trace_id, agent_name) → state stashed in before_model_callback,
         # consumed in after_model_callback / on_model_error_callback.
         # Keyed by both because parallel agents in the same trace would
-        # otherwise race on a shared agent_name slot.
+        # otherwise race on a shared agent_name slot. Cleared per-trace
+        # in after_run_callback so an unpaired before-hook (cancel,
+        # crash in another plugin) doesn't leak across runs.
         self._pending: dict[tuple[str, str], _Pending] = {}
         self._step_counter: dict[str, int] = {}
 
@@ -173,11 +173,28 @@ class LLMRoutingPlugin(BasePlugin):
 
     # ── Run lifecycle ──────────────────────────────────────────────
 
-    async def before_run_callback(
+    async def after_run_callback(
         self, *, invocation_context: InvocationContext
-    ) -> Optional[types.Content]:
-        self._step_counter[invocation_context.invocation_id] = 0
-        return None
+    ) -> None:
+        """Clear per-trace state. Warns when a ``before_model_callback``
+        from this trace never received a matching ``after`` or ``error``
+        — the LLM call's record was never appended, so it's data loss
+        worth surfacing."""
+        trace_id = invocation_context.invocation_id
+        self._step_counter.pop(trace_id, None)
+        orphans = [
+            (t, a) for (t, a) in self._pending if t == trace_id
+        ]
+        for key in orphans:
+            self._pending.pop(key, None)
+        if orphans:
+            _log.warning(
+                "Discarded {} orphan pending routing record(s) at run end | "
+                "trace_id={} agents={}",
+                len(orphans),
+                trace_id,
+                [a for _, a in orphans],
+            )
 
     # ── Model lifecycle ────────────────────────────────────────────
 
@@ -189,6 +206,11 @@ class LLMRoutingPlugin(BasePlugin):
             return None
 
         trace_id = callback_context._invocation_context.invocation_id
+        # TODO(phase-5): contents[-1] is often the same user task across
+        # all agents in a MAW pipeline — they're differentiated by
+        # config.system_instruction, not by user content. Routing
+        # retrieval by similarity is uninformative until we mix the
+        # system instruction into the query string.
         query = _last_user_text(llm_request.contents)
         tools = _tools_from_request(llm_request)
 
@@ -208,14 +230,27 @@ class LLMRoutingPlugin(BasePlugin):
             )
             return None
 
-        original_model = llm_request.model
+        key = (trace_id, agent_name)
+        if key in self._pending:
+            # ADK normally pairs before/after per agent call, but a retry
+            # loop inside one agent.run() could re-enter before the
+            # earlier response surfaced. We'd silently lose that record;
+            # warn so it shows up in logs.
+            _log.warning(
+                "Overwriting unconsumed pending routing record | "
+                "trace_id={} agent={} prev_model={} new_model={}",
+                trace_id,
+                agent_name,
+                self._pending[key].outcome.decision.chosen_model,
+                outcome.decision.chosen_model,
+            )
+
         llm_request.model = outcome.decision.chosen_model
-        self._pending[(trace_id, agent_name)] = _Pending(
+        self._pending[key] = _Pending(
             t0=time.monotonic(),
             outcome=outcome,
             query=query,
             tools=tools,
-            original_model=original_model,
         )
         _log.debug(
             "Routed | agent={} chosen={} cold_start={} retrieved={}",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -84,6 +85,22 @@ def _make_invocation_ctx(trace_id: str, agent_name: str = "root") -> MagicMock:
         invocation_id=trace_id,
         agent=SimpleNamespace(name=agent_name),
     )
+
+
+def _capture_warnings(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Capture loguru warning messages from the routing plugin. pytest's
+    ``caplog`` only sees stdlib ``logging`` records, but the plugin
+    uses loguru, so we mock ``_log.warning`` directly."""
+    import fedotmas.plugins._routing as routing_mod
+
+    messages: list[str] = []
+
+    def fake_warning(template: str, *args, **kwargs) -> None:
+        # Render the loguru "{}" template the same way loguru would.
+        messages.append(template.format(*args, **kwargs))
+
+    monkeypatch.setattr(routing_mod._log, "warning", fake_warning)
+    return messages
 
 
 def _make_request(model: str, *, query: str = "what is 2+2?") -> LlmRequest:
@@ -204,9 +221,6 @@ class TestAfterModelCallback:
     @pytest.mark.asyncio
     async def test_step_idx_increments_per_trace(self, pool, store, embedder):
         plugin = _make_plugin(pool, store, embedder)
-        await plugin.before_run_callback(
-            invocation_context=_make_invocation_ctx("t-multi")
-        )
 
         for _ in range(3):
             ctx = _make_callback_ctx(trace_id="t-multi", agent_name="researcher")
@@ -260,27 +274,33 @@ class TestOnModelErrorCallback:
 
 class TestParallelAgents:
     @pytest.mark.asyncio
-    async def test_per_trace_per_agent_keying(self, pool, store, embedder):
-        plugin = _make_plugin(pool, store, embedder)
+    async def test_concurrent_agents_keyed_independently(self, pool, store):
+        # Embedder with a real await suspension point so the two
+        # before-hooks actually interleave under asyncio.gather rather
+        # than running to completion sequentially.
+        async def slow_embed(_model: str, _text: str) -> np.ndarray:
+            await asyncio.sleep(0)
+            return _FIXED_EMB
+
+        plugin = _make_plugin(
+            pool, store, Embedder(model="fake", embed_fn=slow_embed)
+        )
         a_ctx = _make_callback_ctx(trace_id="t1", agent_name="alpha")
         b_ctx = _make_callback_ctx(trace_id="t1", agent_name="beta")
         a_req = _make_request("openai/original", query="alpha-query")
         b_req = _make_request("openai/original", query="beta-query")
 
-        # Two before-hooks interleave before either after-hook fires.
-        await plugin.before_model_callback(callback_context=a_ctx, llm_request=a_req)
-        await plugin.before_model_callback(callback_context=b_ctx, llm_request=b_req)
+        await asyncio.gather(
+            plugin.before_model_callback(callback_context=a_ctx, llm_request=a_req),
+            plugin.before_model_callback(callback_context=b_ctx, llm_request=b_req),
+        )
 
-        # Both pending slots populated, keyed independently.
         assert ("t1", "alpha") in plugin._pending
         assert ("t1", "beta") in plugin._pending
 
-        # After-hooks complete in reverse order.
-        await plugin.after_model_callback(
-            callback_context=b_ctx, llm_response=_make_response()
-        )
-        await plugin.after_model_callback(
-            callback_context=a_ctx, llm_response=_make_response()
+        await asyncio.gather(
+            plugin.after_model_callback(callback_context=b_ctx, llm_response=_make_response()),
+            plugin.after_model_callback(callback_context=a_ctx, llm_response=_make_response()),
         )
 
         records = store.retrieve(
@@ -291,6 +311,77 @@ class TestParallelAgents:
         by_agent = {r.agent_role: r for r in records}
         assert by_agent["alpha"].query == "alpha-query"
         assert by_agent["beta"].query == "beta-query"
+
+
+# ─── Re-entrancy ──────────────────────────────────────────────────────
+
+
+class TestReentrancy:
+    @pytest.mark.asyncio
+    async def test_overwriting_pending_logs_warning(
+        self, pool, store, embedder, monkeypatch
+    ):
+        plugin = _make_plugin(pool, store, embedder)
+        ctx = _make_callback_ctx(trace_id="t1", agent_name="researcher")
+        req = _make_request("openai/original")
+        warnings = _capture_warnings(monkeypatch)
+
+        await plugin.before_model_callback(callback_context=ctx, llm_request=req)
+        await plugin.before_model_callback(callback_context=ctx, llm_request=req)
+
+        assert any(
+            "Overwriting unconsumed pending routing record" in m
+            for m in warnings
+        )
+        # Only the second pending remains; the first is lost (the
+        # warning is the user-facing surface for that data loss).
+        assert len(plugin._pending) == 1
+
+
+# ─── after_run_callback cleanup ───────────────────────────────────────
+
+
+class TestAfterRunCleanup:
+    @pytest.mark.asyncio
+    async def test_clears_step_counter_and_orphans(
+        self, pool, store, embedder, monkeypatch
+    ):
+        plugin = _make_plugin(pool, store, embedder)
+        ctx = _make_callback_ctx(trace_id="t1", agent_name="researcher")
+        req = _make_request("openai/original")
+        warnings = _capture_warnings(monkeypatch)
+
+        # before fires, after never does → orphan pending entry.
+        await plugin.before_model_callback(callback_context=ctx, llm_request=req)
+        plugin._step_counter["t1"] = 5
+        assert ("t1", "researcher") in plugin._pending
+
+        await plugin.after_run_callback(
+            invocation_context=_make_invocation_ctx("t1")
+        )
+
+        assert plugin._pending == {}
+        assert "t1" not in plugin._step_counter
+        assert any("orphan pending routing record" in m for m in warnings)
+
+    @pytest.mark.asyncio
+    async def test_does_not_touch_other_traces(self, pool, store, embedder):
+        plugin = _make_plugin(pool, store, embedder)
+        ctx1 = _make_callback_ctx(trace_id="t1", agent_name="researcher")
+        ctx2 = _make_callback_ctx(trace_id="t2", agent_name="researcher")
+        await plugin.before_model_callback(
+            callback_context=ctx1, llm_request=_make_request("openai/original")
+        )
+        await plugin.before_model_callback(
+            callback_context=ctx2, llm_request=_make_request("openai/original")
+        )
+
+        await plugin.after_run_callback(
+            invocation_context=_make_invocation_ctx("t1")
+        )
+
+        assert ("t1", "researcher") not in plugin._pending
+        assert ("t2", "researcher") in plugin._pending
 
 
 # ─── commit_task_score ────────────────────────────────────────────────
