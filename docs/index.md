@@ -244,3 +244,4 @@ The coordinator reads worker descriptions and decides that `billing_agent` is th
 
 * [Meta-debugger](debugger.md) - automatic recovery from agent failures
 * [Optimizer](optimizer.md) - evolutionary optimization of agent prompts
+* [Langfuse observability](langfuse.md) - full execution traces via the `LangfusePlugin`
