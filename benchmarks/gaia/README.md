@@ -14,10 +14,16 @@ Fill in `.env`:
 
 ```
 HF_TOKEN=hf_...          # Hugging Face token (required to download GAIA)
-OPENAI_API_KEY=sk-or-... # OpenRouter or OpenAI key
-OPENAI_BASE_URL=https://openrouter.ai/api/v1
+OPENAI_API_KEY=...       # key/base URL used by the meta-agent
+OPENAI_BASE_URL=...
+OPENROUTER_API_KEY=sk-or-... # used by GAIA worker agents
 SEARXNG_URL=http://localhost:8888  # if SearXNG runs on a non-default port
 ```
+
+GAIA worker agents use `openai/gpt-5-mini` through OpenRouter by default. Override
+with `FEDOTMAS_GAIA_WORKER_MODEL`, `FEDOTMAS_GAIA_WORKER_BASE_URL`, or
+`FEDOTMAS_GAIA_WORKER_API_KEY` if needed. The meta-agent model is configured
+separately via the usual `FEDOTMAS_META_AGENT_MODEL` / `OPENAI_*` settings.
 
 ### Run
 
@@ -41,7 +47,7 @@ just gaia-resume 3
 Or directly:
 
 ```sh
-uv run python examples/gaia/run_gaia.py --difficulty 1 --split "validation[:10]"
+uv run python benchmarks/gaia/run_gaia.py --difficulty 1 --split "validation[:10]"
 ```
 
 ### Arguments
@@ -64,7 +70,7 @@ just searxng-start   # runs on http://localhost:18888 by default
 
 ## Results
 
-Each run saves results under `examples/gaia/gaia_logs/run_<uuid>/`:
+Each run saves results under `benchmarks/gaia/gaia_logs/run_<uuid>/`:
 
 ```
 run_<uuid>/

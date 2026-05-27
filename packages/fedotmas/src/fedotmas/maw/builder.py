@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import itertools
-from typing import TypeAlias
+from typing import Any, TypeAlias, cast
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
@@ -9,15 +9,15 @@ from google.adk.models.base_llm import BaseLlm
 from google.adk.tools.exit_loop_tool import exit_loop
 from google.genai import types as genai_types
 
-from fedotmas.common.logging import get_logger
 from fedotmas._settings import (
     DEFAULT_META_MODEL,
     ModelConfig,
     get_max_loop_iterations,
 )
 from fedotmas.common.llm import make_llm
-from fedotmas.mcp import MCPServerConfig, create_toolset
+from fedotmas.common.logging import get_logger
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
+from fedotmas.mcp import MCPServerConfig, create_toolset
 
 AgentTree: TypeAlias = BaseAgent
 
@@ -134,7 +134,7 @@ def _inject_exit_loop(children: list[BaseAgent]) -> None:
             if agent.tools is None:
                 agent.tools = [exit_loop]
             elif exit_loop not in agent.tools:
-                agent.tools.append(exit_loop)  # type: ignore[arg-type]
+                agent.tools.append(cast(Any, exit_loop))
             _log.debug("Injected exit_loop into agent={}", agent.name)
             break
 

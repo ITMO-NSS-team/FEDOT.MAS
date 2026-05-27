@@ -157,6 +157,31 @@ class TestOnEventCallback:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_successful_tool_response_with_is_error_false_is_not_warning(
+        self, monkeypatch
+    ):
+        plugin = LoggingPlugin()
+        event = FakeEvent(
+            _function_responses=[
+                FakeFunctionResponse(
+                    name="run_command",
+                    response={"isError": False, "content": "no error"},
+                )
+            ]
+        )
+        inv_ctx = MagicMock()
+        warning = MagicMock()
+        info = MagicMock()
+        monkeypatch.setattr("fedotmas.plugins._logging._log.warning", warning)
+        monkeypatch.setattr("fedotmas.plugins._logging._log.info", info)
+
+        result = await plugin.on_event_callback(invocation_context=inv_ctx, event=event)
+
+        assert result is None
+        warning.assert_not_called()
+        info.assert_any_call("Tool result | agent={} tool={}", "agent", "run_command")
+
+    @pytest.mark.asyncio
     async def test_token_usage_logged(self):
         plugin = LoggingPlugin()
         event = FakeEvent(

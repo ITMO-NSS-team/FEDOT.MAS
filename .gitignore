@@ -197,3 +197,8 @@ cython_debug/
 
 # ADK meta
 .adk/
+
+mcp-servers/download/downloads
+benchmarks/gaia/gaia_data/
+benchmarks/gaia/gaia_logs/
+maw_runs/

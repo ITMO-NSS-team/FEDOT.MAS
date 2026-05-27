@@ -125,9 +125,7 @@ class TestModelValidation:
 
     def test_bare_model_rejected(self):
         with pytest.raises(ValidationError, match="must include a provider prefix"):
-            MAWAgentConfig(
-                name="a", instruction="x", output_key="k1", model="gpt-4o"
-            )
+            MAWAgentConfig(name="a", instruction="x", output_key="k1", model="gpt-4o")
 
     def test_prefixed_model_accepted(self):
         cfg = MAWAgentConfig(
@@ -140,12 +138,84 @@ class TestModelValidation:
         assert cfg.model is None
 
 
-class TestAgentNameChildrenConflict:
-    """Rule 10: agent_name + children together → ValueError."""
+class TestInstructionNormalization:
+    """Rule 10: state references are normalized without corrupting XML tags."""
 
-    def test_agent_name_and_children_rejected(self):
+    def test_curly_state_reference_becomes_optional(self):
+        cfg = MAWAgentConfig(
+            name="a",
+            instruction="Use {research_result} to answer.",
+            output_key="k1",
+        )
+        assert cfg.instruction == "Use {research_result?} to answer."
+
+    def test_solution_tags_are_preserved(self):
+        cfg = MAWAgentConfig(
+            name="a",
+            instruction="Return only <solution>answer</solution>.",
+            output_key="k1",
+        )
+        assert cfg.instruction == "Return only <solution>answer</solution>."
+
+    def test_known_angle_state_reference_becomes_optional_in_config(self):
+        cfg = MAWConfig(
+            agents=[
+                {
+                    "name": "a",
+                    "instruction": "Use <user_query> and <research_result>.",
+                    "output_key": "research_result",
+                },
+            ],
+            pipeline={"type": "agent", "agent_name": "a"},
+        )
+        assert cfg.agents[0].instruction == "Use {user_query?} and {research_result?}."
+
+    def test_solution_tags_are_preserved_in_config(self):
+        cfg = MAWConfig(
+            agents=[
+                {
+                    "name": "a",
+                    "instruction": "Return only <solution>answer</solution>.",
+                    "output_key": "solution",
+                },
+            ],
+            pipeline={"type": "agent", "agent_name": "a"},
+        )
+        assert cfg.agents[0].instruction == "Return only <solution>answer</solution>."
+
+
+class TestAgentNameChildrenConflict:
+    """Rule 11: ambiguous agent_name + children handling."""
+
+    def test_untyped_agent_name_and_children_rejected(self):
         with pytest.raises(ValidationError, match="Cannot specify both"):
             MAWStepConfig(
                 agent_name="a",
                 children=[MAWStepConfig(type="agent", agent_name="b")],
             )
+
+    def test_typed_sequential_drops_agent_name(self):
+        step = MAWStepConfig.model_validate(
+            {
+                "type": "sequential",
+                "agent_name": "ignored",
+                "children": [{"type": "agent", "agent_name": "a"}],
+                "max_iterations": 0,
+            }
+        )
+        assert step.type == "sequential"
+        assert step.agent_name is None
+        assert step.max_iterations is None
+        assert step.children[0].agent_name == "a"
+
+    def test_typed_agent_drops_children(self):
+        step = MAWStepConfig.model_validate(
+            {
+                "type": "agent",
+                "agent_name": "a",
+                "children": [{"type": "agent", "agent_name": "ignored"}],
+            }
+        )
+        assert step.type == "agent"
+        assert step.agent_name == "a"
+        assert step.children == []

@@ -116,9 +116,7 @@ class MAWAgentConfig(BaseModel):
     def _normalize_fields(self) -> MAWAgentConfig:
         validate_model_name(self.model)
 
-        # Normalize instruction: <var> → {var} → {var?}
-        instr = _ANGLE_VAR_RE.sub(r"{\1}", self.instruction)
-        self.instruction = _STATE_VAR_RE.sub(r"{\1?}", instr)
+        self.instruction = _normalize_curly_state_refs(self.instruction)
         return self
 
 
@@ -142,10 +140,22 @@ class MAWStepConfig(BaseModel):
         """Auto-fill missing ``type`` based on other fields present."""
         if not isinstance(data, dict):
             return data
-        if data.get("agent_name") and data.get("children"):
+        data = dict(data)  # avoid mutating the original
+        node_type = data.get("type")
+
+        # Trust the explicit node type and discard impossible
+        # branch fields instead of retrying the whole meta-agent call
+        if node_type == "agent":
+            data.pop("children", None)
+            data.pop("max_iterations", None)
+        elif node_type in {"sequential", "parallel"}:
+            data.pop("agent_name", None)
+            data.pop("max_iterations", None)
+        elif node_type == "loop":
+            data.pop("agent_name", None)
+        elif data.get("agent_name") and data.get("children"):
             raise ValueError("Cannot specify both 'agent_name' and 'children'")
-        if "type" not in data:
-            data = dict(data)  # avoid mutating the original
+        elif "type" not in data:
             if data.get("agent_name"):
                 data["type"] = "agent"
             elif data.get("children"):
@@ -229,6 +239,12 @@ class MAWConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_config(self) -> MAWConfig:
         agent_names = {a.name for a in self.agents}
+        state_keys = {"user_query"} | {a.output_key for a in self.agents}
+        for agent in self.agents:
+            agent.instruction = _normalize_angle_state_refs(
+                agent.instruction,
+                state_keys,
+            )
 
         if len(self.agents) == 1:
             auto_fill_agent_name(self.pipeline, self.agents[0].name)
@@ -255,3 +271,22 @@ class MAWConfig(BaseModel):
         warn_terminal_parallel(self.pipeline)
 
         return self
+
+
+def _normalize_curly_state_refs(instruction: str) -> str:
+    """Normalize ADK state references to optional lookups."""
+    return _STATE_VAR_RE.sub(r"{\1?}", instruction)
+
+
+def _normalize_angle_state_refs(instruction: str, state_keys: set[str]) -> str:
+    """Convert legacy <state_key> references without corrupting XML tags."""
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key not in state_keys:
+            return match.group(0)
+        if f"</{key}>" in instruction:
+            return match.group(0)
+        return f"{{{key}?}}"
+
+    return _normalize_curly_state_refs(_ANGLE_VAR_RE.sub(replace, instruction))

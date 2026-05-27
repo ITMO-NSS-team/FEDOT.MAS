@@ -16,7 +16,7 @@ Analyze and transcribe media files (audio, images, video) using multimodal LLMs.
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | required | API key for the LLM provider |
 | `OPENAI_BASE_URL` | optional | Custom API endpoint |
-| `MEDIA_MODEL` | optional | Default model for all media tasks (default: `google/gemini-2.5-flash`) |
+| `MEDIA_MODEL` | optional | Default model for all media tasks (default: `google/gemini-3-flash-preview`) |
 | `MEDIA_AUDIO_MODEL` | optional | Override model for audio transcription |
 | `MEDIA_IMAGE_MODEL` | optional | Override model for image analysis |
 | `MEDIA_VIDEO_MODEL` | optional | Override model for video analysis |

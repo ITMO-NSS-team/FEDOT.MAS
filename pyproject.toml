@@ -11,7 +11,7 @@ classifiers = [
 ]
 dependencies = [
   "fedotmas",
-  "fedotmas-synapse",
+  "langfuse>=4.3.1",
 ]
 
 [dependency-groups]
@@ -26,15 +26,14 @@ docs = [
   "zensical>=0.0.28",
 ]
 gaia = [
-  "datasets>=3.0",
+  "datasets>=3",
   "huggingface-hub>=0.30",
-  "tenacity>=9.0",
-  "tqdm>=4.0",
+  "tenacity>=9",
+  "tqdm>=4",
 ]
 
 [tool.uv]
 sources.fedotmas = { workspace = true }
-sources.fedotmas-synapse = { workspace = true }
 package = false
 workspace.members = [ "packages/*" ]
 
@@ -45,7 +44,6 @@ exclude = [ "**/tests/**" ]
 ini_options.asyncio_mode = "auto"
 ini_options.testpaths = [
   "packages/fedotmas/tests",
-  "packages/fedotmas-synapse/tests",
 ]
 
 [tool.ty]

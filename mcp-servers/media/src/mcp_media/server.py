@@ -11,7 +11,7 @@ from pydantic_ai.messages import AudioUrl, BinaryContent, ImageUrl, VideoUrl
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-_DEFAULT_MODEL = os.getenv("MEDIA_MODEL", "google/gemini-2.5-flash")
+_DEFAULT_MODEL = os.getenv("MEDIA_MODEL", "google/gemini-3-flash-preview")
 _AUDIO_MODEL = os.getenv("MEDIA_AUDIO_MODEL", _DEFAULT_MODEL)
 _IMAGE_MODEL = os.getenv("MEDIA_IMAGE_MODEL", _DEFAULT_MODEL)
 _VIDEO_MODEL = os.getenv("MEDIA_VIDEO_MODEL", _DEFAULT_MODEL)

@@ -8,14 +8,6 @@
 
 FEDOT.MAS automatically generates and executes multi-agent pipelines from a plain-text task description.
 
-## Repository map
-
-| Path | Description |
-|------|-------------|
-| [`packages/fedotmas`](packages/fedotmas) | Core library: meta-agent, pipeline builder & runner |
-| [`packages/fedotmas-synapse`](packages/fedotmas-synapse) | Synapse Platform integration plugin |
-| [`mcp-servers`](mcp-servers/) | Internal MCP-servers registry |
-
 ## Quick start
 
 Managed with [uv](https://github.com/astral-sh/uv).

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -81,6 +83,8 @@ class LangfusePlugin(BasePlugin):
         public_key: str | None = None,
         secret_key: str | None = None,
         host: str | None = None,
+        flush_timeout_s: float | None = None,
+        shutdown_timeout_s: float | None = None,
     ) -> None:
         super().__init__(name="fedotmas_langfuse")
         self._trace_name = trace_name
@@ -88,6 +92,16 @@ class LangfusePlugin(BasePlugin):
         self._session_id = session_id
         self._tags = tags or []
         self._metadata = metadata or {}
+        self._flush_timeout_s = (
+            flush_timeout_s
+            if flush_timeout_s is not None
+            else _float_env("LANGFUSE_FLUSH_TIMEOUT_S", 5.0)
+        )
+        self._shutdown_timeout_s = (
+            shutdown_timeout_s
+            if shutdown_timeout_s is not None
+            else _float_env("LANGFUSE_SHUTDOWN_TIMEOUT_S", 2.0)
+        )
 
         # Langfuse client kwargs — None values are resolved from env by the SDK.
         self._lf_kwargs: dict[str, Any] = {}
@@ -134,7 +148,7 @@ class LangfusePlugin(BasePlugin):
         return self._trace
 
     def _get_agent_name(self, callback_context: CallbackContext) -> str:
-        return callback_context._invocation_context.agent.name
+        return callback_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
 
     def _get_parent_span(self, callback_context: CallbackContext) -> Any:
         """Find the parent span for the current agent using the branch hierarchy."""
@@ -153,7 +167,7 @@ class LangfusePlugin(BasePlugin):
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
     ) -> Optional[types.Content]:
-        root_name = invocation_context.agent.name
+        root_name = invocation_context.agent.name  # ty: ignore[unresolved-attribute]
         trace = self._ensure_trace(root_name)
         self._run_span = trace.start_observation(
             name=f"run:{root_name}",
@@ -289,7 +303,9 @@ class LangfusePlugin(BasePlugin):
                 status_message=str(error),
             )
             gen.end()
-            _log.debug("Langfuse generation error | agent={} error={}", agent_name, error)
+            _log.debug(
+                "Langfuse generation error | agent={} error={}", agent_name, error
+            )
         return None
 
     # ── Tool lifecycle ─────────────────────────────────────────────
@@ -313,7 +329,9 @@ class LangfusePlugin(BasePlugin):
             input=tool_args,
         )
         self._tool_spans[call_id] = tool_span
-        _log.debug("Langfuse tool span started | agent={} tool={}", agent_name, tool.name)
+        _log.debug(
+            "Langfuse tool span started | agent={} tool={}", agent_name, tool.name
+        )
         return None
 
     async def after_tool_callback(
@@ -367,14 +385,64 @@ class LangfusePlugin(BasePlugin):
 
     # ── Cleanup ────────────────────────────────────────────────────
 
+    def _call_with_timeout(
+        self,
+        name: str,
+        func: Any,
+        timeout_s: float,
+    ) -> None:
+        if timeout_s <= 0:
+            func()
+            return
+
+        errors: list[BaseException] = []
+        done = threading.Event()
+
+        def _target() -> None:
+            try:
+                func()
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+
+        thread = threading.Thread(
+            target=_target,
+            name=f"fedotmas-langfuse-{name}",
+            daemon=True,
+        )
+        thread.start()
+
+        if not done.wait(timeout_s):
+            _log.warning(
+                "Langfuse {} timed out after {:.1f}s; continuing without blocking run",
+                name,
+                timeout_s,
+            )
+            return
+
+        if errors:
+            raise errors[0]
+
     def end_trace(self) -> None:
         """End the current trace and flush. Call after a full MAS/MAW run."""
         if self._trace is not None:
             self._trace.end()
             self._trace = None
         if self._langfuse is not None:
-            self._langfuse.flush()
-            self._langfuse.shutdown()
+            try:
+                self._call_with_timeout(
+                    "flush",
+                    self._langfuse.flush,
+                    self._flush_timeout_s,
+                )
+                self._call_with_timeout(
+                    "shutdown",
+                    self._langfuse.shutdown,
+                    self._shutdown_timeout_s,
+                )
+            except Exception as exc:
+                _log.warning("Langfuse finalization failed: {}", exc)
             self._langfuse = None
         _log.debug("Langfuse trace ended and flushed")
 
@@ -384,3 +452,14 @@ class LangfusePlugin(BasePlugin):
         # (meta-agent + pipeline).  The trace is finalised by end_trace()
         # which BaseMAS calls after the full run completes.
         pass
+
+
+def _float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        _log.warning("Invalid {}={!r}; using {}", name, value, default)
+        return default

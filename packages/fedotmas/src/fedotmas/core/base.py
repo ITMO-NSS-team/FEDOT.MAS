@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar, cast
 
 from fastapi import FastAPI
 from google.adk.agents.base_agent import BaseAgent
@@ -15,11 +15,15 @@ from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.core.runner import PipelineResult, run_pipeline
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
 from fedotmas.meta._result import MetaAgentResult
-from fedotmas.plugins import LoggingPlugin
+from fedotmas.plugins import LoggingPlugin, WebSearchLimitPlugin
 
 _log = get_logger("fedotmas.core.base")
 
 ConfigT = TypeVar("ConfigT")
+
+
+class _TraceFinalizer(Protocol):
+    def end_trace(self) -> None: ...
 
 
 class BaseMAS(ABC, Generic[ConfigT]):
@@ -47,6 +51,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
         memory_service: BaseMemoryService | None = None,
         plugins: list[BasePlugin] | None = None,
         max_retries: int = 3,
+        web_search_limit: int | None = 4,
     ) -> None:
         setup_logging()
         self._meta_model = meta_model
@@ -56,9 +61,13 @@ class BaseMAS(ABC, Generic[ConfigT]):
         self._session_service = session_service
         self._memory_service = memory_service
         if plugins is not None:
-            self._plugins = list(plugins)
+            self._plugins: list[BasePlugin] = list(plugins)
         else:
             self._plugins = [LoggingPlugin()]
+            if web_search_limit is not None:
+                self._plugins.append(
+                    WebSearchLimitPlugin(max_calls_per_agent=web_search_limit)
+                )
         self._max_retries = max_retries
         self._last_result: PipelineResult | None = None
         self._last_meta_result: MetaAgentResult | None = None
@@ -170,10 +179,13 @@ class BaseMAS(ABC, Generic[ConfigT]):
         user_query: str,
         *,
         initial_state: dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Build the ADK agent tree from *config* and execute it.
 
-        Returns the final ``session.state`` dict.
+        Returns the final ``session.state`` dict. When *timeout* is set and
+        execution exceeds it, the partial state accumulated so far is returned
+        instead of raising (see :func:`run_pipeline`).
         """
         app = self.build_app(config)
         _log.info("Running pipeline")
@@ -183,6 +195,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
             session_service=self._session_service,
             memory_service=self._memory_service,
             initial_state=initial_state,
+            timeout=timeout,
         )
         return self._last_result.state
 
@@ -217,20 +230,29 @@ class BaseMAS(ABC, Generic[ConfigT]):
         """End Langfuse trace if a LangfusePlugin is among the plugins."""
         for plugin in self._plugins:
             if hasattr(plugin, "end_trace"):
-                plugin.end_trace()
+                try:
+                    cast(_TraceFinalizer, plugin).end_trace()
+                except Exception as exc:
+                    _log.warning("Plugin finalization failed: {}", exc)
 
     async def run(
         self,
         task: str,
         *,
         initial_state: dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Generate a config and immediately execute it.
 
-        Equivalent to ``generate_config`` followed by ``build_and_run``.
+        Equivalent to ``generate_config`` followed by ``build_and_run``. When
+        *timeout* is set it bounds pipeline *execution*; on expiry the partial
+        state gathered so far is returned rather than raising.
         """
         _log.info("Full-auto run for task: {}", task)
-        config = await self.generate_config(task)
-        result = await self.build_and_run(config, task, initial_state=initial_state)
-        self._finalize_langfuse()
-        return result
+        try:
+            config = await self.generate_config(task)
+            return await self.build_and_run(
+                config, task, initial_state=initial_state, timeout=timeout
+            )
+        finally:
+            self._finalize_langfuse()

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
-from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
+from google.adk.agents.base_agent import BaseAgent
 from google.adk.plugins import BasePlugin
 from google.genai import types
 
@@ -198,7 +198,7 @@ class IterableRun:
             self._plugin = _StepPlugin(pause_names)
         finally:
             self._plugin_ready.set()
-        plugins = [self._checkpoint, self._plugin]
+        plugins = cast(list[BasePlugin], [self._checkpoint, self._plugin])
 
         try:
             result = await run_pipeline(

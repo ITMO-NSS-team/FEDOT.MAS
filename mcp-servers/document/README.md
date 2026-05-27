@@ -16,7 +16,7 @@ Extract text from documents and archives using [MarkItDown](https://github.com/m
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | optional | Required when `describe_images=True` for embedded image descriptions |
 | `OPENAI_BASE_URL` | optional | Custom API endpoint for vision model |
-| `DOCUMENT_VISION_MODEL` | optional | Vision model for image descriptions (default: `google/gemini-2.5-flash`) |
+| `DOCUMENT_VISION_MODEL` | optional | Vision model for image descriptions (default: `google/gemini-3-flash-preview`) |
 
 ## Usage
 

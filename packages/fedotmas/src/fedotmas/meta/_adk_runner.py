@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from google.adk.agents import LlmAgent
 from google.adk.apps.app import App
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService, InMemorySessionService
+from google.adk.planners import BuiltInPlanner
 from google.genai import types
 from pydantic import BaseModel
 
@@ -45,6 +47,7 @@ async def run_meta_agent_call(
     max_retries: int = 2,
     allowed_models: list[str] | None = None,
     plugins: list[BasePlugin] | None = None,
+    timeout_s: float | None = None,
 ) -> LLMCallResult:
     """Run a single ADK LlmAgent call and return the structured result.
 
@@ -58,9 +61,11 @@ async def run_meta_agent_call(
         raise ValueError(f"max_retries must be >= 0, got {max_retries}")
     last_error: Exception | None = None
     effective_message = user_message
+    effective_timeout_s = _resolve_timeout(timeout_s)
+    max_output_tokens = _resolve_max_output_tokens()
     for attempt in range(max_retries + 1):
         try:
-            return await _execute_meta_call(
+            call = _execute_meta_call(
                 agent_name=agent_name,
                 instruction=instruction,
                 user_message=effective_message,
@@ -71,9 +76,21 @@ async def run_meta_agent_call(
                 session_service=session_service,
                 allowed_models=allowed_models,
                 plugins=plugins,
+                max_output_tokens=max_output_tokens,
             )
-        except (RuntimeError, ValueError, TypeError) as e:
+            if effective_timeout_s is None:
+                return await call
+            async with asyncio.timeout(effective_timeout_s):
+                return await call
+        except (RuntimeError, ValueError, TypeError, TimeoutError) as e:
             last_error = e
+            if isinstance(e, TimeoutError):
+                _log.error(
+                    "{} timed out after {:.1f}s; not retrying the same prompt",
+                    agent_name,
+                    effective_timeout_s or 0.0,
+                )
+                raise
             if attempt < max_retries:
                 delay = 2**attempt
                 _log.warning(
@@ -114,6 +131,7 @@ async def _execute_meta_call(
     session_service: BaseSessionService | None = None,
     allowed_models: list[str] | None = None,
     plugins: list[BasePlugin] | None = None,
+    max_output_tokens: int | None = None,
 ) -> LLMCallResult:
     """Core execution logic for a single meta-agent LLM call."""
     _log.info(
@@ -133,6 +151,13 @@ async def _execute_meta_call(
         output_key=output_key,
         generate_content_config=types.GenerateContentConfig(
             temperature=temperature,
+            max_output_tokens=max_output_tokens,
+        ),
+        planner=BuiltInPlanner(
+            thinking_config=types.ThinkingConfig(
+                thinking_budget=0,
+                include_thoughts=False,
+            )
         ),
     )
 
@@ -157,22 +182,22 @@ async def _execute_meta_call(
     start = time.monotonic()
 
     if plugins:
-        runner_kwargs: dict[str, Any] = {
-            "app": App(
+        runner = Runner(
+            app=App(
                 name=app_name,
                 root_agent=agent,
                 plugins=list(plugins),
             ),
-            "session_service": session_service,
-        }
+            session_service=session_service,
+        )
     else:
-        runner_kwargs = {
-            "app_name": app_name,
-            "agent": agent,
-            "session_service": session_service,
-        }
+        runner = Runner(
+            app_name=app_name,
+            agent=agent,
+            session_service=session_service,
+        )
 
-    async with Runner(**runner_kwargs) as runner:
+    async with runner:
         async for event in runner.run_async(
             user_id="system",
             session_id=session.id,
@@ -247,3 +272,29 @@ async def _execute_meta_call(
         completion_tokens=total_completion,
         elapsed=elapsed,
     )
+
+
+def _resolve_timeout(timeout_s: float | None) -> float | None:
+    if timeout_s is not None:
+        return timeout_s if timeout_s > 0 else None
+
+    value = os.getenv("FEDOTMAS_META_AGENT_TIMEOUT_S", "180")
+    try:
+        resolved = float(value)
+    except ValueError:
+        _log.warning("Invalid FEDOTMAS_META_AGENT_TIMEOUT_S={!r}; using 180", value)
+        resolved = 180.0
+    return resolved if resolved > 0 else None
+
+
+def _resolve_max_output_tokens() -> int | None:
+    value = os.getenv("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", "2048")
+    try:
+        resolved = int(value)
+    except ValueError:
+        _log.warning(
+            "Invalid FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS={!r}; using 2048",
+            value,
+        )
+        resolved = 2048
+    return resolved if resolved > 0 else None

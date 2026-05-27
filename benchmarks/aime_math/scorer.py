@@ -80,7 +80,7 @@ class ExactIntScorer:
                 reasoning=f"Failed to extract int from: {raw[:200]!r}",
             )
 
-        expected = int(task.expected)  # type: ignore[arg-type]
+        expected = int(task.expected)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         correct = predicted == expected
         if correct:
             return ScoringResult(
