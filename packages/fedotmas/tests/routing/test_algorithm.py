@@ -95,6 +95,53 @@ class TestAggregate:
         out = aggregate(recs, pool)
         assert out["a"].perf == [pytest.approx(0.2)]
 
+    def test_cost_min_max_normalised_to_unit_interval(self) -> None:
+        # cheap=0.001, mid=0.01, dear=0.1  →  after min-max  0, 0.1, 1
+        pool = _pool("cheap", "mid", "dear")
+        recs = [
+            _rec(llm="cheap", cost=0.001),
+            _rec(llm="mid", cost=0.01),
+            _rec(llm="dear", cost=0.1),
+        ]
+        out = aggregate(recs, pool)
+        assert out["cheap"].cost == [pytest.approx(0.0)]
+        assert out["mid"].cost == [pytest.approx(0.09090909)]
+        assert out["dear"].cost == [pytest.approx(1.0)]
+
+    def test_delay_min_max_normalised_to_unit_interval(self) -> None:
+        pool = _pool("fast", "slow")
+        recs = [
+            _rec(llm="fast", duration=0.5),
+            _rec(llm="slow", duration=10.0),
+        ]
+        out = aggregate(recs, pool)
+        assert out["fast"].delay == [pytest.approx(0.0)]
+        assert out["slow"].delay == [pytest.approx(1.0)]
+
+    def test_zero_range_yields_zero_not_division_error(self) -> None:
+        # All records have identical cost/duration → range = 0; we emit
+        # 0.0 so the metric is inert this round (no NaN, no ZeroDiv).
+        pool = _pool("a", "b")
+        recs = [
+            _rec(llm="a", cost=0.5, duration=2.0),
+            _rec(llm="b", cost=0.5, duration=2.0),
+        ]
+        out = aggregate(recs, pool)
+        assert out["a"].cost == [0.0]
+        assert out["b"].cost == [0.0]
+        assert out["a"].delay == [0.0]
+        assert out["b"].delay == [0.0]
+
+    def test_normalisation_uses_global_range_not_per_model(self) -> None:
+        # If we accidentally normalised per-model, every entry would be
+        # 0.0 since each model has only one observation. Cross-model
+        # ranking would be lost. Guard against that regression.
+        pool = _pool("a", "b")
+        recs = [_rec(llm="a", cost=1.0), _rec(llm="b", cost=10.0)]
+        out = aggregate(recs, pool)
+        assert out["a"].cost == [0.0]
+        assert out["b"].cost == [1.0]
+
 
 # ─── pareto_filter ────────────────────────────────────────────────────
 

@@ -98,6 +98,7 @@ class TestColdStart:
             agent_role="researcher", tools=("search",), query="hello"
         )
         assert outcome.decision.was_cold_start is True
+        assert outcome.decision.no_relevant_history is False
         assert outcome.decision.chosen_model in pool.models
         assert outcome.decision.retrieved_records == 0
 
@@ -159,8 +160,10 @@ class TestColdStart:
             tools=("search",),
             query="anything",
         )
-        # Retrieve would return nothing → local cold start path.
-        assert outcome.decision.was_cold_start is True
+        # Retrieve would return nothing → no_relevant_history path
+        # (distinct from global cold start which is about total store size).
+        assert outcome.decision.was_cold_start is False
+        assert outcome.decision.no_relevant_history is True
         assert outcome.decision.retrieved_records == 0
 
 
@@ -272,11 +275,15 @@ class TestWeights:
         _seed(store, llm="b", n=20, success_task=0.80, cost=0.01)
         _seed(store, llm="c", n=20, success_task=0.50, cost=5.0)
 
+        # Cost and delay are now min-max normalised to [0,1] in
+        # aggregate(), so a heavy cost weight on the same order as perf
+        # is enough to flip the choice — no more orders-of-magnitude
+        # weight hacking required.
         router = Router(
             pool=pool,
             store=store,
             embedder=embedder,
-            weights=Weights(perf=1.0, cost=100.0, delay=0.0),
+            weights=Weights(perf=1.0, cost=5.0, delay=0.0),
             cold_start_threshold=10,
             rng=np.random.default_rng(0),
         )

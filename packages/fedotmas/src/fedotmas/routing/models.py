@@ -115,9 +115,22 @@ class RoutingDecision:
 
     ``considered_models`` is the set the chosen model was picked from —
     the full pool during cold start, the Pareto-surviving subset otherwise.
+
+    ``was_cold_start`` and ``no_relevant_history`` distinguish the two
+    fall-back paths that both end in a uniform-random pick from the
+    full pool:
+
+    - ``was_cold_start=True``: global store has fewer than
+      ``cold_start_threshold`` records — too little data anywhere.
+    - ``no_relevant_history=True``: the store has data but none of it
+      matches this ``(agent_role, tools, query)`` retrieval — the
+      problem is targeted exploration, not bootstrap.
+
+    The two are mutually exclusive.
     """
 
     chosen_model: str
     considered_models: tuple[str, ...]
     was_cold_start: bool
+    no_relevant_history: bool
     retrieved_records: int

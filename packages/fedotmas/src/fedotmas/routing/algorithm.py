@@ -29,6 +29,16 @@ def aggregate(
 ) -> dict[str, LlmStats]:
     """Group records by LLM and assemble per-metric observation lists.
 
+    Cost and duration are min-max normalised to ``[0, 1]`` across the
+    retrieved pool, so :class:`Weights` defaults stay meaningful
+    regardless of absolute pricing scale (cents vs dollars) and latency
+    scale (sub-second vs tens of seconds). ``perf`` is already in
+    ``[0, 1]`` by construction and is passed through unchanged.
+
+    When all retrieved records have identical cost (or duration) the
+    range collapses; we emit 0.0 for every entry so that metric is
+    inert for this routing call rather than dividing by zero.
+
     Models from ``pool`` that have no matching records still appear in
     the result with empty lists — they will be picked up by the
     "force-exploration on n=0" branch of :func:`thompson_sample`.
@@ -36,16 +46,33 @@ def aggregate(
     Records whose ``success_task`` is still ``None`` (parent task not
     yet scored) are skipped: their perf signal isn't known.
     """
+    pool_models = set(pool.models)
+    scored = [
+        r for r in records
+        if r.llm_used in pool_models and r.success_task is not None
+    ]
+
+    if scored:
+        costs = [r.cost for r in scored]
+        delays = [r.duration for r in scored]
+        cost_lo, cost_hi = min(costs), max(costs)
+        delay_lo, delay_hi = min(delays), max(delays)
+        cost_range = cost_hi - cost_lo
+        delay_range = delay_hi - delay_lo
+    else:
+        cost_lo = delay_lo = 0.0
+        cost_range = delay_range = 0.0
+
     by_model: dict[str, LlmStats] = {m: LlmStats(model=m) for m in pool.models}
-    for r in records:
-        if r.llm_used not in by_model:
-            continue
-        if r.success_task is None:
-            continue
+    for r in scored:
         s = by_model[r.llm_used]
         s.perf.append(r.success_step * r.success_task)
-        s.cost.append(r.cost)
-        s.delay.append(r.duration)
+        s.cost.append(
+            (r.cost - cost_lo) / cost_range if cost_range > 0 else 0.0
+        )
+        s.delay.append(
+            (r.duration - delay_lo) / delay_range if delay_range > 0 else 0.0
+        )
     return by_model
 
 

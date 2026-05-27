@@ -3,8 +3,39 @@
 from __future__ import annotations
 
 import pytest
+from loguru import logger as _loguru_logger
 
 from fedotmas._settings import ModelConfig
+
+
+@pytest.fixture(autouse=True)
+def _bridge_loguru_to_caplog(caplog: pytest.LogCaptureFixture):
+    """Make pytest's ``caplog`` capture loguru records.
+
+    The codebase logs through loguru, which writes to its own
+    handlers and bypasses stdlib ``logging`` — so ``caplog`` sees
+    nothing by default. Bridging here means tests can do the natural
+    ``assert "..." in caplog.text`` instead of monkeypatching
+    private ``_log`` objects per module.
+
+    Removal is guarded because production code (e.g. logging setup
+    inside a Runner) may call ``logger.remove()`` globally during the
+    test, dropping our handler before we get to it.
+    """
+    handler_id = _loguru_logger.add(
+        caplog.handler,
+        level=0,
+        format="{message}",
+    )
+    try:
+        yield
+    finally:
+        try:
+            _loguru_logger.remove(handler_id)
+        except ValueError:
+            # Handler already removed by code under test (e.g. a
+            # logging reconfiguration). Nothing to clean up.
+            pass
 
 
 @pytest.fixture()

@@ -87,22 +87,6 @@ def _make_invocation_ctx(trace_id: str, agent_name: str = "root") -> MagicMock:
     )
 
 
-def _capture_warnings(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Capture loguru warning messages from the routing plugin. pytest's
-    ``caplog`` only sees stdlib ``logging`` records, but the plugin
-    uses loguru, so we mock ``_log.warning`` directly."""
-    import fedotmas.plugins._routing as routing_mod
-
-    messages: list[str] = []
-
-    def fake_warning(template: str, *args, **kwargs) -> None:
-        # Render the loguru "{}" template the same way loguru would.
-        messages.append(template.format(*args, **kwargs))
-
-    monkeypatch.setattr(routing_mod._log, "warning", fake_warning)
-    return messages
-
-
 def _make_request(model: str, *, query: str = "what is 2+2?") -> LlmRequest:
     return LlmRequest(
         model=model,
@@ -319,19 +303,18 @@ class TestParallelAgents:
 class TestReentrancy:
     @pytest.mark.asyncio
     async def test_overwriting_pending_logs_warning(
-        self, pool, store, embedder, monkeypatch
+        self, pool, store, embedder, caplog
     ):
         plugin = _make_plugin(pool, store, embedder)
         ctx = _make_callback_ctx(trace_id="t1", agent_name="researcher")
         req = _make_request("openai/original")
-        warnings = _capture_warnings(monkeypatch)
 
         await plugin.before_model_callback(callback_context=ctx, llm_request=req)
         await plugin.before_model_callback(callback_context=ctx, llm_request=req)
 
         assert any(
-            "Overwriting unconsumed pending routing record" in m
-            for m in warnings
+            "Overwriting unconsumed pending routing record" in r.getMessage()
+            for r in caplog.records
         )
         # Only the second pending remains; the first is lost (the
         # warning is the user-facing surface for that data loss).
@@ -344,12 +327,11 @@ class TestReentrancy:
 class TestAfterRunCleanup:
     @pytest.mark.asyncio
     async def test_clears_step_counter_and_orphans(
-        self, pool, store, embedder, monkeypatch
+        self, pool, store, embedder, caplog
     ):
         plugin = _make_plugin(pool, store, embedder)
         ctx = _make_callback_ctx(trace_id="t1", agent_name="researcher")
         req = _make_request("openai/original")
-        warnings = _capture_warnings(monkeypatch)
 
         # before fires, after never does → orphan pending entry.
         await plugin.before_model_callback(callback_context=ctx, llm_request=req)
@@ -362,7 +344,10 @@ class TestAfterRunCleanup:
 
         assert plugin._pending == {}
         assert "t1" not in plugin._step_counter
-        assert any("orphan pending routing record" in m for m in warnings)
+        assert any(
+            "orphan pending routing record" in r.getMessage()
+            for r in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_does_not_touch_other_traces(self, pool, store, embedder):
@@ -410,6 +395,100 @@ class TestCommitTaskScore:
     async def test_unknown_trace_id_returns_zero(self, pool, store, embedder):
         plugin = _make_plugin(pool, store, embedder)
         assert plugin.commit_task_score("never-seen", 1.0) == 0
+
+
+# ─── Buffer cap ───────────────────────────────────────────────────────
+
+
+class TestBufferCap:
+    @pytest.mark.asyncio
+    async def test_pending_evicts_oldest_at_cap(
+        self, pool, store, embedder, caplog, monkeypatch
+    ):
+        import fedotmas.plugins._routing as routing_mod
+
+        monkeypatch.setattr(routing_mod, "_BUFFER_CAP", 3)
+        plugin = _make_plugin(pool, store, embedder)
+
+        # 4 distinct (trace, agent) keys → cap of 3 → oldest evicted.
+        for i in range(4):
+            ctx = _make_callback_ctx(trace_id=f"t{i}", agent_name="r")
+            await plugin.before_model_callback(
+                callback_context=ctx, llm_request=_make_request("openai/original")
+            )
+
+        assert len(plugin._pending) == 3
+        assert ("t0", "r") not in plugin._pending  # oldest evicted
+        assert ("t3", "r") in plugin._pending
+        assert any(
+            "Evicted" in r.getMessage() and "pending routing entries" in r.getMessage()
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_step_counter_caps_in_fifo_order(
+        self, pool, store, embedder, monkeypatch
+    ):
+        import fedotmas.plugins._routing as routing_mod
+
+        monkeypatch.setattr(routing_mod, "_BUFFER_CAP", 2)
+        plugin = _make_plugin(pool, store, embedder)
+
+        # Seed three step-counter entries manually, then trip the cap
+        # by running before_model_callback (which calls _enforce_buffer_cap).
+        plugin._step_counter["old"] = 1
+        plugin._step_counter["mid"] = 1
+        plugin._step_counter["new"] = 1
+
+        ctx = _make_callback_ctx(trace_id="trip", agent_name="r")
+        await plugin.before_model_callback(
+            callback_context=ctx, llm_request=_make_request("openai/original")
+        )
+
+        # _BUFFER_CAP=2 means after eviction _step_counter has 2 entries.
+        # FIFO via insertion order: "old" goes first.
+        assert "old" not in plugin._step_counter
+        assert "new" in plugin._step_counter
+
+
+# ─── Reasoning tokens in cost ─────────────────────────────────────────
+
+
+class TestCostIncludesReasoningTokens:
+    @pytest.mark.asyncio
+    async def test_thoughts_tokens_charged_at_output_rate(
+        self, pool, store, embedder
+    ):
+        plugin = _make_plugin(pool, store, embedder)
+        ctx = _make_callback_ctx(trace_id="t1", agent_name="researcher")
+        req = _make_request("openai/original")
+
+        await plugin.before_model_callback(callback_context=ctx, llm_request=req)
+        chosen = req.model
+
+        usage = types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=0,
+            candidates_token_count=0,
+            thoughts_token_count=1_000_000,
+            total_token_count=1_000_000,
+        )
+        await plugin.after_model_callback(
+            callback_context=ctx,
+            llm_response=LlmResponse(
+                content=types.Content(role="model", parts=[types.Part(text="x")]),
+                usage_metadata=usage,
+            ),
+        )
+
+        records = store.retrieve(
+            agent_role="researcher", tools=(), query_emb=_FIXED_EMB
+        )
+        # Reasoning tokens are billed at output_price_per_1m. With
+        # 1M reasoning tokens the cost equals output_price_per_1m
+        # exactly — and importantly is nonzero, where the old impl
+        # would have reported 0.
+        entry = pool.by_model(chosen)
+        assert records[0].cost == pytest.approx(entry.output_price_per_1m)
 
 
 # ─── Tools extraction ─────────────────────────────────────────────────

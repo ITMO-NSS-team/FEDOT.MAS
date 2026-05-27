@@ -39,9 +39,26 @@ _log = get_logger("fedotmas.plugins.routing")
 
 _WORKFLOW_PREFIXES = ("seq_", "par_", "loop_")
 
+# Bound for the per-trace state buffers below. ADK does not call
+# after_run_callback when a run raises, so _pending and _step_counter
+# can leak across failed runs; we cap by size and FIFO-evict so the
+# leak is bounded rather than fatal. 1000 entries ≈ a long benchmark.
+_BUFFER_CAP = 1000
+
 
 def _is_workflow_node(name: str) -> bool:
     return name.startswith(_WORKFLOW_PREFIXES)
+
+
+def _invocation_id(callback_context: CallbackContext) -> str:
+    """Accessor for the ADK private attribute we depend on. Isolated
+    here so a future ADK rename breaks one line, not the whole plugin.
+    No public alternative exists at the moment ADK 1.x."""
+    return callback_context._invocation_context.invocation_id
+
+
+def _agent_name(callback_context: CallbackContext) -> str:
+    return callback_context._invocation_context.agent.name
 
 
 def _last_user_text(contents: list[types.Content]) -> str:
@@ -73,13 +90,23 @@ def _estimate_cost(
     input_price_per_1m: float,
     output_price_per_1m: float,
 ) -> float:
+    """Best-effort cost estimate from token usage and pool pricing.
+
+    Reasoning tokens (``thoughts_token_count`` for o1/o4-mini/Claude
+    thinking) are billed at the output rate and would otherwise be
+    invisible to the router — for reasoning models that's the
+    dominant cost component. Cached prompt tokens are still counted
+    at the input rate; v1 has no separate cached-input pricing field
+    on :class:`LlmPoolEntry`.
+    """
     if usage is None:
         return 0.0
     prompt_tokens = usage.prompt_token_count or 0
     completion_tokens = usage.candidates_token_count or 0
+    reasoning_tokens = getattr(usage, "thoughts_token_count", 0) or 0
     return (
         prompt_tokens * input_price_per_1m
-        + completion_tokens * output_price_per_1m
+        + (completion_tokens + reasoning_tokens) * output_price_per_1m
     ) / 1_000_000
 
 
@@ -176,10 +203,16 @@ class LLMRoutingPlugin(BasePlugin):
     async def after_run_callback(
         self, *, invocation_context: InvocationContext
     ) -> None:
-        """Clear per-trace state. Warns when a ``before_model_callback``
-        from this trace never received a matching ``after`` or ``error``
-        — the LLM call's record was never appended, so it's data loss
-        worth surfacing."""
+        """Clear per-trace state on **successful** run end. Warns when
+        a ``before_model_callback`` from this trace never received a
+        matching ``after`` / ``error`` — the LLM call's record was
+        never appended, so it's data loss worth surfacing.
+
+        Note: ADK does not call ``after_run_callback`` when the run
+        itself raises. Leak protection on the error path is provided
+        by the FIFO cap in :meth:`_enforce_buffer_cap`, which runs on
+        every ``before_model_callback``.
+        """
         trace_id = invocation_context.invocation_id
         self._step_counter.pop(trace_id, None)
         orphans = [
@@ -196,16 +229,45 @@ class LLMRoutingPlugin(BasePlugin):
                 [a for _, a in orphans],
             )
 
+    # ── Buffer cap (defensive against unpaired before-hooks) ──────
+
+    def _enforce_buffer_cap(self) -> None:
+        """Bound ``_pending`` and ``_step_counter`` by FIFO eviction.
+        Routine cleanup is :meth:`after_run_callback`; this cap is the
+        backstop for the case where ADK skips that callback (run-time
+        exception) and the buffers would otherwise grow without
+        bound. Eviction is logged so a real leak is visible."""
+        excess_pending = len(self._pending) - _BUFFER_CAP
+        if excess_pending > 0:
+            victims = sorted(
+                self._pending.items(), key=lambda kv: kv[1].t0
+            )[:excess_pending]
+            for key, _ in victims:
+                del self._pending[key]
+            _log.warning(
+                "Evicted {} pending routing entries (cap={}) | "
+                "suggests unpaired before_model_callbacks",
+                len(victims),
+                _BUFFER_CAP,
+            )
+        excess_counter = len(self._step_counter) - _BUFFER_CAP
+        if excess_counter > 0:
+            # dict iteration order is insertion order in CPython 3.7+,
+            # so list(...)[:n] yields the oldest n keys.
+            victims_k = list(self._step_counter.keys())[:excess_counter]
+            for k in victims_k:
+                del self._step_counter[k]
+
     # ── Model lifecycle ────────────────────────────────────────────
 
     async def before_model_callback(
         self, *, callback_context: CallbackContext, llm_request: LlmRequest
     ) -> Optional[LlmResponse]:
-        agent_name = callback_context._invocation_context.agent.name
+        agent_name = _agent_name(callback_context)
         if _is_workflow_node(agent_name):
             return None
 
-        trace_id = callback_context._invocation_context.invocation_id
+        trace_id = _invocation_id(callback_context)
         # TODO(phase-5): contents[-1] is often the same user task across
         # all agents in a MAW pipeline — they're differentiated by
         # config.system_instruction, not by user content. Routing
@@ -252,6 +314,9 @@ class LLMRoutingPlugin(BasePlugin):
             query=query,
             tools=tools,
         )
+        # Enforce cap *after* insertion so we don't grow past the
+        # cap by a single entry between calls.
+        self._enforce_buffer_cap()
         _log.debug(
             "Routed | agent={} chosen={} cold_start={} retrieved={}",
             agent_name,
@@ -264,8 +329,8 @@ class LLMRoutingPlugin(BasePlugin):
     async def after_model_callback(
         self, *, callback_context: CallbackContext, llm_response: LlmResponse
     ) -> Optional[LlmResponse]:
-        agent_name = callback_context._invocation_context.agent.name
-        trace_id = callback_context._invocation_context.invocation_id
+        agent_name = _agent_name(callback_context)
+        trace_id = _invocation_id(callback_context)
         pending = self._pending.pop((trace_id, agent_name), None)
         if pending is None:
             return None
@@ -285,8 +350,8 @@ class LLMRoutingPlugin(BasePlugin):
         llm_request: LlmRequest,
         error: Exception,
     ) -> Optional[LlmResponse]:
-        agent_name = callback_context._invocation_context.agent.name
-        trace_id = callback_context._invocation_context.invocation_id
+        agent_name = _agent_name(callback_context)
+        trace_id = _invocation_id(callback_context)
         pending = self._pending.pop((trace_id, agent_name), None)
         if pending is None:
             return None

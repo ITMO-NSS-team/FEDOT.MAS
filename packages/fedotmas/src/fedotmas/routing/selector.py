@@ -58,7 +58,9 @@ class Router:
         embedding = await self._embedder.embed(query)
 
         if self._store.count() < self._cold_start_threshold:
-            return self._random_pick(embedding, retrieved=0)
+            return self._random_pick(
+                embedding, retrieved=0, reason="cold_start"
+            )
 
         records = self._store.retrieve(
             agent_role=agent_role,
@@ -67,7 +69,9 @@ class Router:
             sim_threshold=self._sim_threshold,
         )
         if not records:
-            return self._random_pick(embedding, retrieved=0)
+            return self._random_pick(
+                embedding, retrieved=0, reason="no_match"
+            )
 
         stats_by_model = aggregate(records, self._pool)
         considered = pareto_filter(stats_by_model)
@@ -90,18 +94,26 @@ class Router:
                 chosen_model=chosen,
                 considered_models=tuple(considered),
                 was_cold_start=False,
+                no_relevant_history=False,
                 retrieved_records=len(records),
             ),
             query_embedding=embedding,
         )
 
-    def _random_pick(self, embedding: np.ndarray, *, retrieved: int) -> RoutingOutcome:
+    def _random_pick(
+        self,
+        embedding: np.ndarray,
+        *,
+        retrieved: int,
+        reason: str,
+    ) -> RoutingOutcome:
         chosen = str(self._rng.choice(self._pool.models))
         return RoutingOutcome(
             decision=RoutingDecision(
                 chosen_model=chosen,
                 considered_models=self._pool.models,
-                was_cold_start=True,
+                was_cold_start=reason == "cold_start",
+                no_relevant_history=reason == "no_match",
                 retrieved_records=retrieved,
             ),
             query_embedding=embedding,
