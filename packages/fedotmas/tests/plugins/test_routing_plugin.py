@@ -87,13 +87,23 @@ def _make_invocation_ctx(trace_id: str, agent_name: str = "root") -> MagicMock:
     )
 
 
-def _make_request(model: str, *, query: str = "what is 2+2?") -> LlmRequest:
-    return LlmRequest(
-        model=model,
-        contents=[
+def _make_request(
+    model: str,
+    *,
+    query: str = "what is 2+2?",
+    system_instruction: object = None,
+) -> LlmRequest:
+    kwargs: dict = {
+        "model": model,
+        "contents": [
             types.Content(role="user", parts=[types.Part(text=query)])
         ],
-    )
+    }
+    if system_instruction is not None:
+        kwargs["config"] = types.GenerateContentConfig(
+            system_instruction=system_instruction
+        )
+    return LlmRequest(**kwargs)
 
 
 def _make_response(*, prompt_tokens: int = 100, completion_tokens: int = 50) -> LlmResponse:
@@ -513,3 +523,183 @@ class TestToolsExtraction:
             agent_role="researcher", tools=("search",), query_emb=_FIXED_EMB
         )
         assert records[0].tools == ("fetch", "search")  # sorted
+
+
+# ─── M4: system_instruction mixed into embedding query ───────────────
+
+
+def _spy_embedder() -> tuple[Embedder, list[str]]:
+    """Embedder that records every embed call's text. Returns
+    ``(embedder, captured_texts)``."""
+    captured: list[str] = []
+
+    async def fake(_model: str, text: str) -> np.ndarray:
+        captured.append(text)
+        return _FIXED_EMB
+
+    return Embedder(model="fake", embed_fn=fake), captured
+
+
+class TestM4ComposeQuery:
+    """Embedding query is composed of (system_instruction + user_text).
+    Without M4, two agents in the same trace see the same user query
+    and become indistinguishable to the router."""
+
+    @pytest.mark.asyncio
+    async def test_system_instruction_included_in_query(self, pool, store):
+        embedder, captured = _spy_embedder()
+        plugin = _make_plugin(pool, store, embedder)
+        ctx = _make_callback_ctx(trace_id="t1", agent_name="researcher")
+        req = _make_request(
+            "openai/original",
+            query="Find info on Paris.",
+            system_instruction="You are a research agent. Use the search tool.",
+        )
+
+        await plugin.before_model_callback(callback_context=ctx, llm_request=req)
+
+        assert len(captured) == 1
+        assert "research agent" in captured[0]
+        assert "Find info on Paris." in captured[0]
+
+    @pytest.mark.asyncio
+    async def test_distinct_agents_get_distinct_queries(self, pool, store):
+        embedder, captured = _spy_embedder()
+        plugin = _make_plugin(pool, store, embedder)
+        same_user_text = "What's the capital of France?"
+
+        for agent, instr in [
+            ("researcher", "You are a researcher. Look things up."),
+            ("writer", "You are a writer. Summarise findings."),
+        ]:
+            ctx = _make_callback_ctx(trace_id="t1", agent_name=agent)
+            req = _make_request(
+                "openai/original",
+                query=same_user_text,
+                system_instruction=instr,
+            )
+            await plugin.before_model_callback(callback_context=ctx, llm_request=req)
+
+        assert len(captured) == 2
+        assert captured[0] != captured[1]
+        assert "researcher" in captured[0].lower()
+        assert "writer" in captured[1].lower()
+
+    @pytest.mark.asyncio
+    async def test_none_system_instruction_falls_back_to_user_text(
+        self, pool, store
+    ):
+        embedder, captured = _spy_embedder()
+        plugin = _make_plugin(pool, store, embedder)
+        ctx = _make_callback_ctx(trace_id="t1", agent_name="researcher")
+        req = _make_request("openai/original", query="hello world")
+
+        await plugin.before_model_callback(callback_context=ctx, llm_request=req)
+
+        assert captured == ["hello world"]
+
+    @pytest.mark.asyncio
+    async def test_content_system_instruction_is_extracted(self, pool, store):
+        embedder, captured = _spy_embedder()
+        plugin = _make_plugin(pool, store, embedder)
+        ctx = _make_callback_ctx(trace_id="t1", agent_name="researcher")
+        instr = types.Content(
+            role="system",
+            parts=[types.Part(text="be concise"), types.Part(text="be accurate")],
+        )
+        req = _make_request(
+            "openai/original",
+            query="explain entropy",
+            system_instruction=instr,
+        )
+
+        await plugin.before_model_callback(callback_context=ctx, llm_request=req)
+
+        assert "be concise" in captured[0]
+        assert "be accurate" in captured[0]
+        assert "explain entropy" in captured[0]
+
+    @pytest.mark.asyncio
+    async def test_list_system_instruction_is_extracted(self, pool, store):
+        embedder, captured = _spy_embedder()
+        plugin = _make_plugin(pool, store, embedder)
+        ctx = _make_callback_ctx(trace_id="t1", agent_name="researcher")
+        req = _make_request(
+            "openai/original",
+            query="x",
+            system_instruction=["rule one", "rule two"],
+        )
+
+        await plugin.before_model_callback(callback_context=ctx, llm_request=req)
+
+        assert "rule one" in captured[0]
+        assert "rule two" in captured[0]
+
+
+# ─── Phase 3 end-to-end: invocation_id → commit_task_score ────────────
+
+
+class TestPhase3BackfillBatch:
+    """Phase 3 exit criteria: simulate a small benchmark batch where each
+    task spans multiple LLM calls under one trace_id, then verify that
+    after scoring every persisted record gets ``success_task`` set —
+    including the failed task's records, which should be ``0.0``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_three_tasks_two_agents_each(self, pool, store, embedder):
+        plugin = _make_plugin(pool, store, embedder)
+
+        # Three "pipeline runs", each with two agent steps. trace_id stands
+        # in for ControlledRun.invocation_id, which the benchmark runner
+        # threads into commit_task_score(run.invocation_id, score).
+        scenarios = [
+            ("trace-success-1", "researcher", "writer", 0.9, True),
+            ("trace-success-2", "researcher", "writer", 0.4, True),
+            ("trace-fail-1", "researcher", "writer", 0.0, False),
+        ]
+
+        for trace_id, agent_a, agent_b, _score, success in scenarios:
+            for agent in (agent_a, agent_b):
+                ctx = _make_callback_ctx(trace_id=trace_id, agent_name=agent)
+                req = _make_request("openai/original")
+                await plugin.before_model_callback(callback_context=ctx, llm_request=req)
+                if success or agent == agent_a:
+                    # On failure, the first agent still succeeds; the second
+                    # raises — mirrors a pipeline that fails partway through.
+                    await plugin.after_model_callback(
+                        callback_context=ctx, llm_response=_make_response()
+                    )
+                else:
+                    await plugin.on_model_error_callback(
+                        callback_context=ctx, llm_request=req,
+                        error=RuntimeError("downstream failure"),
+                    )
+
+        # Sanity: 3 traces × 2 agents = 6 records.
+        assert store.count() == 6
+
+        # Commit task scores — what the benchmark runner does after scoring.
+        for trace_id, _, _, score, _ in scenarios:
+            n = plugin.commit_task_score(trace_id, score)
+            assert n == 2  # both records for the trace
+
+        # All records must have success_task populated; failed trace gets 0.0.
+        # A single retrieve(agent_role="researcher") already returns all 6
+        # because the writer rows match via the same _FIXED_EMB similarity.
+        records = store.retrieve(
+            agent_role="researcher", tools=(), query_emb=_FIXED_EMB
+        )
+        assert len(records) == 6
+        by_trace: dict[str, list] = {}
+        for r in records:
+            by_trace.setdefault(r.trace_id, []).append(r)
+
+        assert all(r.success_task == 0.9 for r in by_trace["trace-success-1"])
+        assert all(r.success_task == 0.4 for r in by_trace["trace-success-2"])
+        # Failed trace: both step records get success_task=0.0, and the
+        # writer's step record also has success_step=0.0 (model error).
+        fail_records = by_trace["trace-fail-1"]
+        assert all(r.success_task == 0.0 for r in fail_records)
+        writer_fail = next(r for r in fail_records if r.agent_role == "writer")
+        assert writer_fail.success_step == 0.0

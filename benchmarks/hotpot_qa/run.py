@@ -12,6 +12,7 @@ from fedotmas.maw.models import MAWConfig, MAWStepConfig
 from fedotmas.optimize._config import OptimizationConfig
 from fedotmas.optimize._optimizer import Optimizer
 from fedotmas.optimize._state import Task
+from fedotmas.plugins import LLMRoutingPlugin
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _utils import BenchmarkResult, CostSummary, TaskResult, save_result
@@ -83,11 +84,14 @@ async def _solve_one(
     stage: str,
     total: int,
     progress: dict[str, float],
+    routing_plugin: LLMRoutingPlugin | None = None,
 ) -> TaskResult:
     async with sem:
         _log.info("[{}] Task {}/{} — solving...", stage, i + 1, total)
+        plugins = [routing_plugin] if routing_plugin is not None else None
+        run = None
         try:
-            run = await Controller(maw).run(task.input, config=config)
+            run = await Controller(maw).run(task.input, config=config, plugins=plugins)
             if run.status == "error":
                 err_msg = run.error.message if run.error else "unknown error"
                 _log.warning(
@@ -104,6 +108,12 @@ async def _solve_one(
             output = f"ERROR: {exc}"
 
         score = scoring.score if scoring else 0.0
+        if routing_plugin is not None and run is not None and run.invocation_id is not None:
+            # Failed pipelines get score=0.0 (set above), and any step-level
+            # records appended before the failure still get backfilled — the
+            # router needs to learn that those step choices led to a
+            # zero-score outcome.
+            routing_plugin.commit_task_score(run.invocation_id, score)
         # EM and F1 are independent: bag-of-words F1 can hit 1.0 on
         # word-order swaps that fail normalized string equality, so compute
         # EM via the same normalization the scorer uses rather than score==1.0.
@@ -139,6 +149,7 @@ async def evaluate_on(
     scorer: HotpotQAScorer,
     stage: str = "eval",
     concurrency: int = 1,
+    routing_plugin: LLMRoutingPlugin | None = None,
 ) -> list[TaskResult]:
     total = len(tasks)
     sem = asyncio.Semaphore(max(1, concurrency))
@@ -148,7 +159,10 @@ async def evaluate_on(
         "[{}] Evaluating {} tasks with concurrency={}", stage, total, concurrency
     )
     coros = [
-        _solve_one(i, t, config, answer_key, maw, scorer, sem, stage, total, progress)
+        _solve_one(
+            i, t, config, answer_key, maw, scorer, sem, stage, total, progress,
+            routing_plugin=routing_plugin,
+        )
         for i, t in enumerate(tasks)
     ]
     return await asyncio.gather(*coros)
@@ -178,7 +192,10 @@ def _em_rate(tasks: list[TaskResult]) -> float:
     return sum(t.correct for t in tasks) / len(tasks) if tasks else 0.0
 
 
-async def main(settings: HotpotQASettings) -> BenchmarkResult:
+async def main(
+    settings: HotpotQASettings,
+    routing_plugin: LLMRoutingPlugin | None = None,
+) -> BenchmarkResult:
     trainset, valset, testset = load_hotpot_dataset(
         seed=settings.seed,
         train_limit=settings.train_limit,
@@ -217,6 +234,7 @@ async def main(settings: HotpotQASettings) -> BenchmarkResult:
         baseline_tasks = await evaluate_on(
             seed_config, testset, maw, scorer,
             stage="baseline", concurrency=settings.concurrency,
+            routing_plugin=routing_plugin,
         )
         optimized_tasks = baseline_tasks
     else:
@@ -243,6 +261,7 @@ async def main(settings: HotpotQASettings) -> BenchmarkResult:
             optimized_tasks = await evaluate_on(
                 opt_result.best_config, testset, maw, scorer,
                 stage="optimized", concurrency=settings.concurrency,
+                routing_plugin=routing_plugin,
             )
 
         if settings.eval_best_on_train:
@@ -250,6 +269,7 @@ async def main(settings: HotpotQASettings) -> BenchmarkResult:
             train_eval_tasks = await evaluate_on(
                 opt_result.best_config, trainset, maw, scorer,
                 stage="train-final", concurrency=settings.concurrency,
+                routing_plugin=routing_plugin,
             )
 
     if baseline_tasks:

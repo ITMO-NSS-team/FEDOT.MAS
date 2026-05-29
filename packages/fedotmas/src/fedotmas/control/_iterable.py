@@ -222,6 +222,7 @@ class IterableRun:
                 state=error_state,
                 checkpoints=self._checkpoint.checkpoints,
                 error=RunError(agent_name=agent_name, message=msg),
+                invocation_id=getattr(exc, "invocation_id", None),
             )
 
         return ControlledRun(
@@ -229,4 +230,5 @@ class IterableRun:
             status="success",
             state=result.state,
             checkpoints=self._checkpoint.checkpoints,
+            invocation_id=result.invocation_id,
         )

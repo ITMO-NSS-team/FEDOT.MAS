@@ -74,6 +74,40 @@ async def test_run_error():
 
 
 @pytest.mark.asyncio
+async def test_run_surfaces_invocation_id_on_success():
+    maw = _mock_maw()
+    config = _config("a")
+    maw.generate_config.return_value = config
+
+    with patch("fedotmas.control._controller.run_pipeline") as mock_run:
+        mock_run.return_value = PipelineResult(
+            state={"a": "ok"}, invocation_id="inv-abc"
+        )
+        ctrl = Controller(maw)
+        run = await ctrl.run("t")
+
+    assert run.invocation_id == "inv-abc"
+
+
+@pytest.mark.asyncio
+async def test_run_surfaces_invocation_id_on_error():
+    maw = _mock_maw()
+    config = _config("a")
+    maw.generate_config.return_value = config
+
+    err = RuntimeError("Agent 'a' failed with error 500: boom")
+    err.invocation_id = "inv-err"
+
+    with patch("fedotmas.control._controller.run_pipeline") as mock_run:
+        mock_run.side_effect = err
+        ctrl = Controller(maw)
+        run = await ctrl.run("t")
+
+    assert run.status == "error"
+    assert run.invocation_id == "inv-err"
+
+
+@pytest.mark.asyncio
 async def test_run_with_provided_config():
     maw = _mock_maw()
     config = _config("a", "b")

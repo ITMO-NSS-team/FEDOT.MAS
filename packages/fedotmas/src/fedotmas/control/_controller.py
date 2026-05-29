@@ -427,6 +427,7 @@ class Controller:
                 state=error_state,
                 checkpoints=checkpoint.checkpoints,
                 error=RunError(agent_name=agent_name, message=msg),
+                invocation_id=getattr(exc, "invocation_id", None),
             )
 
         return ControlledRun(
@@ -434,6 +435,7 @@ class Controller:
             status="success",
             state=result.state,
             checkpoints=checkpoint.checkpoints,
+            invocation_id=result.invocation_id,
         )
 
 

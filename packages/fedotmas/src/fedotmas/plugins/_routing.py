@@ -64,9 +64,7 @@ def _agent_name(callback_context: CallbackContext) -> str:
 def _last_user_text(contents: list[types.Content]) -> str:
     """Return the most recent user-role text, joined across parts.
     Falls back to the last message of any role if no user message has
-    text. Used as the embedding query — the system instruction is
-    excluded because it's a constant for a given ``agent_role``, which
-    is already captured separately."""
+    text."""
     for c in reversed(contents):
         if c.role == "user" and c.parts:
             texts = [p.text for p in c.parts if p.text]
@@ -77,6 +75,57 @@ def _last_user_text(contents: list[types.Content]) -> str:
         if texts:
             return "\n".join(texts)
     return ""
+
+
+def _system_instruction_text(llm_request: LlmRequest) -> str:
+    """Extract the system_instruction as a string for embedding.
+
+    By the time ``before_model_callback`` fires, ADK's instructions
+    processor has already injected ``agent.instruction`` (with session
+    state substituted) into ``llm_request.config.system_instruction``
+    as a string — but the GenAI union also permits ``Content`` / ``Part``
+    / ``list[...]``, so we handle all text-bearing variants and return
+    "" for anything we can't render to text (Image/File/None).
+    """
+    if llm_request.config is None:
+        return ""
+    si = llm_request.config.system_instruction
+    if si is None:
+        return ""
+    if isinstance(si, str):
+        return si
+    if isinstance(si, types.Part):
+        return si.text or ""
+    if isinstance(si, types.Content):
+        if not si.parts:
+            return ""
+        return "\n".join(p.text for p in si.parts if p.text)
+    if isinstance(si, list):
+        chunks: list[str] = []
+        for el in si:
+            if isinstance(el, str):
+                chunks.append(el)
+            elif isinstance(el, types.Part) and el.text:
+                chunks.append(el.text)
+        return "\n".join(chunks)
+    return ""
+
+
+def _compose_query(llm_request: LlmRequest) -> str:
+    """Build the embedding query for routing.
+
+    Combines the (state-substituted) system_instruction with the latest
+    user-role text. In MAW pipelines all agents in one ``Runner.run()``
+    see the same user content (the original task) and are differentiated
+    only by their system_instruction — so without including it, retrieval
+    by semantic similarity returns the same neighbours for every agent
+    in a trace and can't tell them apart.
+    """
+    si = _system_instruction_text(llm_request).strip()
+    user = _last_user_text(llm_request.contents).strip()
+    if si and user:
+        return f"{si}\n\n{user}"
+    return si or user
 
 
 def _tools_from_request(llm_request: LlmRequest) -> tuple[str, ...]:
@@ -134,7 +183,10 @@ class LLMRoutingPlugin(BasePlugin):
             LlmPoolEntry("openai/gpt-4o", 2.5, 10.0),
         ))
         plugin = LLMRoutingPlugin(pool=pool)
-        maw = MAW(plugins=[plugin])
+
+        # Either path works: pass to Controller.run for benchmark/control
+        # flows, or to MAW(plugins=[...]) for full-auto maw.run.
+        run = await Controller(maw).run(task, config=cfg, plugins=[plugin])
 
     After each task is scored::
 
@@ -268,12 +320,7 @@ class LLMRoutingPlugin(BasePlugin):
             return None
 
         trace_id = _invocation_id(callback_context)
-        # TODO(phase-5): contents[-1] is often the same user task across
-        # all agents in a MAW pipeline — they're differentiated by
-        # config.system_instruction, not by user content. Routing
-        # retrieval by similarity is uninformative until we mix the
-        # system instruction into the query string.
-        query = _last_user_text(llm_request.contents)
+        query = _compose_query(llm_request)
         tools = _tools_from_request(llm_request)
 
         try:

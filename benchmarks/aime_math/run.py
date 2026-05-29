@@ -12,6 +12,7 @@ from fedotmas.maw.models import MAWConfig, MAWStepConfig
 from fedotmas.optimize._config import OptimizationConfig
 from fedotmas.optimize._optimizer import Optimizer
 from fedotmas.optimize._state import Task
+from fedotmas.plugins import LLMRoutingPlugin
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _utils import BenchmarkResult, CostSummary, TaskResult, save_result
@@ -83,11 +84,14 @@ async def _solve_one(
     stage: str,
     total: int,
     progress: dict[str, int],
+    routing_plugin: LLMRoutingPlugin | None = None,
 ) -> TaskResult:
     async with sem:
         _log.info("[{}] Task {}/{} — solving...", stage, i + 1, total)
+        plugins = [routing_plugin] if routing_plugin is not None else None
+        run = None
         try:
-            run = await Controller(maw).run(task.input, config=config)
+            run = await Controller(maw).run(task.input, config=config, plugins=plugins)
             if run.status == "error":
                 err_msg = run.error.message if run.error else "unknown error"
                 _log.warning(
@@ -104,6 +108,13 @@ async def _solve_one(
             output = f"ERROR: {exc}"
 
         is_correct = (scoring.score == 1.0) if scoring else False
+        score = scoring.score if scoring else 0.0
+        if routing_plugin is not None and run is not None and run.invocation_id is not None:
+            # Failed pipelines get score=0.0 (set above), and any step-level
+            # records appended before the failure still get backfilled — the
+            # router needs to learn that those step choices led to a
+            # zero-score outcome.
+            routing_plugin.commit_task_score(run.invocation_id, score)
         progress["done"] += 1
         if is_correct:
             progress["correct"] += 1
@@ -124,7 +135,7 @@ async def _solve_one(
             input=task.input[:200],
             expected=task.expected,
             output=output,
-            score=scoring.score if scoring else 0.0,
+            score=score,
             correct=is_correct,
         )
 
@@ -136,6 +147,7 @@ async def evaluate_on(
     scorer: ExactIntScorer,
     stage: str = "eval",
     concurrency: int = 1,
+    routing_plugin: LLMRoutingPlugin | None = None,
 ) -> list[TaskResult]:
     total = len(tasks)
     sem = asyncio.Semaphore(max(1, concurrency))
@@ -145,7 +157,10 @@ async def evaluate_on(
         "[{}] Evaluating {} tasks with concurrency={}", stage, total, concurrency
     )
     coros = [
-        _solve_one(i, t, config, answer_key, maw, scorer, sem, stage, total, progress)
+        _solve_one(
+            i, t, config, answer_key, maw, scorer, sem, stage, total, progress,
+            routing_plugin=routing_plugin,
+        )
         for i, t in enumerate(tasks)
     ]
     return await asyncio.gather(*coros)
@@ -165,7 +180,10 @@ def report(result: BenchmarkResult) -> None:
         _log.info("Total tokens:        {:,}", result.cost.total_tokens)
 
 
-async def main(settings: AimeMathSettings) -> BenchmarkResult:
+async def main(
+    settings: AimeMathSettings,
+    routing_plugin: LLMRoutingPlugin | None = None,
+) -> BenchmarkResult:
     trainset, valset, testset, solutions = load_math_dataset(
         seed=settings.seed,
         train_limit=settings.train_limit,
@@ -204,6 +222,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
         baseline_tasks = await evaluate_on(
             seed_config, testset, maw, scorer,
             stage="baseline", concurrency=settings.concurrency,
+            routing_plugin=routing_plugin,
         )
         optimized_tasks = baseline_tasks
     else:
@@ -230,6 +249,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
             optimized_tasks = await evaluate_on(
                 opt_result.best_config, testset, maw, scorer,
                 stage="optimized", concurrency=settings.concurrency,
+                routing_plugin=routing_plugin,
             )
 
         if settings.eval_best_on_train:
@@ -242,6 +262,7 @@ async def main(settings: AimeMathSettings) -> BenchmarkResult:
             train_eval_tasks = await evaluate_on(
                 opt_result.best_config, trainset, maw, scorer,
                 stage="train-final", concurrency=settings.concurrency,
+                routing_plugin=routing_plugin,
             )
 
     if baseline_tasks:

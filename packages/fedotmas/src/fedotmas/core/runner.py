@@ -26,6 +26,7 @@ class PipelineResult:
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
     elapsed: float = 0.0
+    invocation_id: str | None = None
 
 
 async def run_pipeline(
@@ -95,6 +96,7 @@ async def run_pipeline(
     _log.info("Pipeline run started | pipeline={}", app.root_agent.name)
     total_prompt = 0
     total_completion = 0
+    invocation_id: str | None = None
     pipeline_start = time.monotonic()
 
     async with Runner(
@@ -107,6 +109,11 @@ async def run_pipeline(
             session_id=session.id,
             new_message=message,
         ):
+            if invocation_id is None:
+                ev_id = getattr(event, "invocation_id", None)
+                if ev_id:
+                    invocation_id = ev_id
+
             if event.partial:
                 continue
 
@@ -124,10 +131,15 @@ async def run_pipeline(
                     event.error_code,
                     event.error_message,
                 )
-                raise RuntimeError(
+                err = RuntimeError(
                     f"Agent '{event.author}' failed with error {event.error_code}: "
                     f"{event.error_message}"
                 )
+                # Attach so callers (Controller._execute) can surface the
+                # invocation_id on the resulting error ControlledRun — the
+                # routing plugin needs it for commit_task_score backfill.
+                err.invocation_id = invocation_id  # type: ignore[attr-defined]
+                raise err
 
     total_elapsed = time.monotonic() - pipeline_start
     _log.info(
@@ -152,4 +164,5 @@ async def run_pipeline(
         total_prompt_tokens=total_prompt,
         total_completion_tokens=total_completion,
         elapsed=total_elapsed,
+        invocation_id=invocation_id,
     )

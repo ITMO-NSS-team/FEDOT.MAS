@@ -41,6 +41,12 @@ class ControlledRun:
     state: dict[str, Any] = field(default_factory=dict)
     checkpoints: list[Checkpoint] = field(default_factory=list)
     error: RunError | None = None
+    # ADK invocation id of the underlying pipeline run, when known.
+    # Captured from the first event yielded by the Runner. Used by the
+    # routing plugin's ``commit_task_score(invocation_id, score)`` to
+    # backfill ``success_task`` after the benchmark scorer runs. ``None``
+    # when no events were yielded (e.g. build-time failure before run).
+    invocation_id: str | None = None
 
     @property
     def result(self) -> dict[str, Any]:
