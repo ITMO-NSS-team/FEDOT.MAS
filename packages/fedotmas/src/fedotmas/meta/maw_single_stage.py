@@ -5,7 +5,7 @@ from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
 from fedotmas._settings import ModelConfig
-from fedotmas.mcp import MCPServerConfig, get_server_descriptions
+from fedotmas.mcp import MCPServerConfig, discover_relevant_servers, get_server_descriptions
 from fedotmas.meta._adk_runner import run_meta_agent_call
 from fedotmas.meta._helpers import (
     format_server_descriptions,
@@ -26,6 +26,7 @@ async def generate_pipeline_config(
     worker_models: list[str | ModelConfig] | None = None,
     temperature: float | None = None,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
+    discover_mcp: bool = True,
     session_service: BaseSessionService | None = None,
     max_retries: int = 2,
     plugins: list[BasePlugin] | None = None,
@@ -39,6 +40,12 @@ async def generate_pipeline_config(
         worker_models,
         temperature,
     )
+
+    if discover_mcp:
+        discovered = await discover_relevant_servers(task)
+        if discovered:
+            # existing registry takes priority over discovered servers
+            mcp_registry = {**discovered, **(mcp_registry or {})}
 
     descriptions = get_server_descriptions(mcp_registry)
     desc_text = format_server_descriptions(descriptions)
