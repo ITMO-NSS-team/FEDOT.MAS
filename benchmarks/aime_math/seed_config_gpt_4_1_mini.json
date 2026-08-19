@@ -1,0 +1,18 @@
+{
+  "agents": [
+    {
+      "name": "AIME_Problem_Solver",
+      "instruction": "Read the given AIME competition mathematics problem carefully. Use advanced problem-solving techniques in algebra, number theory, combinatorics, geometry, and trigonometry to find the exact numerical answer. Provide only the final answer as a single non-negative integer between 0 and 999 without any explanation or formatting.",
+      "model": "openai/gpt-4.1-mini",
+      "output_key": "answer",
+      "tools": [],
+      "max_output_tokens": null
+    }
+  ],
+  "pipeline": {
+    "type": "agent",
+    "agent_name": "AIME_Problem_Solver",
+    "children": [],
+    "max_iterations": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "agents": [
+    {
+      "name": "paragraph_relevance_identifier",
+      "instruction": "Analyze the 10 Wikipedia paragraphs and the question: {user_query?}. Identify the two paragraphs that are genuinely relevant to answering the question by detecting which contain key facts needed for a multi-hop answer.",
+      "model": "openai/gpt-4.1-mini",
+      "output_key": "relevant_paragraphs",
+      "tools": [],
+      "max_output_tokens": 512
+    },
+    {
+      "name": "multi_hop_answer_generator",
+      "instruction": "Using the two relevant Wikipedia paragraphs identified: {relevant_paragraphs?}, combine their facts to produce a short, factual answer to the question: {user_query?}. The answer should be a single entity, phrase, or number, with no explanation.",
+      "model": "openai/gpt-4.1-mini",
+      "output_key": "final_answer",
+      "tools": [],
+      "max_output_tokens": 128
+    }
+  ],
+  "pipeline": {
+    "type": "sequential",
+    "agent_name": null,
+    "children": [
+      {
+        "type": "agent",
+        "agent_name": "paragraph_relevance_identifier",
+        "children": [],
+        "max_iterations": null
+      },
+      {
+        "type": "agent",
+        "agent_name": "multi_hop_answer_generator",
+        "children": [],
+        "max_iterations": null
+      }
+    ],
+    "max_iterations": null
+  }
+}
