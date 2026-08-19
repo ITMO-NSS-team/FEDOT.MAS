@@ -15,10 +15,14 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-  "google-adk>=1.26",
+  "google-adk[mcp]>=2.3,<3",
   "litellm>=1.80.16",
   "loguru>=0.7.3",
-  "mcp>=1.27.1",
+  # mcp is imported directly by fedotmas/mcp/registry.py. The <2 ceiling is
+  # load-bearing: mcp 2.0 dropped mcp.shared.session, which google-adk still
+  # imports, and adk swallows the failure into an empty __all__ — surfacing as
+  # "cannot import name McpToolset" rather than anything about mcp.
+  "mcp>=1.27.1,<2",
   "platformdirs>=4.9.2",
   "pydantic>=2.12.5",
   "python-dotenv>=1.2.1",
