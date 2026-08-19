@@ -1,0 +1,19 @@
+{
+  "models": [
+    {
+      "model": "openai/gpt-4.1-mini",
+      "input_price_per_1m": 0.4,
+      "output_price_per_1m": 1.6
+    },
+    {
+      "model": "openai/gpt-4.1",
+      "input_price_per_1m": 2.0,
+      "output_price_per_1m": 8.0
+    },
+    {
+      "model": "openai/o4-mini",
+      "input_price_per_1m": 1.1,
+      "output_price_per_1m": 4.4
+    }
+  ]
+}

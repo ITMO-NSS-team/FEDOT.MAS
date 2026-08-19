@@ -12,6 +12,8 @@ from tqdm import tqdm
 
 from fedotmas import MAW
 from fedotmas.common.logging import get_logger
+from fedotmas.plugins import LLMRoutingPlugin, LoggingPlugin
+from fedotmas.routing import LlmPool, LlmPoolEntry
 
 from examples.gaia.data import GaiaBenchmark
 
@@ -19,6 +21,20 @@ load_dotenv()
 
 RUN_ID = uuid.uuid4()
 _log = get_logger("fedotmas.examples.gaia")
+
+
+def load_routing_plugin(path: Path) -> LLMRoutingPlugin:
+    """Load pool config from JSON and construct a single shared plugin.
+
+    JSON schema:
+        {"models": [{"model": str, "input_price_per_1m": float,
+                     "output_price_per_1m": float}, ...]}
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    entries = tuple(LlmPoolEntry(**m) for m in data["models"])
+    pool = LlmPool(entries=entries)
+    return LLMRoutingPlugin(pool=pool)
 
 
 def extract_solution(text: str) -> str:
@@ -175,6 +191,7 @@ async def process_task(
     task,
     gaia_benchmark: GaiaBenchmark,
     task_log_dir: Path,
+    routing_plugin: LLMRoutingPlugin | None = None,
 ) -> dict:
     """Process a single GAIA task using FEDOT.MAS MAW."""
     instruction = (
@@ -189,13 +206,22 @@ async def process_task(
         query += f"File name: {task.file_name}\n"
     query += f"Question: {task.question}"
 
-    maw = MAW(mcp_servers="all")
+    plugins = [LoggingPlugin(), routing_plugin] if routing_plugin is not None else None
+    maw = MAW(mcp_servers="all", plugins=plugins)
     state = await maw.run(query)
 
     answer = extract_answer_from_state(state)
     is_correct = gaia_benchmark.is_correct_answer(answer, task.ground_truth)
 
     pipeline_result = maw.last_result
+    if (
+        routing_plugin is not None
+        and pipeline_result is not None
+        and pipeline_result.invocation_id is not None
+    ):
+        routing_plugin.commit_task_score(
+            pipeline_result.invocation_id, 1.0 if is_correct else 0.0
+        )
 
     result = {
         "task_id": task.task_id,
@@ -228,7 +254,11 @@ async def process_task(
     return result
 
 
-async def run_gaia(difficulty: str, split: str) -> Any:
+async def run_gaia(
+    difficulty: str,
+    split: str,
+    routing_plugin: LLMRoutingPlugin | None = None,
+) -> Any:
     """Run GAIA benchmark using FEDOT.MAS MAW."""
     base_log_dir = Path(__file__).resolve().parent / "gaia_logs" / f"run_{RUN_ID}"
     base_log_dir.mkdir(parents=True, exist_ok=True)
@@ -244,7 +274,9 @@ async def run_gaia(difficulty: str, split: str) -> Any:
     for task in tqdm(gaia, desc="Processing GAIA tasks"):
         task_log_dir = base_log_dir / f"task_{task.task_id}"
         try:
-            result = await process_task(task, gaia, task_log_dir)
+            result = await process_task(
+                task, gaia, task_log_dir, routing_plugin=routing_plugin
+            )
             status = "CORRECT" if result["is_correct"] else "WRONG"
             _log.info(
                 "[{}] task={} answer='{}' gt='{}'",
@@ -302,9 +334,30 @@ def main():
         default="validation[:1]",
         help="Dataset split (default: validation[:1])",
     )
+    parser.add_argument(
+        "--routing-pool",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a routing pool JSON config. When set, LLMRoutingPlugin "
+            "is wired into every task's MAW and task scores are committed "
+            "back to the shared experience store. When unset, static "
+            "MAWAgentConfig.model selection is used."
+        ),
+    )
     args = parser.parse_args()
 
-    asyncio.run(run_gaia(difficulty=args.difficulty, split=args.split))
+    routing_plugin = (
+        load_routing_plugin(args.routing_pool) if args.routing_pool else None
+    )
+
+    asyncio.run(
+        run_gaia(
+            difficulty=args.difficulty,
+            split=args.split,
+            routing_plugin=routing_plugin,
+        )
+    )
 
 
 if __name__ == "__main__":

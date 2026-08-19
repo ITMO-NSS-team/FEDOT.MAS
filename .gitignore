@@ -197,3 +197,7 @@ cython_debug/
 
 # ADK meta
 .adk/
+
+# FEDOT.MAS local artifacts
+outputs/
+examples/gaia/gaia_logs/
