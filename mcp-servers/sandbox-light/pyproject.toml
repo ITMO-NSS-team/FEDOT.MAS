@@ -13,7 +13,13 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
 ]
-dependencies = [ "fastmcp>=2.14.5", "pydantic-monty" ]
+dependencies = [
+  "fastmcp>=2.14.5",
+  # pydantic-monty 0.0.19 renamed MontyRepl to MontySession and turned Monty
+  # into a worker-pool context manager, so both tools here fail to import.
+  # Server code targets the pre-0.0.19 API; lifting the cap needs a rewrite.
+  "pydantic-monty<0.0.19",
+]
 scripts.mcp-sandbox = "mcp_sandbox_light.server:main"
 
 [dependency-groups]

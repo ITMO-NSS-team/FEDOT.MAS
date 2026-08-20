@@ -65,7 +65,11 @@ async def handcrafted():
 
 
 async def with_tools():
-    """Workers with MCP tools assigned."""
+    """Workers with MCP tools assigned.
+
+    ``websearch-searxng`` talks to a local SearXNG instance: run
+    ``just searxng-start`` first.
+    """
     config = MASConfig(
         coordinator=MASAgentConfig(
             name="router",
@@ -84,7 +88,7 @@ async def with_tools():
                 name="researcher",
                 description="Searches the web for information",
                 instruction="Search the web to answer the user's question.",
-                tools=["web-search"],
+                tools=["websearch-searxng"],
                 output_key="research_result",
             ),
         ],
