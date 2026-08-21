@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from fedotmas._settings import DEFAULT_META_MODEL, ModelConfig
+from fedotmas._settings import ModelConfig
 from fedotmas.maw.builder import (
     _inject_exit_loop,
     _resolve_llm,
@@ -110,9 +110,11 @@ class TestNormalizeModelNameDefault:
         cfg = MAWAgentConfig(name="t", instruction="x", output_key="k", model=None)
         assert cfg.model is None
 
-    def test_resolve_none_gives_default(self):
-        result = _resolve_llm(None, None)
-        assert result == DEFAULT_META_MODEL
+    def test_resolve_none_uses_configured_worker_model(self):
+        with patch(
+            "fedotmas.maw.builder.get_worker_models", return_value=["openai/gpt-4o"]
+        ):
+            assert _resolve_llm(None, None) == "openai/gpt-4o"
 
 
 class TestNormalizeModelNamePrefix:

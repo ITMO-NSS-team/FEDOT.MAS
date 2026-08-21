@@ -6,7 +6,11 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from fedotmas.common.logging import get_logger
+
 load_dotenv()
+
+_log = get_logger("fedotmas.settings")
 
 DEFAULT_META_MODEL = "qwen/qwen3.6-finetuned"
 DEFAULT_WORKER_MODELS: list[str] = ["openai/gpt-5-mini"]
@@ -109,7 +113,10 @@ def get_reflection_model() -> str:
 def get_worker_models() -> list[str]:
     env = os.getenv("FEDOTMAS_WORKER_MODELS")
     if env:
-        return [m.strip() for m in env.split(",") if m.strip()]
+        models = [m.strip() for m in env.split(",") if m.strip()]
+        if models:
+            return models
+        _log.warning("FEDOTMAS_WORKER_MODELS={!r} names no models, falling back", env)
     default = os.getenv("FEDOTMAS_DEFAULT_MODEL")
     if default:
         return [default]

@@ -10,9 +10,9 @@ from google.adk.tools.exit_loop_tool import exit_loop
 from google.genai import types as genai_types
 
 from fedotmas._settings import (
-    DEFAULT_META_MODEL,
     ModelConfig,
     get_max_loop_iterations,
+    get_worker_models,
 )
 from fedotmas.common.llm import make_llm
 from fedotmas.common.logging import get_logger
@@ -90,10 +90,8 @@ def _resolve_llm(
     normalized or ``None``.
     """
     if not model_name:
-        _log.warning(
-            "No model specified for agent, using default: {}", DEFAULT_META_MODEL
-        )
-        return DEFAULT_META_MODEL
+        model_name = get_worker_models()[0]
+        _log.warning("No model specified for agent, using default: {}", model_name)
     if worker_models:
         cfg = worker_models.get(model_name)
         if cfg:
