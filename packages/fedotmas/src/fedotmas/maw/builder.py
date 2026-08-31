@@ -55,6 +55,10 @@ def _build_node(
         _build_node(c, agents, mcp_registry, worker_models) for c in node.children
     ]
 
+    # ADK 2.x deprecates the three workflow agents below in favour of Workflow,
+    # so every run warns about them.  Do not migrate yet: ADK's own warning says
+    # "Workflow cannot yet be used as an LlmAgent sub-agent", and MAW pipelines
+    # nest exactly that way.  Revisit once that restriction is lifted.
     if node.type == "sequential":
         name = _seq_name(children)
         _log.debug("Built sequential node | name={}", name)
