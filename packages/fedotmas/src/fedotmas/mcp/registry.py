@@ -17,6 +17,11 @@ from fedotmas.mcp.discovery import discover_local_servers
 
 _log = get_logger("fedotmas.mcp.registry")
 
+#: Variables that point at *our* virtualenv.  Local servers are launched with
+#: ``uv run --directory``, which resolves its own environment per server; an
+#: inherited value makes uv warn and can send the child at the wrong .venv.
+_PARENT_VENV_VARS = frozenset({"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"})
+
 
 @functools.cache
 def get_mcp_servers() -> dict[str, MCPServerConfig]:
@@ -38,7 +43,10 @@ def create_toolset(
 
     match cfg:
         case StdioMCPServer():
-            env = {**get_default_environment(), **os.environ, **cfg.env}
+            inherited = {
+                k: v for k, v in os.environ.items() if k not in _PARENT_VENV_VARS
+            }
+            env = {**get_default_environment(), **inherited, **cfg.env}
             params = StdioConnectionParams(
                 server_params=StdioServerParameters(
                     command=cfg.command,

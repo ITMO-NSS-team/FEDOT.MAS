@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 
 from fedotmas.common.logging import get_logger
-from fedotmas.mcp._config import MCPServerConfig, StdioMCPServer
+from fedotmas.mcp._config import (
+    DEFAULT_MCP_TIMEOUT_S,
+    MCPServerConfig,
+    StdioMCPServer,
+)
 
 _log = get_logger("fedotmas.mcp.discovery")
 
@@ -20,11 +25,30 @@ def _get_uv_bin() -> str:
     return _UV_BIN
 
 
+def _default_timeout() -> int:
+    """Session-ready timeout for servers that do not declare one."""
+    value = os.getenv("FEDOTMAS_MCP_TIMEOUT_S")
+    if value is None:
+        return DEFAULT_MCP_TIMEOUT_S
+    try:
+        parsed = int(value)
+    except ValueError:
+        parsed = 0
+    if parsed <= 0:
+        _log.warning(
+            "Invalid FEDOTMAS_MCP_TIMEOUT_S={!r}; using {}",
+            value,
+            DEFAULT_MCP_TIMEOUT_S,
+        )
+        return DEFAULT_MCP_TIMEOUT_S
+    return parsed
+
+
 def _directory_server(
     directory: str,
     entry_point: str,
     *,
-    timeout: int = 60,
+    timeout: int = DEFAULT_MCP_TIMEOUT_S,
     description: str = "",
     tags: tuple[str, ...] = (),
 ) -> StdioMCPServer:
@@ -78,6 +102,9 @@ def discover_local_servers(
     Each ``pyproject.toml`` must declare ``[tool.fedotmas.mcp]`` with at least
     ``name`` (str).  Optional: ``description``, ``tags``, ``timeout``.
 
+    A server that does not declare ``timeout`` gets ``FEDOTMAS_MCP_TIMEOUT_S``
+    if set, else :data:`DEFAULT_MCP_TIMEOUT_S`.
+
     Server resolution order:
 
     1. If ``mcp.command`` is present → use it directly as an external binary
@@ -98,6 +125,7 @@ def discover_local_servers(
         return {}
 
     result: dict[str, MCPServerConfig] = {}
+    default_timeout = _default_timeout()
 
     for pyproject_path in sorted(servers_dir.glob("*/pyproject.toml")):
         server_dir = pyproject_path.parent
@@ -125,7 +153,7 @@ def discover_local_servers(
             result[name] = StdioMCPServer(
                 command=str(command),
                 args=tuple(mcp_meta.get("args", ())),
-                timeout=int(timeout) if timeout is not None else 60,
+                timeout=int(timeout) if timeout is not None else default_timeout,
                 description=str(description),
                 tags=tags,
             )
@@ -141,7 +169,7 @@ def discover_local_servers(
         result[name] = _directory_server(
             directory=str(server_dir),
             entry_point=str(entry_point),
-            timeout=int(timeout) if timeout is not None else 60,
+            timeout=int(timeout) if timeout is not None else default_timeout,
             description=str(description),
             tags=tags,
         )

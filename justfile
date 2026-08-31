@@ -35,6 +35,39 @@ check: lint typecheck
 test-unit:
     uv run pytest packages/fedotmas/tests/ -v
 
+# MCP servers
+#
+# Each server resolves its own dependencies on first launch, and on a fresh
+# machine that resolution runs inside the agent's session-ready timeout --
+# which is what makes a first run fail with
+# "timed out waiting for the session to become ready".
+
+# Build the venv of every local MCP server up front
+mcp-sync:
+    #!/usr/bin/env bash
+    set -uo pipefail
+
+    failed=()
+    for pyproject in mcp-servers/*/pyproject.toml; do
+        dir="$(dirname "$pyproject")"
+        echo "==> $dir"
+        # Same isolation registry.py applies to the child at run time: an
+        # inherited UV_PROJECT_ENVIRONMENT would sync all ten servers into
+        # one shared venv, and the runtime would still find none of them.
+        env -u UV_PROJECT_ENVIRONMENT -u VIRTUAL_ENV uv sync --directory "$dir" \
+            || failed+=("$dir")
+    done
+
+    if [ ${#failed[@]} -gt 0 ]; then
+        echo ""
+        echo "Failed to sync: ${failed[*]}"
+        echo "Those servers will still cold-start (slowly) or fail at runtime."
+        exit 1
+    fi
+
+    echo ""
+    echo "All MCP servers synced."
+
 # SearXNG
 
 searxng-install:

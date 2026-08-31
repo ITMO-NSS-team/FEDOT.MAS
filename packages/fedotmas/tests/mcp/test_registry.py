@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from fedotmas.mcp._config import StdioMCPServer
+from fedotmas.mcp._config import (
+    DEFAULT_MCP_TIMEOUT_S,
+    HttpMCPServer,
+    StdioMCPServer,
+)
 from fedotmas.mcp.registry import create_toolset
 
 
@@ -41,3 +45,40 @@ class TestStdioEnvPropagation:
         env = toolset._connection_params.server_params.env
         assert "PATH" in env
         assert "HOME" in env
+
+
+class TestStdioEnvIsolation:
+    """The child resolves its own venv, so ours must not leak into it."""
+
+    def test_parent_virtualenv_is_dropped(self, monkeypatch):
+        monkeypatch.setenv("VIRTUAL_ENV", "/repo/.venv")
+        monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/repo/.venv")
+
+        cfg = StdioMCPServer(command="echo", args=())
+        toolset = create_toolset("dummy", registry={"dummy": cfg})
+
+        env = toolset._connection_params.server_params.env
+        assert "VIRTUAL_ENV" not in env
+        assert "UV_PROJECT_ENVIRONMENT" not in env
+
+    def test_cfg_env_may_still_set_virtualenv(self, monkeypatch):
+        monkeypatch.setenv("VIRTUAL_ENV", "/repo/.venv")
+
+        cfg = StdioMCPServer(
+            command="echo", args=(), env={"VIRTUAL_ENV": "/elsewhere/.venv"}
+        )
+        toolset = create_toolset("dummy", registry={"dummy": cfg})
+
+        env = toolset._connection_params.server_params.env
+        assert env["VIRTUAL_ENV"] == "/elsewhere/.venv"
+
+
+class TestTimeoutDefaults:
+    """The generous cold-start budget belongs to locally spawned servers only."""
+
+    def test_stdio_gets_the_cold_start_budget(self):
+        assert StdioMCPServer(command="echo", args=()).timeout == DEFAULT_MCP_TIMEOUT_S
+
+    def test_http_stays_tight(self):
+        """ADK spends this per request, so an unreachable host must fail fast."""
+        assert HttpMCPServer(url="http://localhost:9001/mcp").timeout == 60

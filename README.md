@@ -27,6 +27,22 @@ uv sync
 cp -n .env.example .env 2>/dev/null || true
 ```
 
+### MCP servers
+
+The servers under `mcp-servers/` each carry their own environment, built on first
+use. Build them up front, or the first agent run pays dependency resolution inside
+its session-ready timeout and fails:
+
+```sh
+just mcp-sync
+```
+
+Some servers also need things outside Python — Docker for `websearch-searxng`
+(`just searxng-start`), a browser for `browser-usage` (`just browser-use-install`)
+and `web-scraping` (`just lightpanda-install`), and an `E2B_API_KEY` for `sandbox`.
+Discovery lists a server whether or not its prerequisites are present, so install
+only what the task needs and pass those names to `mcp_servers=`.
+
 ## Development
 
 **With just:**
