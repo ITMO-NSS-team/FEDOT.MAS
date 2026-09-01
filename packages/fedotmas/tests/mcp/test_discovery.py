@@ -143,3 +143,72 @@ mcp-classic = "mcp_classic:main"
     def test_non_positive_env_falls_back(self, tmp_path, monkeypatch):
         monkeypatch.setenv("FEDOTMAS_MCP_TIMEOUT_S", "0")
         assert self._scan(tmp_path).timeout == DEFAULT_MCP_TIMEOUT_S
+
+
+class TestToolNamePrefix:
+    """Renaming is opt-in per server, so plain tool names stay the norm."""
+
+    def test_absent_by_default(self, tmp_path):
+        _write_toml(
+            tmp_path,
+            "plain",
+            """\
+[tool.fedotmas]
+mcp.name = "plain"
+mcp.command = "plain-bin"
+""",
+        )
+        assert discover_local_servers(tmp_path)["plain"].tool_name_prefix is None
+
+    def test_declared_prefix_is_read(self, tmp_path):
+        _write_toml(
+            tmp_path,
+            "proxy",
+            """\
+[tool.fedotmas]
+mcp.name = "proxy"
+mcp.command = "proxy-bin"
+mcp.tool_name_prefix = "proxy_ns"
+""",
+        )
+        assert discover_local_servers(tmp_path)["proxy"].tool_name_prefix == "proxy_ns"
+
+    def test_empty_prefix_is_treated_as_unset(self, tmp_path):
+        _write_toml(
+            tmp_path,
+            "blank",
+            """\
+[tool.fedotmas]
+mcp.name = "blank"
+mcp.command = "blank-bin"
+mcp.tool_name_prefix = ""
+""",
+        )
+        assert discover_local_servers(tmp_path)["blank"].tool_name_prefix is None
+
+    def test_non_string_prefix_is_rejected(self, tmp_path):
+        """A bad pyproject must fail here, not as a 400 at the first model call."""
+        _write_toml(
+            tmp_path,
+            "bad",
+            """\
+[tool.fedotmas]
+mcp.name = "bad"
+mcp.command = "bad-bin"
+mcp.tool_name_prefix = 3
+""",
+        )
+        assert discover_local_servers(tmp_path)["bad"].tool_name_prefix is None
+
+    def test_prefix_with_illegal_characters_is_rejected(self, tmp_path):
+        _write_toml(
+            tmp_path,
+            "spaced",
+            """\
+[tool.fedotmas]
+mcp.name = "spaced"
+mcp.command = "spaced-bin"
+mcp.tool_name_prefix = "web scraping!"
+""",
+        )
+        assert discover_local_servers(tmp_path)["spaced"].tool_name_prefix is None

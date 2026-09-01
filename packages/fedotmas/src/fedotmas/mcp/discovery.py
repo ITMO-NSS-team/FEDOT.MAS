@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from fedotmas.mcp._config import (
 _log = get_logger("fedotmas.mcp.discovery")
 
 _UV_BIN: str | None = None
+
+_PREFIX_CHARS = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def _get_uv_bin() -> str:
@@ -44,6 +47,26 @@ def _default_timeout() -> int:
     return parsed
 
 
+def _resolve_prefix(value: object, server_name: str) -> str | None:
+    """Validate a declared ``tool_name_prefix``.
+
+    ADK joins it as ``f"{prefix}_{tool.name}"``, and providers accept only
+    ``[A-Za-z0-9_.-]`` in a function name.  Rejecting here keeps a bad
+    pyproject from surfacing as an opaque 400 at the first model call.
+    """
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not _PREFIX_CHARS.fullmatch(value):
+        _log.warning(
+            "Ignoring invalid tool_name_prefix={!r} for server '{}'; "
+            "expected a string of letters, digits, '.', '-' or '_'",
+            value,
+            server_name,
+        )
+        return None
+    return value
+
+
 def _directory_server(
     directory: str,
     entry_point: str,
@@ -51,6 +74,7 @@ def _directory_server(
     timeout: int = DEFAULT_MCP_TIMEOUT_S,
     description: str = "",
     tags: tuple[str, ...] = (),
+    tool_name_prefix: str | None = None,
 ) -> StdioMCPServer:
     """Local MCP server launched via ``uv run --directory``."""
     return StdioMCPServer(
@@ -59,6 +83,7 @@ def _directory_server(
         timeout=timeout,
         description=description,
         tags=tags,
+        tool_name_prefix=tool_name_prefix,
     )
 
 
@@ -100,7 +125,8 @@ def discover_local_servers(
             └── ...
 
     Each ``pyproject.toml`` must declare ``[tool.fedotmas.mcp]`` with at least
-    ``name`` (str).  Optional: ``description``, ``tags``, ``timeout``.
+    ``name`` (str).  Optional: ``description``, ``tags``, ``timeout``,
+    ``tool_name_prefix``.
 
     A server that does not declare ``timeout`` gets ``FEDOTMAS_MCP_TIMEOUT_S``
     if set, else :data:`DEFAULT_MCP_TIMEOUT_S`.
@@ -147,6 +173,7 @@ def discover_local_servers(
         description = mcp_meta.get("description", "")
         tags = tuple(mcp_meta.get("tags", ()))
         timeout = mcp_meta.get("timeout")
+        tool_name_prefix = _resolve_prefix(mcp_meta.get("tool_name_prefix"), name)
 
         command = mcp_meta.get("command")
         if command:
@@ -156,6 +183,7 @@ def discover_local_servers(
                 timeout=int(timeout) if timeout is not None else default_timeout,
                 description=str(description),
                 tags=tags,
+                tool_name_prefix=tool_name_prefix,
             )
             _log.debug("Discovered external MCP server: {} -> {}", name, command)
             continue
@@ -172,6 +200,7 @@ def discover_local_servers(
             timeout=int(timeout) if timeout is not None else default_timeout,
             description=str(description),
             tags=tags,
+            tool_name_prefix=tool_name_prefix,
         )
         _log.debug("Discovered MCP server: {} -> {}", name, server_dir)
 

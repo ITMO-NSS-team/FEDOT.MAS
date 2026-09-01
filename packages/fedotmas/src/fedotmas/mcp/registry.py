@@ -64,7 +64,10 @@ def create_toolset(
         case _:
             raise TypeError(f"Unsupported MCP server type: {type(cfg)}")
 
-    return McpToolset(connection_params=params)
+    return McpToolset(
+        connection_params=params,
+        tool_name_prefix=cfg.tool_name_prefix,
+    )
 
 
 def get_server_descriptions(

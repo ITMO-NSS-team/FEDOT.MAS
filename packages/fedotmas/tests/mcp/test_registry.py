@@ -82,3 +82,17 @@ class TestTimeoutDefaults:
     def test_http_stays_tight(self):
         """ADK spends this per request, so an unreachable host must fail fast."""
         assert HttpMCPServer(url="http://localhost:9001/mcp").timeout == 60
+
+
+class TestToolNamePrefixReachesAdk:
+    def test_prefix_is_passed_through(self):
+        cfg = StdioMCPServer(command="echo", args=(), tool_name_prefix="web_scraping")
+        toolset = create_toolset("dummy", registry={"dummy": cfg})
+
+        assert toolset.tool_name_prefix == "web_scraping"
+
+    def test_no_prefix_by_default(self):
+        cfg = StdioMCPServer(command="echo", args=())
+        toolset = create_toolset("dummy", registry={"dummy": cfg})
+
+        assert toolset.tool_name_prefix is None

@@ -20,6 +20,11 @@ class StdioMCPServer:
     env: dict[str, str] = field(default_factory=dict)
     description: str = ""
     tags: tuple[str, ...] = ()
+    #: Set only on a server whose tool names collide with another's.  ADK joins
+    #: it as ``f"{prefix}_{tool.name}"``.  Left unset everywhere else on purpose:
+    #: models call plain names like ``search`` far more reliably than decorated
+    #: ones, so renaming is a targeted fix, not a blanket policy.
+    tool_name_prefix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -34,6 +39,7 @@ class HttpMCPServer:
     timeout: int = 60
     description: str = ""
     tags: tuple[str, ...] = ()
+    tool_name_prefix: str | None = None
 
 
 MCPServerConfig = Union[StdioMCPServer, HttpMCPServer]

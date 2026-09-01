@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from google.adk.plugins import BasePlugin
@@ -80,6 +81,25 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
             tool_context=tool_context,
             error_type=type(error).__name__,
         )
+
+        if _is_unknown_tool_error(tool, error):
+            # ADK asks every plugin here before re-raising; returning None (as
+            # this callback used to, unconditionally) kills the whole run and
+            # discards every earlier step's output.  A hallucinated tool name
+            # does not deserve that: hand the model an ordinary error result so
+            # it can pick a real tool.  Repeats stay bounded because
+            # _record_error above already counted this toward the circuit.
+            _log.warning(
+                "Unknown tool '{}' called; reporting back to the model", tool.name
+            )
+            return {
+                "error": f"Tool '{tool.name}' does not exist.",
+                "hint": (
+                    "Call only the tools that were provided to you. If none of "
+                    "them fits, answer with the information you already have."
+                ),
+            }
+
         return None
 
     def _record_error(
@@ -121,6 +141,29 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
                 "Tool error circuit opened for agent "
                 f"'{agent_name}': {total} tool errors in this run."
             )
+
+
+#: ADK's message for a function call naming something absent from the agent's
+#: tools.  Deliberately anchored: a tool of our own raising "file not found"
+#: must not be mistaken for an unresolved tool name.
+_UNKNOWN_TOOL_MESSAGE = re.compile(r"^Tool '[^']*' not found\.")
+
+
+def _is_unknown_tool_error(tool: BaseTool, error: Exception) -> bool:
+    """Whether ADK failed to resolve the name the model asked for.
+
+    When a function call names something absent from the agent's tools, ADK
+    raises ``ValueError`` and passes this callback a bare ``BaseTool`` stub
+    rather than a real tool.  Two independent signals identify that, because
+    both are ADK internals and either could move: the stub's exact type (every
+    genuine tool is a ``BaseTool`` *subclass*) and the message shape.  Getting
+    this wrong in the strict direction merely restores the old crash; in the
+    lax direction it would swallow real tool failures, so each signal is
+    narrow on its own.
+    """
+    if not isinstance(error, ValueError):
+        return False
+    return type(tool) is BaseTool or bool(_UNKNOWN_TOOL_MESSAGE.match(str(error)))
 
 
 def _is_error_result(result: dict) -> bool:

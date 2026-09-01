@@ -4,6 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from google.adk.tools.base_tool import BaseTool
+
 from fedotmas.plugins import ToolErrorCircuitBreakerPlugin, ToolErrorCircuitOpen
 
 
@@ -124,3 +126,98 @@ class TestToolErrorCircuitBreakerPlugin:
         )
 
         assert result is None
+
+
+def _unknown_tool_stub(name: str = "exec") -> BaseTool:
+    """What ADK hands the callback when it cannot resolve a called name."""
+    return BaseTool(name=name, description="Tool not found")
+
+
+class _RealTool(BaseTool):
+    """Stands in for an actual tool: every genuine one subclasses BaseTool."""
+
+
+class TestHallucinatedToolName:
+    """An invented tool name must not discard the whole pipeline's work."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_is_reported_back_to_the_model(self):
+        plugin = ToolErrorCircuitBreakerPlugin()
+
+        result = await plugin.on_tool_error_callback(
+            tool=_unknown_tool_stub(),
+            tool_args={"cmd": ["bash", "-lc", "true"]},
+            tool_context=_tool_context(),
+            error=ValueError("Tool 'exec' not found.\nAvailable tools: "),
+        )
+
+        assert result is not None
+        assert "exec" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_a_real_tool_failure_still_propagates(self):
+        """Only the unresolved-name case is recovered; other errors re-raise.
+
+        The tool here is a genuine ``BaseTool`` subclass, so this fails if the
+        type guard is ever loosened to ``isinstance``.
+        """
+        plugin = ToolErrorCircuitBreakerPlugin()
+
+        result = await plugin.on_tool_error_callback(
+            tool=_RealTool(name="run_code", description="Run code"),
+            tool_args={},
+            tool_context=_tool_context(),
+            error=ValueError("sandbox refused the connection"),
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_a_real_tool_reporting_a_missing_file_is_not_recovered(self):
+        """The message guard is anchored, so 'not found' alone is not enough."""
+        plugin = ToolErrorCircuitBreakerPlugin()
+
+        result = await plugin.on_tool_error_callback(
+            tool=_RealTool(name="read_document", description="Read a document"),
+            tool_args={},
+            tool_context=_tool_context(),
+            error=ValueError("File '/tmp/report.pdf' not found."),
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_recognised_by_message_when_the_stub_type_changes(self):
+        """If ADK stops passing a bare BaseTool, the message still identifies it."""
+        plugin = ToolErrorCircuitBreakerPlugin()
+
+        result = await plugin.on_tool_error_callback(
+            tool=_RealTool(name="exec", description="Tool not found"),
+            tool_args={},
+            tool_context=_tool_context(),
+            error=ValueError("Tool 'exec' not found.\nAvailable tools: "),
+        )
+
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_repeats_still_trip_the_circuit(self):
+        """Recovering must not turn a loop on one bad name into a free pass."""
+        plugin = ToolErrorCircuitBreakerPlugin(max_same_tool_error_type=2)
+        ctx = _tool_context()
+        error = ValueError("Tool 'exec' not found.")
+
+        await plugin.on_tool_error_callback(
+            tool=_unknown_tool_stub(),
+            tool_args={},
+            tool_context=ctx,
+            error=error,
+        )
+
+        with pytest.raises(ToolErrorCircuitOpen):
+            await plugin.on_tool_error_callback(
+                tool=_unknown_tool_stub(),
+                tool_args={},
+                tool_context=ctx,
+                error=error,
+            )
