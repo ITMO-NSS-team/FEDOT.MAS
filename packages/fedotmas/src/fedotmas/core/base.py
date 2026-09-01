@@ -15,7 +15,11 @@ from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.core.runner import PipelineResult, run_pipeline
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
 from fedotmas.meta._result import MetaAgentResult
-from fedotmas.plugins import LoggingPlugin, WebSearchLimitPlugin
+from fedotmas.plugins import (
+    LoggingPlugin,
+    UnknownToolRecoveryPlugin,
+    WebSearchLimitPlugin,
+)
 
 _log = get_logger("fedotmas.core.base")
 
@@ -63,7 +67,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
         if plugins is not None:
             self._plugins: list[BasePlugin] = list(plugins)
         else:
-            self._plugins = [LoggingPlugin()]
+            self._plugins = [LoggingPlugin(), UnknownToolRecoveryPlugin()]
             if web_search_limit is not None:
                 self._plugins.append(
                     WebSearchLimitPlugin(max_calls_per_agent=web_search_limit)
