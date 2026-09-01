@@ -27,6 +27,12 @@ uv sync
 cp -n .env.example .env 2>/dev/null || true
 ```
 
+## Agent skill
+
+The reusable [FEDOT.MAS subagents skill](skills/fedot-mas-subagents/SKILL.md)
+helps agent hosts design and run bounded `MAW` workflows. It also includes a
+file bridge for host-native models that do not expose a compatible API.
+
 ## Development
 
 **With just:**
