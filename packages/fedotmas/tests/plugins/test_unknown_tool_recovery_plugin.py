@@ -136,27 +136,49 @@ class TestUnknownToolRecoveryPlugin:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_budget_does_not_leak_across_runs(self):
-        """Each run mints a new session, so a spent budget must not carry over."""
+    async def test_a_new_run_gets_a_fresh_budget(self):
+        """Budgets are per session, so the next run starts clean."""
         plugin = UnknownToolRecoveryPlugin(max_recoveries_per_agent=1)
-        ctx = _tool_context()
 
         await plugin.on_tool_error_callback(
             tool=_unknown_tool_stub(),
             tool_args={},
-            tool_context=ctx,
+            tool_context=_tool_context(session_id="run-1"),
             error=_not_found(),
         )
-        await plugin.before_run_callback(invocation_context=MagicMock())
-
         result = await plugin.on_tool_error_callback(
             tool=_unknown_tool_stub(),
             tool_args={},
-            tool_context=ctx,
+            tool_context=_tool_context(session_id="run-2"),
             error=_not_found(),
         )
 
         assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_a_sibling_run_starting_does_not_refill_the_budget(self):
+        """Benchmarks drive concurrent runs through one plugin instance."""
+        plugin = UnknownToolRecoveryPlugin(max_recoveries_per_agent=1)
+
+        await plugin.on_tool_error_callback(
+            tool=_unknown_tool_stub(),
+            tool_args={},
+            tool_context=_tool_context(session_id="run-1"),
+            error=_not_found(),
+        )
+
+        sibling = MagicMock()
+        sibling.session.id = "run-2"
+        await plugin.before_run_callback(invocation_context=sibling)
+
+        result = await plugin.on_tool_error_callback(
+            tool=_unknown_tool_stub(),
+            tool_args={},
+            tool_context=_tool_context(session_id="run-1"),
+            error=_not_found(),
+        )
+
+        assert result is None
 
 
 class TestRegisteredByDefault:

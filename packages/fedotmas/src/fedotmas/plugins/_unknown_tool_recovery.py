@@ -45,10 +45,16 @@ class UnknownToolRecoveryPlugin(BasePlugin):
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
     ) -> None:
-        # Every run mints a fresh session id, so nothing already counted can
-        # belong to this one.  Dropping the lot keeps a long-lived MAS from
-        # accumulating an entry per (session, agent) for the whole process.
-        self._recoveries.clear()
+        # Drop only this session's entries, never the whole dict: a benchmark
+        # drives many runs through one plugin instance concurrently, and
+        # clearing would hand a still-running task a fresh budget every time a
+        # sibling starts, so the bound would never fire.
+        session_id = invocation_context.session.id
+        self._recoveries = {
+            key: count
+            for key, count in self._recoveries.items()
+            if key[0] != session_id
+        }
         return None
 
     async def on_tool_error_callback(

@@ -16,7 +16,14 @@ _log = get_logger("fedotmas.mcp.discovery")
 
 _UV_BIN: str | None = None
 
-_PREFIX_CHARS = re.compile(r"[A-Za-z0-9_.-]+")
+#: Intersection of what the providers accept in a function name.  Gemini
+#: also allows ".", OpenAI-compatible endpoints do not, and this repo
+#: defaults to the latter -- so take the stricter set.
+_PREFIX_CHARS = re.compile(r"[A-Za-z0-9_-]+")
+
+#: Providers cap a function name at 64 characters, and the prefix has to
+#: leave room for the tool name it is prepended to.
+_MAX_PREFIX_LEN = 24
 
 
 def _get_uv_bin() -> str:
@@ -59,9 +66,18 @@ def _resolve_prefix(value: object, server_name: str) -> str | None:
     if not isinstance(value, str) or not _PREFIX_CHARS.fullmatch(value):
         _log.warning(
             "Ignoring invalid tool_name_prefix={!r} for server '{}'; "
-            "expected a string of letters, digits, '.', '-' or '_'",
+            "expected a string of letters, digits, '-' or '_'",
             value,
             server_name,
+        )
+        return None
+    if len(value) > _MAX_PREFIX_LEN:
+        _log.warning(
+            "Ignoring tool_name_prefix={!r} for server '{}'; longer than {} "
+            "characters leaves too little of the 64-character name budget",
+            value,
+            server_name,
+            _MAX_PREFIX_LEN,
         )
         return None
     return value

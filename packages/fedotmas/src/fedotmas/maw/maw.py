@@ -14,6 +14,14 @@ from fedotmas.meta.maw_pool_stage import PoolGenerator
 
 _log = get_logger("fedotmas.maw")
 
+#: Floor applied to a *generated* worker's ``max_output_tokens``.  Reasoning
+#: models spend this budget thinking before they emit anything, so too small a
+#: cap yields a turn with no content at all -- reported as MAX_TOKENS, which
+#: ADK surfaces as an error rather than a short answer.  The meta-agent picks
+#: the number itself and has picked 2000, below what the default workers need.
+#: A hand-written config is left alone: an explicit cap means what it says.
+MIN_GENERATED_MAX_OUTPUT_TOKENS = 4000
+
 
 class MAW(BaseMAS[MAWConfig]):
     """Multi-Agent Workflow are fixed pipeline orchestration.
@@ -71,6 +79,7 @@ class MAW(BaseMAS[MAWConfig]):
         self._resolved_workers = meta_result.worker_models
         config = meta_result.config
         assert isinstance(config, MAWConfig)
+        _raise_thin_token_budgets(config)
         _log.info(
             "Config generated | agents={} pipeline_type={}",
             len(config.agents),
@@ -135,3 +144,19 @@ class MAW(BaseMAS[MAWConfig]):
         )
         _log.info("Config:\n{}", config)
         return agent
+
+
+def _raise_thin_token_budgets(config: MAWConfig) -> None:
+    """Lift generated ``max_output_tokens`` values that cannot produce output."""
+    for agent in config.agents:
+        if agent.max_output_tokens is None:
+            continue
+        if agent.max_output_tokens >= MIN_GENERATED_MAX_OUTPUT_TOKENS:
+            continue
+        _log.warning(
+            "Raising generated max_output_tokens for '{}' from {} to {}",
+            agent.name,
+            agent.max_output_tokens,
+            MIN_GENERATED_MAX_OUTPUT_TOKENS,
+        )
+        agent.max_output_tokens = MIN_GENERATED_MAX_OUTPUT_TOKENS

@@ -5,6 +5,10 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from fedotmas.maw.maw import (
+    MIN_GENERATED_MAX_OUTPUT_TOKENS,
+    _raise_thin_token_budgets,
+)
 from fedotmas.maw.models import (
     AgentPoolConfig,
     MAWAgentConfig,
@@ -219,3 +223,40 @@ class TestAgentNameChildrenConflict:
         assert step.type == "agent"
         assert step.agent_name == "a"
         assert step.children == []
+
+
+class TestGeneratedTokenBudgetFloor:
+    """A budget too small for a reasoning model yields no content at all."""
+
+    def _config(self, max_output_tokens):
+        return MAWConfig(
+            agents=[
+                MAWAgentConfig(
+                    name="calculator",
+                    instruction="Compute things.",
+                    output_key="calc",
+                    max_output_tokens=max_output_tokens,
+                )
+            ],
+            pipeline=MAWStepConfig(type="agent", agent_name="calculator"),
+        )
+
+    def test_below_the_floor_is_raised(self):
+        config = self._config(2000)
+        _raise_thin_token_budgets(config)
+
+        assert config.agents[0].max_output_tokens == MIN_GENERATED_MAX_OUTPUT_TOKENS
+
+    def test_above_the_floor_is_left_alone(self):
+        config = self._config(MIN_GENERATED_MAX_OUTPUT_TOKENS + 1000)
+        _raise_thin_token_budgets(config)
+
+        assert (
+            config.agents[0].max_output_tokens == MIN_GENERATED_MAX_OUTPUT_TOKENS + 1000
+        )
+
+    def test_unset_stays_unset(self):
+        config = self._config(None)
+        _raise_thin_token_budgets(config)
+
+        assert config.agents[0].max_output_tokens is None

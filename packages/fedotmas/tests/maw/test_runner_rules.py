@@ -150,6 +150,38 @@ class TestLlmErrorRaises:
                 )
 
 
+class TestMaxTokensIsNotFatal:
+    """Rule 3a: one step running out of budget must not discard the others."""
+
+    @pytest.mark.asyncio
+    async def test_max_tokens_does_not_abort_the_pipeline(self, mock_session_service):
+        from google.genai import types
+
+        events = [
+            FakeEvent(
+                author="calculator",
+                error_code=types.FinishReason.MAX_TOKENS,
+                error_message="Maximum tokens reached",
+            ),
+            FakeEvent(
+                author="writer",
+                usage_metadata=FakeUsageMetadata(
+                    prompt_token_count=7, candidates_token_count=3
+                ),
+            ),
+        ]
+        async with _patch_runner(events):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        # the later step still ran and was still counted
+        assert result.total_prompt_tokens == 7
+        assert result.total_completion_tokens == 3
+
+
 class TestSessionLostAfterRun:
     """Rule 4: get_session returns None → RuntimeError."""
 

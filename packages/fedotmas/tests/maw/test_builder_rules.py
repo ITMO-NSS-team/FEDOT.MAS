@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from fedotmas._settings import ModelConfig
 from fedotmas.maw.builder import (
+    _build_llm_agent,
     _inject_exit_loop,
     _resolve_llm,
     build,
@@ -366,3 +367,27 @@ class TestBuildLoopDefaultMaxIterations:
 
         assert isinstance(root, LoopAgent)
         assert root.max_iterations == 10
+
+
+class TestMaxOutputTokensIsPassedThrough:
+    """The builder honours the config; the floor belongs to generation."""
+
+    def _built(self, max_output_tokens):
+        return _build_llm_agent(
+            MAWAgentConfig(
+                name="classifier",
+                instruction="Answer yes or no.",
+                output_key="verdict",
+                max_output_tokens=max_output_tokens,
+            ),
+            None,
+            None,
+        )
+
+    def test_a_hand_written_cap_is_not_raised(self):
+        """An explicit low cap is a cost control, not a mistake to correct."""
+        assert self._built(200).generate_content_config.max_output_tokens == 200
+
+    def test_unset_stays_unset(self):
+        """No cap declared means the provider default."""
+        assert self._built(None).generate_content_config is None
