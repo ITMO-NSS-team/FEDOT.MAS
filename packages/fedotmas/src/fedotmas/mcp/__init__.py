@@ -6,6 +6,7 @@ from fedotmas.mcp.registry import (
     create_toolset,
     get_mcp_servers,
     get_server_descriptions,
+    strip_tool_name_prefix,
 )
 
 
@@ -35,4 +36,5 @@ __all__ = [
     "discover_local_servers",
     "get_server_descriptions",
     "create_toolset",
+    "strip_tool_name_prefix",
 ]

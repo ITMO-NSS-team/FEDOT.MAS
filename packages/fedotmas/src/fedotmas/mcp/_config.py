@@ -3,10 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Union
 
-#: Seconds to wait for a *locally spawned* MCP session to become ready.
-#: Generous by default: a server whose venv has not been built yet spends the
-#: first connection resolving dependencies.  Run ``just mcp-sync`` to avoid
-#: paying that here.  Does not apply to HTTP servers -- see below.
+#: Seconds allowed a *locally spawned* MCP server, both to become ready and
+#: for each subsequent tool call: ADK passes it to ``ClientSession`` as
+#: ``read_timeout_seconds``.  Generous by default because a server whose venv
+#: has not been built yet spends the first connection resolving dependencies --
+#: run ``just mcp-sync`` to avoid paying that.  The cost of the generosity is
+#: that a wedged tool call also stalls this long, which the pipeline-level
+#: timeout is what ultimately bounds.  Does not apply to HTTP servers.
 DEFAULT_MCP_TIMEOUT_S = 180
 
 
@@ -33,9 +36,9 @@ class HttpMCPServer:
 
     url: str
     headers: dict[str, str] = field(default_factory=dict)
-    #: ADK passes this to ``httpx.Timeout`` as the connect/write/pool budget for
-    #: *every* request, not just session setup, so it stays tight: an
-    #: unreachable host should fail fast rather than stall the agent.
+    #: ADK passes this to ``httpx.Timeout`` as the connect/write/pool budget
+    #: for every request.  Kept tight where the stdio default is not, because
+    #: an unreachable host should fail fast and no cold start is involved.
     timeout: int = 60
     description: str = ""
     tags: tuple[str, ...] = ()

@@ -5,7 +5,7 @@ from fedotmas.mcp._config import (
     HttpMCPServer,
     StdioMCPServer,
 )
-from fedotmas.mcp.registry import create_toolset
+from fedotmas.mcp.registry import create_toolset, strip_tool_name_prefix
 
 
 class TestStdioEnvPropagation:
@@ -96,3 +96,17 @@ class TestToolNamePrefixReachesAdk:
         toolset = create_toolset("dummy", registry={"dummy": cfg})
 
         assert toolset.tool_name_prefix is None
+
+
+class TestStripToolNamePrefix:
+    """Policies match tool names literally, so they must see through a prefix."""
+
+    def test_strips_a_registered_prefix(self):
+        assert strip_tool_name_prefix("web_scraping_goto") == "goto"
+
+    def test_leaves_an_unprefixed_name_alone(self):
+        assert strip_tool_name_prefix("goto") == "goto"
+
+    def test_does_not_strip_a_coincidental_lookalike(self):
+        """No registered prefix matches, so the name survives intact."""
+        assert strip_tool_name_prefix("download_file") == "download_file"

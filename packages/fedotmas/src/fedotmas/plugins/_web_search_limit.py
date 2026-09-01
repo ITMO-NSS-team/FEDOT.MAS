@@ -9,6 +9,7 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 
 from fedotmas.common.logging import get_logger
+from fedotmas.mcp import strip_tool_name_prefix
 
 _log = get_logger("fedotmas.plugins.web_search_limit")
 
@@ -182,7 +183,9 @@ class WebSearchLimitPlugin(BasePlugin):
         return None
 
     def _is_web_search_tool(self, tool: BaseTool) -> bool:
-        name = tool.name.lower()
+        # Through the prefix: a server declaring tool_name_prefix renames all
+        # of its tools, and this budget is configured with the bare names.
+        name = strip_tool_name_prefix(tool.name).lower()
         if name in self._tool_names:
             description = (tool.description or "").lower()
             if name == "search":

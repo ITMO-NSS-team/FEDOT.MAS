@@ -76,7 +76,7 @@ args = ["mcp"]
 | `name` | yes | — | Registry key used in pipeline configs (`"tools": ["my-server"]`) |
 | `description` | no | `""` | Human-readable description. The meta-agent reads this to decide when to assign the server. |
 | `tags` | no | `[]` | List of tags for categorization and filtering. |
-| `timeout` | no | `180` | Seconds to wait for MCP session to become ready. Overrides `FEDOTMAS_MCP_TIMEOUT_S`; unset, it falls back to that variable, then to `180`. |
+| `timeout` | no | `180` | Seconds allowed for the session to become ready **and** for each tool call. Overrides `FEDOTMAS_MCP_TIMEOUT_S`; unset, it falls back to that variable, then to `180`. |
 | `command` | no | — | Path or name of an external binary that speaks MCP stdio. When set, `[project.scripts]` is not required. |
 | `args` | no | `[]` | Arguments passed to `command`. Only used when `command` is set. |
 | `tool_name_prefix` | no | — | Prefix ADK prepends to this server's tool names as `prefix_toolname`. Set it only to break a collision with another server: plain names like `search` are called far more reliably than decorated ones. |

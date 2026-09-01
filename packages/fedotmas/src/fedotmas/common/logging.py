@@ -56,6 +56,20 @@ def setup_logging(level: str | None = None) -> None:
         encoding="utf-8",
     )
 
+    # Reported here rather than at import: logger.remove() above discards
+    # anything logged before the sinks exist, and a stray .env outranking the
+    # clone's shows up as an auth error against the wrong endpoint -- exactly
+    # what someone reads the persisted log to diagnose.  Imported lazily
+    # because fedotmas._settings imports this module.
+    from fedotmas._settings import _DOTENV_PATH
+
+    if _DOTENV_PATH:
+        logger.bind(name="fedotmas.settings").debug("Loaded .env from {}", _DOTENV_PATH)
+    else:
+        logger.bind(name="fedotmas.settings").debug(
+            "No .env found; relying on the ambient environment"
+        )
+
 
 def get_logger(name: str) -> Logger:
     """Return a logger bound to *name*."""

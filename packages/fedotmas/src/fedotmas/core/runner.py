@@ -261,18 +261,30 @@ async def _consume_runner_events(
         # Error handling (control flow — stays in runner)
         if event.error_code:
             if event.error_code == types.FinishReason.MAX_TOKENS:
+                # LiteLLM (this repo's OpenRouter path) flags any non-STOP
+                # finish reason, content or not, unlike the Gemini path which
+                # only flags an empty turn.  So check for content rather than
+                # trusting the code, or a merely truncated answer is reported
+                # as no answer at all.
+                has_content = bool(event.content and event.content.parts)
                 # The agent spent its whole budget without emitting content, so
                 # ADK reports an error rather than a short answer.  That is one
                 # step falling short, not a reason to discard what every earlier
                 # step produced: let the pipeline carry on with this output
                 # empty, the same way a timeout salvages partial state.
-                _log.warning(
-                    "Agent '{}' produced no content within its token budget; "
-                    "continuing with an empty result for this step",
-                    event.author,
-                )
-                if event.author:
-                    truncated_agents.append(event.author)
+                if has_content:
+                    _log.warning(
+                        "Agent '{}' hit its token budget; its answer is cut short",
+                        event.author,
+                    )
+                else:
+                    _log.warning(
+                        "Agent '{}' produced no content within its token budget; "
+                        "continuing with an empty result for this step",
+                        event.author,
+                    )
+                    if event.author:
+                        truncated_agents.append(event.author)
                 continue
 
             _log.error(

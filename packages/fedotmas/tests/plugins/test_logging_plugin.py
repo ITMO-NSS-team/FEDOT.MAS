@@ -224,3 +224,70 @@ class TestOnEventCallback:
 
         result = await plugin.on_event_callback(invocation_context=inv_ctx, event=event)
         assert result is None
+
+
+@pytest.fixture()
+def warnings_logged():
+    """Collect loguru WARNING records; ``caplog`` does not see them."""
+    from loguru import logger
+
+    records: list[str] = []
+    sink_id = logger.add(records.append, level="WARNING", format="{message}")
+    yield records
+    logger.remove(sink_id)
+
+
+class TestSilentAgentIsReported:
+    """An agent that writes nothing must not pass unnoticed."""
+
+    def _agent(self, name="researcher", output_key="research_data"):
+        agent = MagicMock()
+        agent.name = name
+        agent.output_key = output_key
+        return agent
+
+    @pytest.mark.asyncio
+    async def test_missing_output_warns(self, warnings_logged):
+        plugin = LoggingPlugin()
+        agent = self._agent()
+
+        await plugin.before_agent_callback(
+            agent=agent, callback_context=MagicMock()
+        )
+        await plugin.after_agent_callback(agent=agent, callback_context=MagicMock())
+
+        logged = "".join(warnings_logged)
+        assert "No output" in logged
+        assert "research_data" in logged
+
+    @pytest.mark.asyncio
+    async def test_no_warning_once_state_was_written(self, warnings_logged):
+        plugin = LoggingPlugin()
+        agent = self._agent()
+
+        await plugin.before_agent_callback(
+            agent=agent, callback_context=MagicMock()
+        )
+        await plugin.on_event_callback(
+            invocation_context=MagicMock(),
+            event=FakeEvent(
+                author="researcher",
+                actions=FakeActions(state_delta={"research_data": "found it"}),
+            ),
+        )
+        await plugin.after_agent_callback(agent=agent, callback_context=MagicMock())
+
+        assert "No output" not in "".join(warnings_logged)
+
+    @pytest.mark.asyncio
+    async def test_agent_without_output_key_is_not_reported(self, warnings_logged):
+        """A tool-only agent legitimately writes nothing."""
+        plugin = LoggingPlugin()
+        agent = self._agent(output_key=None)
+
+        await plugin.before_agent_callback(
+            agent=agent, callback_context=MagicMock()
+        )
+        await plugin.after_agent_callback(agent=agent, callback_context=MagicMock())
+
+        assert "No output" not in "".join(warnings_logged)

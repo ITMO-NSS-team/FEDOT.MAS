@@ -6,6 +6,7 @@ from typing import Optional
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.events import Event
+from google.adk.models.llm_response import LlmResponse
 from google.adk.plugins import BasePlugin
 from google.adk.runners import InvocationContext
 from google.genai import types
@@ -32,6 +33,7 @@ class LoggingPlugin(BasePlugin):
     def __init__(self) -> None:
         super().__init__(name="fedotmas_logging")
         self._agent_start: dict[str, float] = {}
+        self._written_keys: dict[str, set[str]] = {}
 
     async def before_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
@@ -39,6 +41,7 @@ class LoggingPlugin(BasePlugin):
         if not _is_workflow_node(agent.name):
             _log.info("Agent started | name={}", agent.name)
         self._agent_start[agent.name] = time.monotonic()
+        self._written_keys.pop(agent.name, None)
         return None
 
     async def after_agent_callback(
@@ -51,6 +54,47 @@ class LoggingPlugin(BasePlugin):
                 agent.name,
                 time.monotonic() - t0,
             )
+
+        # An agent that writes nothing at all is otherwise invisible: the
+        # "Empty output" warning below only fires once a key has been written.
+        # Downstream steps then interpolate a missing key and carry on, which
+        # is how a pipeline reaches the end having researched nothing.
+        # Against the agent's own key, not any state write: a tool that
+        # stashes something in state would otherwise mask a silent agent.
+        output_key = getattr(agent, "output_key", None)
+        written = self._written_keys.get(agent.name, set())
+        if (
+            output_key
+            and not _is_workflow_node(agent.name)
+            and output_key not in written
+        ):
+            _log.warning(
+                "No output | agent={} key='{}' — nothing was written to state",
+                agent.name,
+                output_key,
+            )
+        self._written_keys.pop(agent.name, None)
+        return None
+
+    async def after_model_callback(
+        self, *, callback_context: CallbackContext, llm_response: LlmResponse
+    ) -> Optional[LlmResponse]:
+        """Record the shape of each model turn.
+
+        Without this, a turn that returns only reasoning and no content is
+        indistinguishable from one that never happened.
+        """
+        parts = (llm_response.content.parts if llm_response.content else None) or []
+        texts = [p.text for p in parts if p.text]
+        calls = [p.function_call.name for p in parts if p.function_call]
+        _log.debug(
+            "Model turn | agent={} finish={} parts={} text_chars={} calls={}",
+            callback_context.agent_name,
+            llm_response.finish_reason,
+            len(parts),
+            sum(len(t) for t in texts),
+            calls or None,
+        )
         return None
 
     async def on_event_callback(
@@ -110,6 +154,10 @@ class LoggingPlugin(BasePlugin):
 
         # State changes
         if event.actions.state_delta:
+            if event.author:
+                self._written_keys.setdefault(event.author, set()).update(
+                    event.actions.state_delta
+                )
             for key, value in event.actions.state_delta.items():
                 if value is None or (isinstance(value, str) and not value.strip()):
                     _log.warning(

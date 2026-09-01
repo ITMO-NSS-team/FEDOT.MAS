@@ -12,7 +12,9 @@ async def full_auto():
     """Fully automatic: MAS generates a routing config and executes it."""
     mas = MAS(mcp_servers="all")
     state = await mas.run("Handle customer support request about billing")
-    _log.info("Result: {}", json.dumps(state, indent=2, default=str))
+    _log.info(
+        "Result: {}", json.dumps(state, indent=2, default=str, ensure_ascii=False)
+    )
 
 
 async def two_step():
@@ -23,7 +25,9 @@ async def two_step():
     _log.info("Config: {}", config.model_dump_json(indent=2))
 
     state = await mas.build_and_run(config, "I need help with my invoice")
-    _log.info("Result: {}", json.dumps(state, indent=2, default=str))
+    _log.info(
+        "Result: {}", json.dumps(state, indent=2, default=str, ensure_ascii=False)
+    )
 
 
 async def handcrafted():
@@ -61,7 +65,9 @@ async def handcrafted():
 
     mas = MAS()
     state = await mas.build_and_run(config, "Why was I charged twice?")
-    _log.info("Result: {}", json.dumps(state, indent=2, default=str))
+    _log.info(
+        "Result: {}", json.dumps(state, indent=2, default=str, ensure_ascii=False)
+    )
 
 
 async def with_tools():
@@ -96,7 +102,9 @@ async def with_tools():
 
     mas = MAS(mcp_servers="all")
     state = await mas.build_and_run(config, "What is the fibonacci sequence?")
-    _log.info("Result: {}", json.dumps(state, indent=2, default=str))
+    _log.info(
+        "Result: {}", json.dumps(state, indent=2, default=str, ensure_ascii=False)
+    )
 
 
 if __name__ == "__main__":

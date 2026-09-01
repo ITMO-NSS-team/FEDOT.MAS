@@ -180,6 +180,35 @@ class TestMaxTokensIsNotFatal:
         # the later step still ran and was still counted
         assert result.total_prompt_tokens == 7
         assert result.total_completion_tokens == 3
+        assert result.truncated_agents == ["calculator"]
+
+
+    @pytest.mark.asyncio
+    async def test_a_truncated_answer_is_not_recorded_as_missing(
+        self, mock_session_service
+    ):
+        """LiteLLM flags MAX_TOKENS even when the answer came through."""
+        from google.genai import types
+
+        content = types.Content(
+            role="model", parts=[types.Part.from_text(text="a partial answer")]
+        )
+        events = [
+            FakeEvent(
+                author="writer",
+                content=content,
+                error_code=types.FinishReason.MAX_TOKENS,
+                error_message="Maximum tokens reached",
+            ),
+        ]
+        async with _patch_runner(events):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        assert result.truncated_agents == []
 
 
 class TestSessionLostAfterRun:

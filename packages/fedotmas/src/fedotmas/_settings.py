@@ -13,20 +13,13 @@ from fedotmas.common.logging import get_logger
 # the consumer's project does.  The bare call is the fallback for the clone case
 # (it searches from this file -- except under a REPL or a frozen build, where
 # python-dotenv also uses the cwd and the two calls agree).  Must run before
-# get_logger(), which reads FEDOTMAS_LOG_LEVEL.
+# setup_logging(), which reads FEDOTMAS_LOG_LEVEL.
 _DOTENV_PATH = find_dotenv(usecwd=True) or find_dotenv()
 if _DOTENV_PATH:
     load_dotenv(_DOTENV_PATH)
 
 _log = get_logger("fedotmas.settings")
 
-# Logged only once the logger exists: a stray .env above the working directory
-# outranks the clone's, and that surfaces as an auth error against the wrong
-# endpoint unless the chosen path is visible.
-if _DOTENV_PATH:
-    _log.debug("Loaded .env from {}", _DOTENV_PATH)
-else:
-    _log.debug("No .env found; relying on the ambient environment")
 
 DEFAULT_META_MODEL = "qwen/qwen3.6-finetuned"
 DEFAULT_WORKER_MODELS: list[str] = ["openai/gpt-5-mini"]

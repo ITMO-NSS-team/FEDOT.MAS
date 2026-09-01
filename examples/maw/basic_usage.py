@@ -11,7 +11,9 @@ _log = get_logger("fedotmas.examples.maw.basic_usage")
 async def full_auto():
     maw = MAW(mcp_servers="all")
     state = await maw.run("Explain the difference between TCP and UDP in 3 sentences")
-    _log.info("Result: {}", json.dumps(state, indent=2, default=str))
+    _log.info(
+        "Result: {}", json.dumps(state, indent=2, default=str, ensure_ascii=False)
+    )
 
 
 async def two_step():
@@ -21,7 +23,9 @@ async def two_step():
     _log.info("Config: {}", config.model_dump_json(indent=2))
 
     state = await maw.build_and_run(config, "Compare Python and Rust for CLI tools")
-    _log.info("Result: {}", json.dumps(state, indent=2, default=str))
+    _log.info(
+        "Result: {}", json.dumps(state, indent=2, default=str, ensure_ascii=False)
+    )
 
 
 async def handcrafted():

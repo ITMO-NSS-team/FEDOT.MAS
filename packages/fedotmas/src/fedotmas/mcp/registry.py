@@ -84,3 +84,17 @@ def get_server_descriptions(
     if tags:
         reg = {k: v for k, v in reg.items() if tags & set(v.tags)}
     return {name: cfg.description or f"MCP server: {name}" for name, cfg in reg.items()}
+
+
+def strip_tool_name_prefix(tool_name: str) -> str:
+    """Return *tool_name* without a registered server's ``tool_name_prefix``.
+
+    A prefixed server renames every one of its tools, which silently breaks
+    any policy that matches tool names literally.  Callers that reason about
+    tool identity should compare against this rather than the raw name.
+    """
+    for cfg in get_mcp_servers().values():
+        prefix = cfg.tool_name_prefix
+        if prefix and tool_name.startswith(f"{prefix}_"):
+            return tool_name[len(prefix) + 1 :]
+    return tool_name
