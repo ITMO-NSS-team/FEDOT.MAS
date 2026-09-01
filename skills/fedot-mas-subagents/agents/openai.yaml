@@ -1,0 +1,4 @@
+interface:
+  display_name: "FEDOT.MAS Subagents"
+  short_description: "Build and run FEDOT.MAS subagent workflows"
+  default_prompt: "Use $fedot-mas-subagents to decompose this task into a FEDOT.MAS workflow and run it with native subagents."
