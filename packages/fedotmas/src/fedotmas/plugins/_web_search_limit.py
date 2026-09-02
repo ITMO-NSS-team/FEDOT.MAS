@@ -104,7 +104,7 @@ class WebSearchLimitPlugin(BasePlugin):
 
         session_id = tool_context._invocation_context.session.id
         agent_name = tool_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
-        tool_name = tool.name.lower()
+        tool_name = strip_tool_name_prefix(tool.name).lower()
         key = (session_id, agent_name)
 
         url = _normalise_url(tool_args.get("url"))

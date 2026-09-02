@@ -490,3 +490,32 @@ class TestExecutionTimeoutSalvage:
 
         assert isinstance(result, PipelineResult)
         assert result.state["sub_answer"] == "42"
+
+
+class TestReasoningOnlyTurnCountsAsEmpty:
+    """A turn made only of thoughts writes no output_key, however many parts."""
+
+    @pytest.mark.asyncio
+    async def test_thought_parts_do_not_count_as_an_answer(
+        self, mock_session_service
+    ):
+        from google.genai import types
+
+        thought = types.Part(text="Let me think about the cadastral registry")
+        thought.thought = True
+        events = [
+            FakeEvent(
+                author="data_collector",
+                content=types.Content(role="model", parts=[thought]),
+                error_code=types.FinishReason.MAX_TOKENS,
+                error_message="Maximum tokens reached",
+            ),
+        ]
+        async with _patch_runner(events):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        assert result.truncated_agents == ["data_collector"]

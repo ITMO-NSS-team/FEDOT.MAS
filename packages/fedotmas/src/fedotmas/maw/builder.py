@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import itertools
+import re
 from typing import Any, TypeAlias, cast
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.models.base_llm import BaseLlm
+from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools.exit_loop_tool import exit_loop
+from google.adk.utils.instructions_utils import inject_session_state
 from google.genai import types as genai_types
 
 from fedotmas._settings import (
@@ -23,6 +26,68 @@ AgentTree: TypeAlias = BaseAgent
 
 _log = get_logger("fedotmas.maw.builder")
 
+#: A reference to another step's output inside an instruction.  ``\w+`` keeps
+#: this to plain state keys, leaving ADK to handle ``{artifact.name}``.
+_STATE_REF_RE = re.compile(r"(?<!\{)\{(\w+)\??\}(?!\})")
+
+
+def _missing_input_marker(key: str) -> str:
+    """What an agent sees in place of an upstream output that never arrived.
+
+    Every reference is normalised to the optional form ``{key?}``, so ADK
+    substitutes an empty string when a step produced nothing -- indistinguishable
+    from a step that produced nothing to say.  An agent handed that silence
+    fills it in, which is how a pipeline reports confident findings it never
+    gathered.  Saying so outright is what makes the gap survivable.
+    """
+    return (
+        f'[MISSING INPUT "{key}": the step that produces it returned nothing. '
+        f"Do not invent its contents. State plainly which information is "
+        f"unavailable and why any conclusion drawn without it is provisional.]"
+    )
+
+
+def _is_blank(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, dict, tuple, set)):
+        return len(value) == 0
+    return False
+
+
+def _instruction_provider(
+    instruction: str,
+    agent_name: str,
+    state_keys: frozenset[str] | None = None,
+):
+    """Resolve state refs at call time, naming the ones that came back empty."""
+
+    async def provide(readonly_context: ReadonlyContext) -> str:
+        state = readonly_context.state
+        text = instruction
+        for ref, key in {
+            (m.group(0), m.group(1)) for m in _STATE_REF_RE.finditer(instruction)
+        }:
+            # Only a key some step actually produces can be *missing*; anything
+            # else is a literal the task carried in, and claiming a step failed
+            # for it would be its own fabrication.
+            if state_keys is not None and key not in state_keys:
+                continue
+            if key in state and not _is_blank(state[key]):
+                continue
+            _log.warning(
+                "Missing input | agent={} key='{}' — telling the agent instead "
+                "of substituting silence",
+                agent_name,
+                key,
+            )
+            text = text.replace(ref, _missing_input_marker(key))
+        return await inject_session_state(text, readonly_context)
+
+    return provide
+
 
 def build(
     config: MAWConfig,
@@ -32,11 +97,14 @@ def build(
 ) -> BaseAgent:
     """Convert a ``MAWConfig`` into an executable ADK agent tree."""
     agents_by_name: dict[str, MAWAgentConfig] = {a.name: a for a in config.agents}
+    # The same set MAWConfig validates against: what a step can actually produce.
+    state_keys = frozenset({"user_query"} | {a.output_key for a in config.agents})
     return _build_node(
         config.pipeline,
         agents_by_name,
         mcp_registry,
         worker_models,
+        state_keys,
     )
 
 
@@ -45,14 +113,18 @@ def _build_node(
     agents: dict[str, MAWAgentConfig],
     mcp_registry: dict[str, MCPServerConfig] | None,
     worker_models: dict[str, ModelConfig] | None,
+    state_keys: frozenset[str] | None = None,
 ) -> BaseAgent:
     if node.type == "agent":
         if node.agent_name is None:
             raise ValueError(f"Agent node missing 'agent_name': {node}")
-        return _build_llm_agent(agents[node.agent_name], mcp_registry, worker_models)
+        return _build_llm_agent(
+            agents[node.agent_name], mcp_registry, worker_models, state_keys
+        )
 
     children = [
-        _build_node(c, agents, mcp_registry, worker_models) for c in node.children
+        _build_node(c, agents, mcp_registry, worker_models, state_keys)
+        for c in node.children
     ]
 
     # ADK 2.x deprecates the three workflow agents below in favour of Workflow,
@@ -107,6 +179,7 @@ def _build_llm_agent(
     cfg: MAWAgentConfig,
     mcp_registry: dict[str, MCPServerConfig] | None,
     worker_models: dict[str, ModelConfig] | None,
+    state_keys: frozenset[str] | None = None,
 ) -> LlmAgent:
     tools: list = []
     for tool_name in cfg.tools:
@@ -114,6 +187,11 @@ def _build_llm_agent(
 
     model = _resolve_llm(cfg.model, worker_models)
     _log.debug("Built agent | name={} model={}", cfg.name, model)
+    instruction = (
+        _instruction_provider(cfg.instruction, cfg.name, state_keys)
+        if _STATE_REF_RE.search(cfg.instruction)
+        else cfg.instruction
+    )
     kwargs: dict = {}
     if cfg.max_output_tokens is not None:
         kwargs["generate_content_config"] = genai_types.GenerateContentConfig(
@@ -122,7 +200,7 @@ def _build_llm_agent(
     return LlmAgent(
         name=cfg.name,
         model=model,
-        instruction=cfg.instruction,
+        instruction=instruction,
         output_key=cfg.output_key,
         tools=tools,
         **kwargs,

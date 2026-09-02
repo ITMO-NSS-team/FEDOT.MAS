@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from fedotmas._settings import ModelConfig
 from fedotmas.maw.builder import (
     _build_llm_agent,
+    _instruction_provider,
     _inject_exit_loop,
     _resolve_llm,
     build,
@@ -391,3 +392,118 @@ class TestMaxOutputTokensIsPassedThrough:
     def test_unset_stays_unset(self):
         """No cap declared means the provider default."""
         assert self._built(None).generate_content_config is None
+
+
+def _readonly_context(state: dict):
+    """Minimal stand-in: both attributes ADK's interpolation reads."""
+    ctx = MagicMock()
+    ctx.state = state
+    ctx._invocation_context.session.state = state
+    ctx._invocation_context.artifact_service = None
+    return ctx
+
+
+class TestMissingInputIsNamed:
+    """A step that produced nothing must not read as a step with nothing to say."""
+
+    async def _render(self, instruction: str, state: dict) -> str:
+        provider = _instruction_provider(instruction, "writer")
+        return await provider(_readonly_context(state))
+
+    @pytest.mark.asyncio
+    async def test_present_value_is_substituted(self):
+        text = await self._render(
+            "Use the findings: {raw_data?}", {"raw_data": "zone T3ZH2"}
+        )
+
+        assert "zone T3ZH2" in text
+        assert "MISSING INPUT" not in text
+
+    @pytest.mark.asyncio
+    async def test_absent_key_is_called_out(self):
+        text = await self._render("Use the findings: {raw_data?}", {})
+
+        assert 'MISSING INPUT "raw_data"' in text
+        assert "Do not invent" in text
+
+    @pytest.mark.asyncio
+    async def test_blank_value_counts_as_missing(self):
+        """An agent that wrote an empty string left just as much behind."""
+        text = await self._render("Use the findings: {raw_data?}", {"raw_data": "  "})
+
+        assert 'MISSING INPUT "raw_data"' in text
+
+    @pytest.mark.asyncio
+    async def test_unnormalised_reference_is_handled_too(self):
+        text = await self._render("Use the findings: {raw_data}", {})
+
+        assert 'MISSING INPUT "raw_data"' in text
+
+    @pytest.mark.asyncio
+    async def test_a_literal_placeholder_is_left_alone(self):
+        """{answer?} is a formatting template, not a step that failed."""
+        provider = _instruction_provider(
+            "Reply as {answer?}. Use {raw_data?}.",
+            "writer",
+            frozenset({"user_query", "raw_data"}),
+        )
+        text = await provider(_readonly_context({"raw_data": "zone T3ZH2"}))
+
+        assert "MISSING INPUT" not in text
+
+    @pytest.mark.asyncio
+    async def test_a_known_output_still_gets_marked(self):
+        """The same instruction, with the one real output absent."""
+        provider = _instruction_provider(
+            "Reply as {answer?}. Use {raw_data?}.",
+            "writer",
+            frozenset({"user_query", "raw_data"}),
+        )
+        text = await provider(_readonly_context({}))
+
+        assert 'MISSING INPUT "raw_data"' in text
+        assert text.count("MISSING INPUT") == 1
+
+    @pytest.mark.asyncio
+    async def test_a_doubled_brace_is_not_cut_in_half(self):
+        """Replacing inside {{...}} would leave stray braces in the prompt."""
+        text = await self._render("Emit {{raw_data?}} verbatim.", {})
+
+        assert "MISSING INPUT" not in text
+
+    @pytest.mark.asyncio
+    async def test_only_the_absent_reference_is_marked(self):
+        text = await self._render(
+            "From {raw_data?} and {calc?}", {"raw_data": "zone T3ZH2"}
+        )
+
+        assert "zone T3ZH2" in text
+        assert 'MISSING INPUT "calc"' in text
+        assert 'MISSING INPUT "raw_data"' not in text
+
+
+class TestInstructionProviderIsOnlyUsedWhenNeeded:
+    def test_static_instruction_stays_a_string(self):
+        """No refs, no per-call work: ADK takes a plain string as-is."""
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="greeter", instruction="Say hello.", output_key="greeting"
+            ),
+            None,
+            None,
+        )
+
+        assert agent.instruction == "Say hello."
+
+    def test_instruction_with_a_reference_becomes_a_provider(self):
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="writer",
+                instruction="Use {raw_data}.",
+                output_key="report",
+            ),
+            None,
+            None,
+        )
+
+        assert callable(agent.instruction)

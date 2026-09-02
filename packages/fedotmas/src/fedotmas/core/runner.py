@@ -266,7 +266,12 @@ async def _consume_runner_events(
                 # only flags an empty turn.  So check for content rather than
                 # trusting the code, or a merely truncated answer is reported
                 # as no answer at all.
-                has_content = bool(event.content and event.content.parts)
+                # Thought parts do not count: ADK writes output_key only from
+                # non-thought text (llm_agent.py, __handle_output_key), so a
+                # turn that is all reasoning leaves the step empty however many
+                # parts it carries.
+                parts = (event.content.parts if event.content else None) or []
+                has_content = any(p.text and not p.thought for p in parts)
                 # The agent spent its whole budget without emitting content, so
                 # ADK reports an error rather than a short answer.  That is one
                 # step falling short, not a reason to discard what every earlier

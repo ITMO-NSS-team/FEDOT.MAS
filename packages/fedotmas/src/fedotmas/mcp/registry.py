@@ -92,8 +92,23 @@ def strip_tool_name_prefix(tool_name: str) -> str:
     A prefixed server renames every one of its tools, which silently breaks
     any policy that matches tool names literally.  Callers that reason about
     tool identity should compare against this rather than the raw name.
+
+    Only prefixes from the auto-discovered registry are known here; one declared
+    in a registry passed straight to ``MAS``/``MAW`` is not, and such a tool
+    keeps its prefixed name.
     """
-    for cfg in get_mcp_servers().values():
+    try:
+        registry = get_mcp_servers()
+    except Exception as exc:
+        # Discovery walks for a workspace root and raises without one, which is
+        # the shape of an installed-as-a-dependency consumer.  This runs on the
+        # per-tool-call path, so it must never be what breaks the call.
+        _log.debug(
+            "Cannot resolve tool name prefixes ({}); using '{}' as is", exc, tool_name
+        )
+        return tool_name
+
+    for cfg in registry.values():
         prefix = cfg.tool_name_prefix
         if prefix and tool_name.startswith(f"{prefix}_"):
             return tool_name[len(prefix) + 1 :]

@@ -85,14 +85,20 @@ class LoggingPlugin(BasePlugin):
         indistinguishable from one that never happened.
         """
         parts = (llm_response.content.parts if llm_response.content else None) or []
-        texts = [p.text for p in parts if p.text]
+        # Thought and answer counted apart: ADK writes output_key only from
+        # parts that are *not* thoughts (llm_agent.py, __handle_output_key), so
+        # a turn that is all reasoning silently leaves state untouched.
+        answer = sum(len(p.text) for p in parts if p.text and not p.thought)
+        thought = sum(len(p.text) for p in parts if p.text and p.thought)
         calls = [p.function_call.name for p in parts if p.function_call]
         _log.debug(
-            "Model turn | agent={} finish={} parts={} text_chars={} calls={}",
+            "Model turn | agent={} finish={} parts={} answer_chars={} "
+            "thought_chars={} calls={}",
             callback_context.agent_name,
             llm_response.finish_reason,
             len(parts),
-            sum(len(t) for t in texts),
+            answer,
+            thought,
             calls or None,
         )
         return None
