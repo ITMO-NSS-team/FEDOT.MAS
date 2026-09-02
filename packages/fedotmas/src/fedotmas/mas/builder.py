@@ -6,7 +6,7 @@ from google.adk.agents.base_agent import BaseAgent
 from fedotmas.common.logging import get_logger
 from fedotmas._settings import ModelConfig
 from fedotmas.mas.models import MASConfig, MASAgentConfig
-from fedotmas.maw.builder import _resolve_llm
+from fedotmas.maw.builder import AUTONOMY_PREAMBLE, _resolve_llm
 from fedotmas.mcp import MCPServerConfig, create_toolset
 
 _log = get_logger("fedotmas.mas.builder")
@@ -17,6 +17,7 @@ def build_routing_system(
     *,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
     worker_models: dict[str, ModelConfig] | None = None,
+    autonomous: bool = True,
 ) -> BaseAgent:
     """Build an ADK agent tree with LLM-driven routing via AutoFlow.
 
@@ -27,8 +28,12 @@ def build_routing_system(
     for w in config.workers:
         if not w.output_key:
             w = w.model_copy(update={"output_key": f"{w.name}_output"})
-        workers.append(_build_routing_agent(w, mcp_registry, worker_models))
-    coord = _build_routing_agent(config.coordinator, mcp_registry, worker_models)
+        workers.append(
+            _build_routing_agent(w, mcp_registry, worker_models, autonomous=autonomous)
+        )
+    coord = _build_routing_agent(
+        config.coordinator, mcp_registry, worker_models, autonomous=autonomous
+    )
     coord.sub_agents = workers  # ADK AutoFlow activates automatically
     _log.info(
         "Built routing system | coordinator={} workers={}",
@@ -42,6 +47,8 @@ def _build_routing_agent(
     cfg: MASAgentConfig,
     mcp_registry: dict[str, MCPServerConfig] | None,
     worker_models: dict[str, ModelConfig] | None,
+    *,
+    autonomous: bool = True,
 ) -> LlmAgent:
     tools: list = []
     for tool_name in cfg.tools:
@@ -53,7 +60,11 @@ def _build_routing_agent(
         name=cfg.name,
         description=cfg.description,
         model=model,
-        instruction=cfg.instruction,
+        instruction=(
+            f"{AUTONOMY_PREAMBLE}\n\n{cfg.instruction}"
+            if autonomous
+            else cfg.instruction
+        ),
         output_key=cfg.output_key,
         tools=tools,
     )

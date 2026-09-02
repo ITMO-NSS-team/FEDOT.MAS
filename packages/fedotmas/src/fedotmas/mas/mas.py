@@ -57,13 +57,14 @@ class MAS(BaseMAS[MASConfig]):
         )
         return config
 
-    def build(self, config: MASConfig) -> BaseAgent:
+    def build(self, config: MASConfig, *, autonomous: bool = True) -> BaseAgent:
         """Build an ADK agent tree with routing from *config*."""
         _log.info("Building routing system")
         agent = build_routing_system(
             config,
             mcp_registry=self._mcp_registry,
             worker_models=self._worker_map(),
+            autonomous=autonomous,
         )
         _log.info("Config:\n{}", config)
         return agent

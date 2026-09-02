@@ -8,6 +8,7 @@ from google.adk.agents import LlmAgent
 from google.adk.tools.base_toolset import BaseToolset
 
 from fedotmas.mas.builder import build_routing_system
+from fedotmas.maw.builder import AUTONOMY_PREAMBLE
 from fedotmas.mas.models import MASConfig
 
 
@@ -132,3 +133,29 @@ class TestOutputKeyForwarded:
         root = build_routing_system(config)
         assert root.sub_agents[0].output_key == "alpha_out"
         assert root.sub_agents[1].output_key == "beta_out"
+
+
+class TestAutonomyPreamble:
+    """Routing runs unattended too: a coordinator must not stall on a reply."""
+
+    def test_every_agent_in_the_tree_carries_it(self):
+        coord = build_routing_system(_config())
+
+        for agent in [coord, *coord.sub_agents]:
+            assert AUTONOMY_PREAMBLE in agent.instruction
+
+    def test_each_agents_own_instruction_survives_intact(self):
+        coord = build_routing_system(_config())
+
+        assert coord.instruction.endswith("Route requests.")
+        assert [a.instruction.split("\n\n")[-1] for a in coord.sub_agents] == [
+            "Do alpha.",
+            "Do beta.",
+        ]
+
+    def test_a_caller_with_a_person_in_the_loop_can_turn_it_off(self):
+        coord = build_routing_system(_config(), autonomous=False)
+
+        for agent in [coord, *coord.sub_agents]:
+            assert AUTONOMY_PREAMBLE not in agent.instruction
+        assert coord.instruction == "Route requests."

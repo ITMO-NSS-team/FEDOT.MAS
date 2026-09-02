@@ -134,13 +134,14 @@ class MAW(BaseMAS[MAWConfig]):
             + (pipe_r.elapsed if pipe_r else 0.0),
         )
 
-    def build(self, config: MAWConfig) -> BaseAgent:
+    def build(self, config: MAWConfig, *, autonomous: bool = True) -> BaseAgent:
         """Build an ADK agent tree from *config*."""
         _log.info("Building agent tree")
         agent = build(
             config,
             mcp_registry=self._mcp_registry,
             worker_models=self._worker_map(),
+            autonomous=autonomous,
         )
         _log.info("Config:\n{}", config)
         return agent

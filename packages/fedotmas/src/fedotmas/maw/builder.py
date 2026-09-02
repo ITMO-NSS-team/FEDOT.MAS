@@ -47,6 +47,28 @@ def _missing_input_marker(key: str) -> str:
     )
 
 
+#: Prepended to every agent instruction, in this builder and in ``mas.builder``.
+#: An unattended run has no one to answer a question, so an agent that ends its
+#: turn asking for input has delivered nothing.  This is a fact about the runtime
+#: rather than a property of any one generated design, which is why it lives in
+#: the builders and not in the generation prompts -- and why a caller that *does*
+#: have a person in the loop turns it off with ``autonomous=False``.  Braces are
+#: avoided on purpose: ADK would read them as state references.
+AUTONOMY_PREAMBLE = (
+    "This task runs unattended. No one is reading along to answer a question, "
+    "pick between options, or supply a document you ask for; a request for input "
+    "reaches nobody and ends the run with nothing delivered.\n"
+    "So do not ask the user for anything and do not end your turn waiting for a "
+    "reply. Where the task leaves something open, take the most reasonable "
+    "reading, name it in one line, and carry it through. Where something is "
+    "genuinely unavailable, say what is missing and what it would change, then "
+    "give the best answer the available evidence supports. If your own task is to "
+    "raise questions or lay out options, write them as your answer -- just do not "
+    "hand them over as a decision for someone else to make. A provisional answer "
+    "with its assumptions named is the deliverable; a request for input is not."
+)
+
+
 def _is_blank(value: object) -> bool:
     if value is None:
         return True
@@ -94,8 +116,13 @@ def build(
     *,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
     worker_models: dict[str, ModelConfig] | None = None,
+    autonomous: bool = True,
 ) -> BaseAgent:
-    """Convert a ``MAWConfig`` into an executable ADK agent tree."""
+    """Convert a ``MAWConfig`` into an executable ADK agent tree.
+
+    Pass ``autonomous=False`` when the tree is served to a person who can answer
+    a clarifying question; see :data:`AUTONOMY_PREAMBLE`.
+    """
     agents_by_name: dict[str, MAWAgentConfig] = {a.name: a for a in config.agents}
     # The same set MAWConfig validates against: what a step can actually produce.
     state_keys = frozenset({"user_query"} | {a.output_key for a in config.agents})
@@ -105,6 +132,7 @@ def build(
         mcp_registry,
         worker_models,
         state_keys,
+        autonomous=autonomous,
     )
 
 
@@ -114,16 +142,24 @@ def _build_node(
     mcp_registry: dict[str, MCPServerConfig] | None,
     worker_models: dict[str, ModelConfig] | None,
     state_keys: frozenset[str] | None = None,
+    *,
+    autonomous: bool = True,
 ) -> BaseAgent:
     if node.type == "agent":
         if node.agent_name is None:
             raise ValueError(f"Agent node missing 'agent_name': {node}")
         return _build_llm_agent(
-            agents[node.agent_name], mcp_registry, worker_models, state_keys
+            agents[node.agent_name],
+            mcp_registry,
+            worker_models,
+            state_keys,
+            autonomous=autonomous,
         )
 
     children = [
-        _build_node(c, agents, mcp_registry, worker_models, state_keys)
+        _build_node(
+            c, agents, mcp_registry, worker_models, state_keys, autonomous=autonomous
+        )
         for c in node.children
     ]
 
@@ -180,6 +216,8 @@ def _build_llm_agent(
     mcp_registry: dict[str, MCPServerConfig] | None,
     worker_models: dict[str, ModelConfig] | None,
     state_keys: frozenset[str] | None = None,
+    *,
+    autonomous: bool = True,
 ) -> LlmAgent:
     tools: list = []
     for tool_name in cfg.tools:
@@ -187,10 +225,15 @@ def _build_llm_agent(
 
     model = _resolve_llm(cfg.model, worker_models)
     _log.debug("Built agent | name={} model={}", cfg.name, model)
+    instruction_text = (
+        f"{AUTONOMY_PREAMBLE}\n\n{cfg.instruction}" if autonomous else cfg.instruction
+    )
+    # Decided on the final text: a state reference anywhere in it, preamble
+    # included, has to reach the provider rather than ADK's plain-string path.
     instruction = (
-        _instruction_provider(cfg.instruction, cfg.name, state_keys)
-        if _STATE_REF_RE.search(cfg.instruction)
-        else cfg.instruction
+        _instruction_provider(instruction_text, cfg.name, state_keys)
+        if _STATE_REF_RE.search(instruction_text)
+        else instruction_text
     )
     kwargs: dict = {}
     if cfg.max_output_tokens is not None:

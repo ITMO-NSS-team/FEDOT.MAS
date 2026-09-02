@@ -170,11 +170,13 @@ class BaseMAS(ABC, Generic[ConfigT]):
     async def generate_config(self, task: str) -> ConfigT: ...
 
     @abstractmethod
-    def build(self, config: ConfigT) -> BaseAgent: ...
+    def build(self, config: ConfigT, *, autonomous: bool = True) -> BaseAgent: ...
 
-    def build_app(self, config: ConfigT, *, name: str = "fedotmas") -> App:
+    def build_app(
+        self, config: ConfigT, *, name: str = "fedotmas", autonomous: bool = True
+    ) -> App:
         """Build an ADK ``App`` (agent tree + plugins) from *config*."""
-        agent = self.build(config)
+        agent = self.build(config, autonomous=autonomous)
         return App(name=name, root_agent=agent, plugins=list(self._plugins))
 
     async def build_and_run(
@@ -214,11 +216,17 @@ class BaseMAS(ABC, Generic[ConfigT]):
         port: int = 8000,
         allow_origins: list[str] | None = None,
         auto_create_session: bool = False,
+        autonomous: bool = True,
     ) -> FastAPI:
-        """Build an ``App`` from *config* and create a FastAPI server."""
+        """Build an ``App`` from *config* and create a FastAPI server.
+
+        Serving covers both an unattended HTTP consumer and a person chatting
+        through a UI.  Only the caller knows which, so pass ``autonomous=False``
+        for the latter to let agents ask their clarifying questions.
+        """
         from fedotmas._serving import serve as _serve
 
-        app = self.build_app(config, name=name)
+        app = self.build_app(config, name=name, autonomous=autonomous)
         return _serve(
             {name: app},
             session_service=self._session_service,

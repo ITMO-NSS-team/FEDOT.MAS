@@ -9,6 +9,8 @@ from pydantic import ValidationError
 
 from fedotmas._settings import ModelConfig
 from fedotmas.maw.builder import (
+    AUTONOMY_PREAMBLE,
+    _STATE_REF_RE,
     _build_llm_agent,
     _instruction_provider,
     _inject_exit_loop,
@@ -493,7 +495,7 @@ class TestInstructionProviderIsOnlyUsedWhenNeeded:
             None,
         )
 
-        assert agent.instruction == "Say hello."
+        assert agent.instruction.endswith("Say hello.")
 
     def test_instruction_with_a_reference_becomes_a_provider(self):
         agent = _build_llm_agent(
@@ -507,3 +509,84 @@ class TestInstructionProviderIsOnlyUsedWhenNeeded:
         )
 
         assert callable(agent.instruction)
+
+
+class TestAutonomyPreamble:
+    """A pipeline runs unattended, so an agent must never wait on a reply."""
+
+    def _instruction(self, text: str, output_key: str = "out") -> str:
+        agent = _build_llm_agent(
+            MAWAgentConfig(name="w", instruction=text, output_key=output_key),
+            None,
+            None,
+        )
+        return agent.instruction
+
+    def test_a_static_instruction_carries_it(self):
+        assert AUTONOMY_PREAMBLE in self._instruction("Say hello.")
+
+    def test_the_agents_own_instruction_survives_intact(self):
+        assert self._instruction("Say hello.").endswith("Say hello.")
+
+    @pytest.mark.asyncio
+    async def test_an_instruction_with_a_reference_carries_it_too(self):
+        """The provider path must not be the way an agent loses the preamble."""
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="writer", instruction="Use {raw_data}.", output_key="report"
+            ),
+            None,
+            None,
+        )
+        text = await agent.instruction(_readonly_context({"raw_data": "zone T3ZH2"}))
+
+        assert AUTONOMY_PREAMBLE in text
+        assert "zone T3ZH2" in text
+
+    def test_it_holds_no_state_references_of_its_own(self):
+        """A brace in the preamble would make ADK look for a state key."""
+        assert not _STATE_REF_RE.search(AUTONOMY_PREAMBLE)
+        assert "{" not in AUTONOMY_PREAMBLE
+
+    def test_a_caller_with_a_person_in_the_loop_can_turn_it_off(self):
+        agent = _build_llm_agent(
+            MAWAgentConfig(name="w", instruction="Say hello.", output_key="out"),
+            None,
+            None,
+            autonomous=False,
+        )
+
+        assert agent.instruction == "Say hello."
+
+    def test_the_flag_reaches_every_agent_in_a_nested_pipeline(self):
+        cfg = MAWConfig(
+            agents=[
+                MAWAgentConfig(name="a", instruction="Do a.", output_key="a_out"),
+                MAWAgentConfig(name="b", instruction="Do b.", output_key="b_out"),
+            ],
+            pipeline=MAWStepConfig(
+                type="sequential",
+                children=[
+                    MAWStepConfig(type="agent", agent_name="a"),
+                    MAWStepConfig(
+                        type="parallel",
+                        children=[MAWStepConfig(type="agent", agent_name="b")],
+                    ),
+                ],
+            ),
+        )
+
+        served = build(cfg, autonomous=False)
+        unattended = build(cfg)
+
+        assert [a.instruction for a in _llm_agents(served)] == ["Do a.", "Do b."]
+        assert all(AUTONOMY_PREAMBLE in a.instruction for a in _llm_agents(unattended))
+
+
+def _llm_agents(root):
+    """Every LlmAgent in a built tree, in pipeline order."""
+    from google.adk.agents import LlmAgent
+
+    if isinstance(root, LlmAgent):
+        return [root]
+    return [a for child in root.sub_agents for a in _llm_agents(child)]
