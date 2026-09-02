@@ -373,7 +373,7 @@ class TestBuildLoopDefaultMaxIterations:
 
 
 class TestMaxOutputTokensIsPassedThrough:
-    """The builder honours the config; the floor belongs to generation."""
+    """The builder honours the config; only generation clears a cap."""
 
     def _built(self, max_output_tokens):
         return _build_llm_agent(
@@ -387,7 +387,7 @@ class TestMaxOutputTokensIsPassedThrough:
             None,
         )
 
-    def test_a_hand_written_cap_is_not_raised(self):
+    def test_a_hand_written_cap_is_kept(self):
         """An explicit low cap is a cost control, not a mistake to correct."""
         assert self._built(200).generate_content_config.max_output_tokens == 200
 

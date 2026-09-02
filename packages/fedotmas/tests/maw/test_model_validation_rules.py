@@ -6,8 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from fedotmas.maw.maw import (
-    MIN_GENERATED_MAX_OUTPUT_TOKENS,
-    _raise_thin_token_budgets,
+    _drop_generated_token_budgets,
 )
 from fedotmas.maw.models import (
     AgentPoolConfig,
@@ -225,8 +224,8 @@ class TestAgentNameChildrenConflict:
         assert step.children == []
 
 
-class TestGeneratedTokenBudgetFloor:
-    """A budget too small for a reasoning model yields no content at all."""
+class TestGeneratedTokenBudget:
+    """Nothing asks the meta-agent for a cap, so nothing it returns is one."""
 
     def _config(self, max_output_tokens):
         return MAWConfig(
@@ -241,22 +240,22 @@ class TestGeneratedTokenBudgetFloor:
             pipeline=MAWStepConfig(type="agent", agent_name="calculator"),
         )
 
-    def test_below_the_floor_is_raised(self):
+    def test_a_small_budget_is_dropped_not_clamped(self):
+        """Clamping made the floor the cap every generated agent hit."""
         config = self._config(2000)
-        _raise_thin_token_budgets(config)
+        _drop_generated_token_budgets(config)
 
-        assert config.agents[0].max_output_tokens == MIN_GENERATED_MAX_OUTPUT_TOKENS
+        assert config.agents[0].max_output_tokens is None
 
-    def test_above_the_floor_is_left_alone(self):
-        config = self._config(MIN_GENERATED_MAX_OUTPUT_TOKENS + 1000)
-        _raise_thin_token_budgets(config)
+    def test_a_roomier_budget_is_dropped_too(self):
+        """A larger guess is still a guess: no threshold earns trust here."""
+        config = self._config(8000)
+        _drop_generated_token_budgets(config)
 
-        assert (
-            config.agents[0].max_output_tokens == MIN_GENERATED_MAX_OUTPUT_TOKENS + 1000
-        )
+        assert config.agents[0].max_output_tokens is None
 
     def test_unset_stays_unset(self):
         config = self._config(None)
-        _raise_thin_token_budgets(config)
+        _drop_generated_token_budgets(config)
 
         assert config.agents[0].max_output_tokens is None

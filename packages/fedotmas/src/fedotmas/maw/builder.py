@@ -55,7 +55,7 @@ def _missing_input_marker(key: str) -> str:
 #: have a person in the loop turns it off with ``autonomous=False``.  Braces are
 #: avoided on purpose: ADK would read them as state references.
 AUTONOMY_PREAMBLE = (
-    "This task runs unattended. No one is reading along to answer a question, "
+    "You are working on your own. No one is reading along to answer a question, "
     "pick between options, or supply a document you ask for; a request for input "
     "reaches nobody and ends the run with nothing delivered.\n"
     "So do not ask the user for anything and do not end your turn waiting for a "
@@ -65,7 +65,9 @@ AUTONOMY_PREAMBLE = (
     "give the best answer the available evidence supports. If your own task is to "
     "raise questions or lay out options, write them as your answer -- just do not "
     "hand them over as a decision for someone else to make. A provisional answer "
-    "with its assumptions named is the deliverable; a request for input is not."
+    "with its assumptions named is the deliverable; a request for input is not.\n"
+    "These are your working conditions, not your subject. Write the answer "
+    "itself, and do not quote or discuss this notice."
 )
 
 
