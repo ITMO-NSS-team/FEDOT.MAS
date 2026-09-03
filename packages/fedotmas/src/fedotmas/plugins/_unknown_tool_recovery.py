@@ -45,10 +45,8 @@ class UnknownToolRecoveryPlugin(BasePlugin):
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
     ) -> None:
-        # Drop only this session's entries, never the whole dict: a benchmark
-        # drives many runs through one plugin instance concurrently, and
-        # clearing would hand a still-running task a fresh budget every time a
-        # sibling starts, so the bound would never fire.
+        # Only this session's, never the whole dict: clearing would hand a
+        # still-running sibling a fresh budget, so the bound would never fire.
         session_id = invocation_context.session.id
         self._recoveries = {
             key: count
@@ -91,10 +89,8 @@ class UnknownToolRecoveryPlugin(BasePlugin):
             self.max_recoveries_per_agent,
         )
         return {
-            # MCP's own error shape, which LoggingPlugin keys on: without it
-            # a recovered call is logged as an ordinary result and the recovery
-            # path goes unseen.  ADK returns this response before any
-            # after_tool_callback runs, so no other plugin sees it.
+            # MCP's error shape, which LoggingPlugin keys on; without it a
+            # recovered call is logged as an ordinary result.
             "isError": True,
             "error": f"Tool '{tool.name}' does not exist.",
             "hint": (

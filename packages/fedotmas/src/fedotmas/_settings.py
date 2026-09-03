@@ -8,12 +8,8 @@ from dotenv import find_dotenv, load_dotenv
 
 from fedotmas.common.logging import get_logger
 
-# Search upwards from the working directory first: when fedotmas is installed as a
-# dependency rather than run from a clone, the package tree holds no .env and only
-# the consumer's project does.  The bare call is the fallback for the clone case
-# (it searches from this file -- except under a REPL or a frozen build, where
-# python-dotenv also uses the cwd and the two calls agree).  Must run before
-# setup_logging(), which reads FEDOTMAS_LOG_LEVEL.
+# Working directory first: installed as a dependency, only the consumer's project
+# holds a .env, never the package tree.  The bare call is the clone fallback.
 _DOTENV_PATH = find_dotenv(usecwd=True) or find_dotenv()
 if _DOTENV_PATH:
     load_dotenv(_DOTENV_PATH)

@@ -47,14 +47,10 @@ def _missing_input_marker(key: str) -> str:
     )
 
 
-#: Prepended to every agent instruction, in this builder and in ``mas.builder``,
-#: as the opening half of the pair applied by :func:`frame_instruction`.
 #: An unattended run has no one to answer a question, so an agent that ends its
-#: turn asking for input has delivered nothing.  This is a fact about the runtime
-#: rather than a property of any one generated design, which is why it lives in
-#: the builders and not in the generation prompts -- and why a caller that *does*
-#: have a person in the loop turns it off with ``autonomous=False``.  Braces are
-#: avoided on purpose: ADK would read them as state references.
+#: turn asking for input has delivered nothing.  A caller with a person in the
+#: loop opts out with ``autonomous=False``.  No braces: ADK would read them as
+#: state references.
 AUTONOMY_PREAMBLE = (
     "You are working on your own. No one is reading along to answer a question, "
     "pick between options, or supply a document you ask for; a request for input "
@@ -71,18 +67,11 @@ AUTONOMY_PREAMBLE = (
     "itself, and do not quote or discuss this notice."
 )
 
-#: Appended after the instruction, for the same reason and against a different
-#: failure.  The preamble alone did not hold: over a long answer a model drifts
-#: back into assistant habits and signs off offering to do more.  Capped output
-#: hid this -- answers were cut off before their closing paragraph.  Once they
-#: ran to the end, every one of them finished by asking the reader which
-#: follow-up to prepare.  This states the rule again where it gets broken.
-#:
-#: It says nothing about *what* to produce, deliberately.  This text is last in
-#: the prompt, so anything it asserts outranks the instruction above it: telling
-#: an agent here to "answer" would override a MAS coordinator's own orders to
-#: delegate, and telling it not to raise questions would silence a critic inside
-#: a loop.  It forbids one thing only -- addressing the user.
+#: The same rule again at the end, where a long answer drifts back into
+#: assistant habits.  It says nothing about *what* to produce, deliberately:
+#: being last, anything it asserts outranks the instruction above it, so
+#: "answer" here would override a MAS coordinator's orders to delegate and
+#: "raise no questions" would silence a critic inside a loop.
 AUTONOMY_CLOSING = (
     "Before you finish: do not close by asking the user for anything -- not a "
     "decision, not a document, not a reply. Whatever you would have offered to "
@@ -118,9 +107,8 @@ def _instruction_provider(
         for ref, key in {
             (m.group(0), m.group(1)) for m in _STATE_REF_RE.finditer(instruction)
         }:
-            # Only a key some step actually produces can be *missing*; anything
-            # else is a literal the task carried in, and claiming a step failed
-            # for it would be its own fabrication.
+            # Only a key some step produces can be *missing*; anything else is
+            # a literal the task carried in.
             if state_keys is not None and key not in state_keys:
                 continue
             if key in state and not _is_blank(state[key]):
@@ -254,8 +242,8 @@ def _build_llm_agent(
     instruction_text = (
         frame_instruction(cfg.instruction) if autonomous else cfg.instruction
     )
-    # Decided on the final text: a state reference anywhere in it, preamble
-    # included, has to reach the provider rather than ADK's plain-string path.
+    # Decided on the final text: a reference anywhere in it, framing included,
+    # has to reach the provider rather than ADK's plain-string path.
     instruction = (
         _instruction_provider(instruction_text, cfg.name, state_keys)
         if _STATE_REF_RE.search(instruction_text)

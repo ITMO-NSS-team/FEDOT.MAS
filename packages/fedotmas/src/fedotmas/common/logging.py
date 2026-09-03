@@ -56,11 +56,8 @@ def setup_logging(level: str | None = None) -> None:
         encoding="utf-8",
     )
 
-    # Reported here rather than at import: logger.remove() above discards
-    # anything logged before the sinks exist, and a stray .env outranking the
-    # clone's shows up as an auth error against the wrong endpoint -- exactly
-    # what someone reads the persisted log to diagnose.  Imported lazily
-    # because fedotmas._settings imports this module.
+    # Reported here, not at import: logger.remove() above discards anything
+    # logged before the sinks exist.  Lazy import -- _settings imports this.
     from fedotmas._settings import _DOTENV_PATH
 
     if _DOTENV_PATH:

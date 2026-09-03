@@ -17,9 +17,9 @@ from fedotmas.mcp.discovery import discover_local_servers
 
 _log = get_logger("fedotmas.mcp.registry")
 
-#: Variables that point at *our* virtualenv.  Local servers are launched with
-#: ``uv run --directory``, which resolves its own environment per server; an
-#: inherited value makes uv warn and can send the child at the wrong .venv.
+#: Variables pointing at *our* virtualenv.  Local servers run under ``uv run
+#: --directory``, which resolves its own; an inherited value makes uv warn and
+#: can send the child at the wrong .venv.
 _PARENT_VENV_VARS = frozenset({"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"})
 
 
@@ -100,9 +100,8 @@ def strip_tool_name_prefix(tool_name: str) -> str:
     try:
         registry = get_mcp_servers()
     except Exception as exc:
-        # Discovery walks for a workspace root and raises without one, which is
-        # the shape of an installed-as-a-dependency consumer.  This runs on the
-        # per-tool-call path, so it must never be what breaks the call.
+        # Discovery raises without a workspace root -- the installed-as-a-
+        # dependency shape.  On the per-tool-call path, so it must not raise.
         _log.debug(
             "Cannot resolve tool name prefixes ({}); using '{}' as is", exc, tool_name
         )

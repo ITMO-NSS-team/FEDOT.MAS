@@ -183,8 +183,8 @@ class WebSearchLimitPlugin(BasePlugin):
         return None
 
     def _is_web_search_tool(self, tool: BaseTool) -> bool:
-        # Through the prefix: a server declaring tool_name_prefix renames all
-        # of its tools, and this budget is configured with the bare names.
+        # Through the prefix: the budget is configured with bare names, and a
+        # server declaring tool_name_prefix renames all of its tools.
         name = strip_tool_name_prefix(tool.name).lower()
         if name in self._tool_names:
             description = (tool.description or "").lower()

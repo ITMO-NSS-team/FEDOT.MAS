@@ -27,11 +27,10 @@ def _session_key(
 ) -> tuple[str, str]:
     """Scope per-agent bookkeeping to one session.
 
-    One callback writes a bucket and another reads it, so both must derive the
-    id the same way -- ``session.id``, which both context types expose.  There
-    is deliberately no fallback: were only one of the two to lose its session,
-    a fallback would send the writer and the reader to different buckets and
-    report every agent as silent.  Failing here is the louder, truer signal.
+    One callback writes a bucket and another reads it, so both derive the id
+    the same way.  No fallback on purpose: were only one of the two to lose its
+    session, a fallback would send writer and reader to different buckets and
+    report every agent as silent.
     """
     return (context.session.id, agent_name)
 
@@ -47,20 +46,17 @@ class LoggingPlugin(BasePlugin):
     def __init__(self) -> None:
         super().__init__(name="fedotmas_logging")
         self._agent_start: dict[tuple[str, str], float] = {}
-        # Both keyed by (session, agent): benchmarks and the optimizer drive
-        # several sessions through one plugin instance, and a bare agent name
-        # would let one run's state writes silence another run's "No output"
-        # warning, and one run's start time distort another run's elapsed.
+        # Keyed by (session, agent): benchmarks and the optimizer drive several
+        # sessions through one plugin instance, where a bare agent name would
+        # let one run's bookkeeping stand in for another's.
         self._written_keys: dict[tuple[str, str], set[str]] = {}
 
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
     ) -> None:
-        # A run that aborts mid-agent -- a pipeline timeout, an open circuit,
-        # a search limit -- never reaches after_agent_callback, so its entries
-        # would sit here forever now that the key carries a session id.  Drop
-        # only this session's, the way the sibling plugins do: clearing outright
-        # would erase a concurrently running run's bookkeeping.
+        # A run that aborts mid-agent never reaches after_agent_callback, and
+        # a session-keyed entry is never overwritten, so prune here.  Only this
+        # session's: clearing outright would erase a concurrent run's.
         session_id = invocation_context.session.id
         self._agent_start = {
             key: value
@@ -96,12 +92,10 @@ class LoggingPlugin(BasePlugin):
                 time.monotonic() - t0,
             )
 
-        # An agent that writes nothing at all is otherwise invisible: the
-        # "Empty output" warning below only fires once a key has been written.
-        # Downstream steps then interpolate a missing key and carry on, which
-        # is how a pipeline reaches the end having researched nothing.
-        # Against the agent's own key, not any state write: a tool that
-        # stashes something in state would otherwise mask a silent agent.
+        # The "Empty output" warning below only fires once a key has been
+        # written, so an agent that writes nothing is otherwise invisible.
+        # Against the agent's own key, not any state write: a tool that stashes
+        # something in state would otherwise mask a silent agent.
         output_key = getattr(agent, "output_key", None)
         written = self._written_keys.get(key, set())
         if (
@@ -126,9 +120,9 @@ class LoggingPlugin(BasePlugin):
         indistinguishable from one that never happened.
         """
         parts = (llm_response.content.parts if llm_response.content else None) or []
-        # Thought and answer counted apart: ADK writes output_key only from
-        # parts that are *not* thoughts (llm_agent.py, __handle_output_key), so
-        # a turn that is all reasoning silently leaves state untouched.
+        # Counted apart: ADK writes output_key only from parts that are *not*
+        # thoughts (llm_agent.py, __handle_output_key), so a turn that is all
+        # reasoning silently leaves state untouched.
         answer = sum(len(p.text) for p in parts if p.text and not p.thought)
         thought = sum(len(p.text) for p in parts if p.text and p.thought)
         calls = [p.function_call.name for p in parts if p.function_call]

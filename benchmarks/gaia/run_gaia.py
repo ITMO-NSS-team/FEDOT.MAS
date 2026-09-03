@@ -528,10 +528,8 @@ def build_plugins(task, enable_langfuse: bool) -> list:
         ),
         # After the breaker on purpose: ADK stops at the first plugin that
         # returns a value, so recovering first would hide unresolved names from
-        # the breaker's counters and from the GAIA thresholds above.  The
-        # consequence is deliberate -- here the thresholds win, so an agent gets
-        # one recovery and the second repeat aborts the task, rather than the
-        # three a plain run allows.  A benchmark should fail fast.
+        # the breaker's counters.  The thresholds therefore win here -- one
+        # recovery, then abort, rather than the three a plain run allows.
         UnknownToolRecoveryPlugin(),
     ]
     if enable_langfuse:

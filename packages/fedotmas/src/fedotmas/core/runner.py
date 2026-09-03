@@ -261,22 +261,15 @@ async def _consume_runner_events(
         # Error handling (control flow — stays in runner)
         if event.error_code:
             if event.error_code == types.FinishReason.MAX_TOKENS:
-                # LiteLLM (this repo's OpenRouter path) flags any non-STOP
-                # finish reason, content or not, unlike the Gemini path which
-                # only flags an empty turn.  So check for content rather than
-                # trusting the code, or a merely truncated answer is reported
-                # as no answer at all.
-                # Thought parts do not count: ADK writes output_key only from
-                # non-thought text (llm_agent.py, __handle_output_key), so a
-                # turn that is all reasoning leaves the step empty however many
-                # parts it carries.
+                # LiteLLM flags any non-STOP finish reason, content or not, so
+                # check for content rather than trusting the code.  Thought
+                # parts do not count: ADK writes output_key only from
+                # non-thought text (llm_agent.py, __handle_output_key).
                 parts = (event.content.parts if event.content else None) or []
                 has_content = any(p.text and not p.thought for p in parts)
-                # The agent spent its whole budget without emitting content, so
-                # ADK reports an error rather than a short answer.  That is one
-                # step falling short, not a reason to discard what every earlier
-                # step produced: let the pipeline carry on with this output
-                # empty, the same way a timeout salvages partial state.
+                # One step falling short is not a reason to discard what every
+                # earlier step produced: carry on with this output empty, the
+                # same way a timeout salvages partial state.
                 if has_content:
                     _log.warning(
                         "Agent '{}' hit its token budget; its answer is cut short",
@@ -288,8 +281,7 @@ async def _consume_runner_events(
                         "continuing with an empty result for this step",
                         event.author,
                     )
-                    # A loop or a retry can bring the same agent back here;
-                    # the field names which steps came up empty, not how often.
+                    # The field names which steps came up empty, not how often.
                     if event.author and event.author not in truncated_agents:
                         truncated_agents.append(event.author)
                 continue
