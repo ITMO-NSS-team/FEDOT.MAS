@@ -47,7 +47,8 @@ def _missing_input_marker(key: str) -> str:
     )
 
 
-#: Prepended to every agent instruction, in this builder and in ``mas.builder``.
+#: Prepended to every agent instruction, in this builder and in ``mas.builder``,
+#: as the opening half of the pair applied by :func:`frame_instruction`.
 #: An unattended run has no one to answer a question, so an agent that ends its
 #: turn asking for input has delivered nothing.  This is a fact about the runtime
 #: rather than a property of any one generated design, which is why it lives in
@@ -69,6 +70,29 @@ AUTONOMY_PREAMBLE = (
     "These are your working conditions, not your subject. Write the answer "
     "itself, and do not quote or discuss this notice."
 )
+
+#: Appended after the instruction, for the same reason and against a different
+#: failure.  The preamble alone did not hold: over a long answer a model drifts
+#: back into assistant habits and signs off offering to do more.  Capped output
+#: hid this -- answers were cut off before their closing paragraph.  Once they
+#: ran to the end, every one of them finished by asking the reader which
+#: follow-up to prepare.  This states the rule again where it gets broken.
+#:
+#: It says nothing about *what* to produce, deliberately.  This text is last in
+#: the prompt, so anything it asserts outranks the instruction above it: telling
+#: an agent here to "answer" would override a MAS coordinator's own orders to
+#: delegate, and telling it not to raise questions would silence a critic inside
+#: a loop.  It forbids one thing only -- addressing the user.
+AUTONOMY_CLOSING = (
+    "Before you finish: do not close by asking the user for anything -- not a "
+    "decision, not a document, not a reply. Whatever you would have offered to "
+    "prepare next, either do it now or leave it out."
+)
+
+
+def frame_instruction(instruction: str) -> str:
+    """Wrap an agent instruction in the autonomy framing, top and tail."""
+    return f"{AUTONOMY_PREAMBLE}\n\n{instruction}\n\n{AUTONOMY_CLOSING}"
 
 
 def _is_blank(value: object) -> bool:
@@ -123,7 +147,7 @@ def build(
     """Convert a ``MAWConfig`` into an executable ADK agent tree.
 
     Pass ``autonomous=False`` when the tree is served to a person who can answer
-    a clarifying question; see :data:`AUTONOMY_PREAMBLE`.
+    a clarifying question; see :func:`frame_instruction`.
     """
     agents_by_name: dict[str, MAWAgentConfig] = {a.name: a for a in config.agents}
     # The same set MAWConfig validates against: what a step can actually produce.
@@ -228,7 +252,7 @@ def _build_llm_agent(
     model = _resolve_llm(cfg.model, worker_models)
     _log.debug("Built agent | name={} model={}", cfg.name, model)
     instruction_text = (
-        f"{AUTONOMY_PREAMBLE}\n\n{cfg.instruction}" if autonomous else cfg.instruction
+        frame_instruction(cfg.instruction) if autonomous else cfg.instruction
     )
     # Decided on the final text: a state reference anywhere in it, preamble
     # included, has to reach the provider rather than ADK's plain-string path.

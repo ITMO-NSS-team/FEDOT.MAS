@@ -6,7 +6,7 @@ from google.adk.agents.base_agent import BaseAgent
 from fedotmas.common.logging import get_logger
 from fedotmas._settings import ModelConfig
 from fedotmas.mas.models import MASConfig, MASAgentConfig
-from fedotmas.maw.builder import AUTONOMY_PREAMBLE, _resolve_llm
+from fedotmas.maw.builder import _resolve_llm, frame_instruction
 from fedotmas.mcp import MCPServerConfig, create_toolset
 
 _log = get_logger("fedotmas.mas.builder")
@@ -61,9 +61,7 @@ def _build_routing_agent(
         description=cfg.description,
         model=model,
         instruction=(
-            f"{AUTONOMY_PREAMBLE}\n\n{cfg.instruction}"
-            if autonomous
-            else cfg.instruction
+            frame_instruction(cfg.instruction) if autonomous else cfg.instruction
         ),
         output_key=cfg.output_key,
         tools=tools,

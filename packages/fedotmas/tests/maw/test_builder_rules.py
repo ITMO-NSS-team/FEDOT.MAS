@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from fedotmas._settings import ModelConfig
 from fedotmas.maw.builder import (
+    AUTONOMY_CLOSING,
     AUTONOMY_PREAMBLE,
     _STATE_REF_RE,
     _build_llm_agent,
@@ -495,7 +496,7 @@ class TestInstructionProviderIsOnlyUsedWhenNeeded:
             None,
         )
 
-        assert agent.instruction.endswith("Say hello.")
+        assert "Say hello." in agent.instruction
 
     def test_instruction_with_a_reference_becomes_a_provider(self):
         agent = _build_llm_agent(
@@ -525,8 +526,23 @@ class TestAutonomyPreamble:
     def test_a_static_instruction_carries_it(self):
         assert AUTONOMY_PREAMBLE in self._instruction("Say hello.")
 
-    def test_the_agents_own_instruction_survives_intact(self):
-        assert self._instruction("Say hello.").endswith("Say hello.")
+    def test_the_agents_own_instruction_sits_between_the_two(self):
+        text = self._instruction("Say hello.")
+
+        assert text.index(AUTONOMY_PREAMBLE) < text.index("Say hello.")
+        assert text.index("Say hello.") < text.index(AUTONOMY_CLOSING)
+
+    def test_a_multi_paragraph_instruction_survives_whole(self):
+        """Framing must not swallow anything past the first blank line."""
+        instruction = "First paragraph.\n\nSecond paragraph."
+
+        assert self._instruction(instruction) == (
+            f"{AUTONOMY_PREAMBLE}\n\n{instruction}\n\n{AUTONOMY_CLOSING}"
+        )
+
+    def test_the_closing_anchor_is_last(self):
+        """A preamble alone lost to recency once answers ran to the end."""
+        assert self._instruction("Say hello.").endswith(AUTONOMY_CLOSING)
 
     @pytest.mark.asyncio
     async def test_an_instruction_with_a_reference_carries_it_too(self):
@@ -541,12 +557,14 @@ class TestAutonomyPreamble:
         text = await agent.instruction(_readonly_context({"raw_data": "zone T3ZH2"}))
 
         assert AUTONOMY_PREAMBLE in text
+        assert AUTONOMY_CLOSING in text
         assert "zone T3ZH2" in text
 
     def test_it_holds_no_state_references_of_its_own(self):
         """A brace in the preamble would make ADK look for a state key."""
-        assert not _STATE_REF_RE.search(AUTONOMY_PREAMBLE)
-        assert "{" not in AUTONOMY_PREAMBLE
+        for text in (AUTONOMY_PREAMBLE, AUTONOMY_CLOSING):
+            assert not _STATE_REF_RE.search(text)
+            assert "{" not in text
 
     def test_a_caller_with_a_person_in_the_loop_can_turn_it_off(self):
         agent = _build_llm_agent(
