@@ -182,6 +182,28 @@ class TestMaxTokensIsNotFatal:
         assert result.total_completion_tokens == 3
         assert result.truncated_agents == ["calculator"]
 
+    @pytest.mark.asyncio
+    async def test_a_repeated_truncation_is_listed_once(self, mock_session_service):
+        """A loop brings the same agent back; the field names steps, not hits."""
+        from google.genai import types
+
+        events = [
+            FakeEvent(
+                author="calculator",
+                error_code=types.FinishReason.MAX_TOKENS,
+                error_message="Maximum tokens reached",
+            )
+            for _ in range(3)
+        ]
+        async with _patch_runner(events):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        assert result.truncated_agents == ["calculator"]
+
 
     @pytest.mark.asyncio
     async def test_a_truncated_answer_is_not_recorded_as_missing(

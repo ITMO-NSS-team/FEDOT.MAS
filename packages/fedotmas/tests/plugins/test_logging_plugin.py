@@ -61,6 +61,13 @@ class FakeEvent:
         return self._function_responses
 
 
+def _ctx(session_id: str = "session-1"):
+    """A context that keys the same as a real one: same session, same bucket."""
+    ctx = MagicMock()
+    ctx.session = MagicMock(id=session_id)
+    return ctx
+
+
 # ---------------------------------------------------------------------------
 # MAS auto-injection tests
 # ---------------------------------------------------------------------------
@@ -97,23 +104,38 @@ class TestBeforeAgentCallback:
         plugin = LoggingPlugin()
         agent = MagicMock()
         agent.name = "researcher"
-        ctx = MagicMock()
 
-        result = await plugin.before_agent_callback(agent=agent, callback_context=ctx)
+        result = await plugin.before_agent_callback(
+            agent=agent, callback_context=_ctx("s1")
+        )
         assert result is None
-        assert "researcher" in plugin._agent_start
+        assert ("s1", "researcher") in plugin._agent_start
 
     @pytest.mark.asyncio
     async def test_skips_workflow_node(self):
         plugin = LoggingPlugin()
         agent = MagicMock()
         agent.name = "seq_1"
-        ctx = MagicMock()
 
-        result = await plugin.before_agent_callback(agent=agent, callback_context=ctx)
+        result = await plugin.before_agent_callback(
+            agent=agent, callback_context=_ctx("s1")
+        )
         assert result is None
         # Still records time even for workflow nodes
-        assert "seq_1" in plugin._agent_start
+        assert ("s1", "seq_1") in plugin._agent_start
+
+    @pytest.mark.asyncio
+    async def test_a_sibling_session_keeps_its_own_start_time(self):
+        """Keyed by name alone, one run's elapsed was measured from another's."""
+        plugin = LoggingPlugin()
+        agent = MagicMock()
+        agent.name = "researcher"
+
+        await plugin.before_agent_callback(agent=agent, callback_context=_ctx("s1"))
+        await plugin.before_agent_callback(agent=agent, callback_context=_ctx("s2"))
+
+        assert ("s1", "researcher") in plugin._agent_start
+        assert ("s2", "researcher") in plugin._agent_start
 
 
 class TestAfterAgentCallback:
@@ -127,10 +149,11 @@ class TestAfterAgentCallback:
         ctx = MagicMock()
 
         # Simulate before → after
+        ctx = _ctx("s1")
         await plugin.before_agent_callback(agent=agent, callback_context=ctx)
         result = await plugin.after_agent_callback(agent=agent, callback_context=ctx)
         assert result is None
-        assert "writer" not in plugin._agent_start
+        assert ("s1", "writer") not in plugin._agent_start
 
 
 class TestOnEventCallback:
@@ -251,10 +274,8 @@ class TestSilentAgentIsReported:
         plugin = LoggingPlugin()
         agent = self._agent()
 
-        await plugin.before_agent_callback(
-            agent=agent, callback_context=MagicMock()
-        )
-        await plugin.after_agent_callback(agent=agent, callback_context=MagicMock())
+        await plugin.before_agent_callback(agent=agent, callback_context=_ctx())
+        await plugin.after_agent_callback(agent=agent, callback_context=_ctx())
 
         logged = "".join(warnings_logged)
         assert "No output" in logged
@@ -265,17 +286,15 @@ class TestSilentAgentIsReported:
         plugin = LoggingPlugin()
         agent = self._agent()
 
-        await plugin.before_agent_callback(
-            agent=agent, callback_context=MagicMock()
-        )
+        await plugin.before_agent_callback(agent=agent, callback_context=_ctx())
         await plugin.on_event_callback(
-            invocation_context=MagicMock(),
+            invocation_context=_ctx(),
             event=FakeEvent(
                 author="researcher",
                 actions=FakeActions(state_delta={"research_data": "found it"}),
             ),
         )
-        await plugin.after_agent_callback(agent=agent, callback_context=MagicMock())
+        await plugin.after_agent_callback(agent=agent, callback_context=_ctx())
 
         assert "No output" not in "".join(warnings_logged)
 
@@ -285,9 +304,50 @@ class TestSilentAgentIsReported:
         plugin = LoggingPlugin()
         agent = self._agent(output_key=None)
 
-        await plugin.before_agent_callback(
-            agent=agent, callback_context=MagicMock()
-        )
-        await plugin.after_agent_callback(agent=agent, callback_context=MagicMock())
+        await plugin.before_agent_callback(agent=agent, callback_context=_ctx())
+        await plugin.after_agent_callback(agent=agent, callback_context=_ctx())
 
         assert "No output" not in "".join(warnings_logged)
+
+    @pytest.mark.asyncio
+    async def test_another_sessions_write_does_not_silence_the_warning(
+        self, warnings_logged
+    ):
+        """Benchmarks drive concurrent sessions through one plugin instance."""
+        plugin = LoggingPlugin()
+        agent = self._agent()
+
+        await plugin.before_agent_callback(agent=agent, callback_context=_ctx("s1"))
+        await plugin.on_event_callback(
+            invocation_context=_ctx("s2"),
+            event=FakeEvent(
+                author="researcher",
+                actions=FakeActions(state_delta={"research_data": "found it"}),
+            ),
+        )
+        await plugin.after_agent_callback(agent=agent, callback_context=_ctx("s1"))
+
+        assert "No output" in "".join(warnings_logged)
+
+    @pytest.mark.asyncio
+    async def test_an_aborted_run_does_not_leak_its_bookkeeping(self):
+        """A timeout or an open circuit never reaches after_agent_callback."""
+        plugin = LoggingPlugin()
+        agent = self._agent()
+
+        await plugin.before_agent_callback(agent=agent, callback_context=_ctx("s1"))
+        # ... run aborts here, no after_agent_callback ...
+        await plugin.before_run_callback(invocation_context=_ctx("s1"))
+
+        assert plugin._agent_start == {}
+        assert plugin._written_keys == {}
+
+    @pytest.mark.asyncio
+    async def test_pruning_leaves_a_concurrent_run_alone(self):
+        plugin = LoggingPlugin()
+        agent = self._agent()
+
+        await plugin.before_agent_callback(agent=agent, callback_context=_ctx("s1"))
+        await plugin.before_run_callback(invocation_context=_ctx("s2"))
+
+        assert ("s1", "researcher") in plugin._agent_start

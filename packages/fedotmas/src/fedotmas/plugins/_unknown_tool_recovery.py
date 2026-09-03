@@ -91,6 +91,11 @@ class UnknownToolRecoveryPlugin(BasePlugin):
             self.max_recoveries_per_agent,
         )
         return {
+            # MCP's own error shape, which LoggingPlugin keys on: without it
+            # a recovered call is logged as an ordinary result and the recovery
+            # path goes unseen.  ADK returns this response before any
+            # after_tool_callback runs, so no other plugin sees it.
+            "isError": True,
             "error": f"Tool '{tool.name}' does not exist.",
             "hint": (
                 "Call only the tools that were provided to you. If none of them "

@@ -181,6 +181,23 @@ class TestUnknownToolRecoveryPlugin:
         assert result is None
 
 
+class TestTheResultLooksLikeAnError:
+    @pytest.mark.asyncio
+    async def test_it_carries_the_is_error_flag(self):
+        """LoggingPlugin keys on isError; without it the recovery goes unseen."""
+        plugin = UnknownToolRecoveryPlugin()
+
+        result = await plugin.on_tool_error_callback(
+            tool=_unknown_tool_stub(),
+            tool_args={},
+            tool_context=_tool_context(),
+            error=_not_found(),
+        )
+
+        assert result is not None
+        assert result["isError"] is True
+
+
 class TestRegisteredByDefault:
     def test_present_in_the_default_plugin_set(self):
         """Registering only in the GAIA runner is what made the first fix a no-op.

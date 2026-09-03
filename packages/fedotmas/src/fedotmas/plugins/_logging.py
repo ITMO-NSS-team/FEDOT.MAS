@@ -22,6 +22,20 @@ def _is_workflow_node(name: str) -> bool:
     return name.startswith(_WORKFLOW_PREFIXES)
 
 
+def _session_key(
+    context: CallbackContext | InvocationContext, agent_name: str
+) -> tuple[str, str]:
+    """Scope per-agent bookkeeping to one session.
+
+    One callback writes a bucket and another reads it, so both must derive the
+    id the same way -- ``session.id``, which both context types expose.  There
+    is deliberately no fallback: were only one of the two to lose its session,
+    a fallback would send the writer and the reader to different buckets and
+    report every agent as silent.  Failing here is the louder, truer signal.
+    """
+    return (context.session.id, agent_name)
+
+
 class LoggingPlugin(BasePlugin):
     """Default FEDOT.MAS plugin that logs agent lifecycle and event details.
 
@@ -32,22 +46,49 @@ class LoggingPlugin(BasePlugin):
 
     def __init__(self) -> None:
         super().__init__(name="fedotmas_logging")
-        self._agent_start: dict[str, float] = {}
-        self._written_keys: dict[str, set[str]] = {}
+        self._agent_start: dict[tuple[str, str], float] = {}
+        # Both keyed by (session, agent): benchmarks and the optimizer drive
+        # several sessions through one plugin instance, and a bare agent name
+        # would let one run's state writes silence another run's "No output"
+        # warning, and one run's start time distort another run's elapsed.
+        self._written_keys: dict[tuple[str, str], set[str]] = {}
+
+    async def before_run_callback(
+        self, *, invocation_context: InvocationContext
+    ) -> None:
+        # A run that aborts mid-agent -- a pipeline timeout, an open circuit,
+        # a search limit -- never reaches after_agent_callback, so its entries
+        # would sit here forever now that the key carries a session id.  Drop
+        # only this session's, the way the sibling plugins do: clearing outright
+        # would erase a concurrently running run's bookkeeping.
+        session_id = invocation_context.session.id
+        self._agent_start = {
+            key: value
+            for key, value in self._agent_start.items()
+            if key[0] != session_id
+        }
+        self._written_keys = {
+            key: value
+            for key, value in self._written_keys.items()
+            if key[0] != session_id
+        }
+        return None
 
     async def before_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
     ) -> Optional[types.Content]:
         if not _is_workflow_node(agent.name):
             _log.info("Agent started | name={}", agent.name)
-        self._agent_start[agent.name] = time.monotonic()
-        self._written_keys.pop(agent.name, None)
+        key = _session_key(callback_context, agent.name)
+        self._agent_start[key] = time.monotonic()
+        self._written_keys.pop(key, None)
         return None
 
     async def after_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
     ) -> Optional[types.Content]:
-        t0 = self._agent_start.pop(agent.name, None)
+        key = _session_key(callback_context, agent.name)
+        t0 = self._agent_start.pop(key, None)
         if t0 is not None and not _is_workflow_node(agent.name):
             _log.info(
                 "Agent done | name={} elapsed={:.1f}s",
@@ -62,7 +103,7 @@ class LoggingPlugin(BasePlugin):
         # Against the agent's own key, not any state write: a tool that
         # stashes something in state would otherwise mask a silent agent.
         output_key = getattr(agent, "output_key", None)
-        written = self._written_keys.get(agent.name, set())
+        written = self._written_keys.get(key, set())
         if (
             output_key
             and not _is_workflow_node(agent.name)
@@ -73,7 +114,7 @@ class LoggingPlugin(BasePlugin):
                 agent.name,
                 output_key,
             )
-        self._written_keys.pop(agent.name, None)
+        self._written_keys.pop(key, None)
         return None
 
     async def after_model_callback(
@@ -161,9 +202,9 @@ class LoggingPlugin(BasePlugin):
         # State changes
         if event.actions.state_delta:
             if event.author:
-                self._written_keys.setdefault(event.author, set()).update(
-                    event.actions.state_delta
-                )
+                self._written_keys.setdefault(
+                    _session_key(invocation_context, event.author), set()
+                ).update(event.actions.state_delta)
             for key, value in event.actions.state_delta.items():
                 if value is None or (isinstance(value, str) and not value.strip()):
                     _log.warning(

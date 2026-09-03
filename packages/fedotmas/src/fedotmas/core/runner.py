@@ -288,7 +288,9 @@ async def _consume_runner_events(
                         "continuing with an empty result for this step",
                         event.author,
                     )
-                    if event.author:
+                    # A loop or a retry can bring the same agent back here;
+                    # the field names which steps came up empty, not how often.
+                    if event.author and event.author not in truncated_agents:
                         truncated_agents.append(event.author)
                 continue
 

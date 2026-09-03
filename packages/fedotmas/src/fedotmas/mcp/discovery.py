@@ -57,9 +57,11 @@ def _default_timeout() -> int:
 def _resolve_prefix(value: object, server_name: str) -> str | None:
     """Validate a declared ``tool_name_prefix``.
 
-    ADK joins it as ``f"{prefix}_{tool.name}"``, and providers accept only
-    ``[A-Za-z0-9_.-]`` in a function name.  Rejecting here keeps a bad
-    pyproject from surfacing as an opaque 400 at the first model call.
+    ADK joins it as ``f"{prefix}_{tool.name}"``, and a function name has to
+    survive every provider it is sent to.  Only letters, digits, ``-`` and
+    ``_`` are accepted -- narrower than any single provider allows, since a
+    prefix rejected here costs a line in a pyproject, while one wrongly
+    accepted surfaces as an opaque 400 at the first model call.
     """
     if value is None or value == "":
         return None
