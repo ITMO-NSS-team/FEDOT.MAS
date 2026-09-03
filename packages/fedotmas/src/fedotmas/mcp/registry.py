@@ -17,6 +17,11 @@ from fedotmas.mcp.discovery import discover_local_servers
 
 _log = get_logger("fedotmas.mcp.registry")
 
+#: Variables pointing at *our* virtualenv.  Local servers run under ``uv run
+#: --directory``, which resolves its own; an inherited value makes uv warn and
+#: can send the child at the wrong .venv.
+_PARENT_VENV_VARS = frozenset({"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"})
+
 
 @functools.cache
 def get_mcp_servers() -> dict[str, MCPServerConfig]:
@@ -38,7 +43,10 @@ def create_toolset(
 
     match cfg:
         case StdioMCPServer():
-            env = {**get_default_environment(), **os.environ, **cfg.env}
+            inherited = {
+                k: v for k, v in os.environ.items() if k not in _PARENT_VENV_VARS
+            }
+            env = {**get_default_environment(), **inherited, **cfg.env}
             params = StdioConnectionParams(
                 server_params=StdioServerParameters(
                     command=cfg.command,
@@ -56,7 +64,10 @@ def create_toolset(
         case _:
             raise TypeError(f"Unsupported MCP server type: {type(cfg)}")
 
-    return McpToolset(connection_params=params)
+    return McpToolset(
+        connection_params=params,
+        tool_name_prefix=cfg.tool_name_prefix,
+    )
 
 
 def get_server_descriptions(
@@ -73,3 +84,31 @@ def get_server_descriptions(
     if tags:
         reg = {k: v for k, v in reg.items() if tags & set(v.tags)}
     return {name: cfg.description or f"MCP server: {name}" for name, cfg in reg.items()}
+
+
+def strip_tool_name_prefix(tool_name: str) -> str:
+    """Return *tool_name* without a registered server's ``tool_name_prefix``.
+
+    A prefixed server renames every one of its tools, which silently breaks
+    any policy that matches tool names literally.  Callers that reason about
+    tool identity should compare against this rather than the raw name.
+
+    Only prefixes from the auto-discovered registry are known here; one declared
+    in a registry passed straight to ``MAS``/``MAW`` is not, and such a tool
+    keeps its prefixed name.
+    """
+    try:
+        registry = get_mcp_servers()
+    except Exception as exc:
+        # Discovery raises without a workspace root -- the installed-as-a-
+        # dependency shape.  On the per-tool-call path, so it must not raise.
+        _log.debug(
+            "Cannot resolve tool name prefixes ({}); using '{}' as is", exc, tool_name
+        )
+        return tool_name
+
+    for cfg in registry.values():
+        prefix = cfg.tool_name_prefix
+        if prefix and tool_name.startswith(f"{prefix}_"):
+            return tool_name[len(prefix) + 1 :]
+    return tool_name

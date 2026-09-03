@@ -9,6 +9,11 @@ from pydantic import ValidationError
 
 from fedotmas._settings import ModelConfig
 from fedotmas.maw.builder import (
+    AUTONOMY_CLOSING,
+    AUTONOMY_PREAMBLE,
+    _STATE_REF_RE,
+    _build_llm_agent,
+    _instruction_provider,
     _inject_exit_loop,
     _resolve_llm,
     build,
@@ -366,3 +371,240 @@ class TestBuildLoopDefaultMaxIterations:
 
         assert isinstance(root, LoopAgent)
         assert root.max_iterations == 10
+
+
+class TestMaxOutputTokensIsPassedThrough:
+    """The builder honours the config; only generation clears a cap."""
+
+    def _built(self, max_output_tokens):
+        return _build_llm_agent(
+            MAWAgentConfig(
+                name="classifier",
+                instruction="Answer yes or no.",
+                output_key="verdict",
+                max_output_tokens=max_output_tokens,
+            ),
+            None,
+            None,
+        )
+
+    def test_a_hand_written_cap_is_kept(self):
+        """An explicit low cap is a cost control, not a mistake to correct."""
+        assert self._built(200).generate_content_config.max_output_tokens == 200
+
+    def test_unset_stays_unset(self):
+        """No cap declared means the provider default."""
+        assert self._built(None).generate_content_config is None
+
+
+def _readonly_context(state: dict):
+    """Minimal stand-in: both attributes ADK's interpolation reads."""
+    ctx = MagicMock()
+    ctx.state = state
+    ctx._invocation_context.session.state = state
+    ctx._invocation_context.artifact_service = None
+    return ctx
+
+
+class TestMissingInputIsNamed:
+    """A step that produced nothing must not read as a step with nothing to say."""
+
+    async def _render(self, instruction: str, state: dict) -> str:
+        provider = _instruction_provider(instruction, "writer")
+        return await provider(_readonly_context(state))
+
+    @pytest.mark.asyncio
+    async def test_present_value_is_substituted(self):
+        text = await self._render(
+            "Use the findings: {raw_data?}", {"raw_data": "zone T3ZH2"}
+        )
+
+        assert "zone T3ZH2" in text
+        assert "MISSING INPUT" not in text
+
+    @pytest.mark.asyncio
+    async def test_absent_key_is_called_out(self):
+        text = await self._render("Use the findings: {raw_data?}", {})
+
+        assert 'MISSING INPUT "raw_data"' in text
+        assert "Do not invent" in text
+
+    @pytest.mark.asyncio
+    async def test_blank_value_counts_as_missing(self):
+        """An agent that wrote an empty string left just as much behind."""
+        text = await self._render("Use the findings: {raw_data?}", {"raw_data": "  "})
+
+        assert 'MISSING INPUT "raw_data"' in text
+
+    @pytest.mark.asyncio
+    async def test_unnormalised_reference_is_handled_too(self):
+        text = await self._render("Use the findings: {raw_data}", {})
+
+        assert 'MISSING INPUT "raw_data"' in text
+
+    @pytest.mark.asyncio
+    async def test_a_literal_placeholder_is_left_alone(self):
+        """{answer?} is a formatting template, not a step that failed."""
+        provider = _instruction_provider(
+            "Reply as {answer?}. Use {raw_data?}.",
+            "writer",
+            frozenset({"user_query", "raw_data"}),
+        )
+        text = await provider(_readonly_context({"raw_data": "zone T3ZH2"}))
+
+        assert "MISSING INPUT" not in text
+
+    @pytest.mark.asyncio
+    async def test_a_known_output_still_gets_marked(self):
+        """The same instruction, with the one real output absent."""
+        provider = _instruction_provider(
+            "Reply as {answer?}. Use {raw_data?}.",
+            "writer",
+            frozenset({"user_query", "raw_data"}),
+        )
+        text = await provider(_readonly_context({}))
+
+        assert 'MISSING INPUT "raw_data"' in text
+        assert text.count("MISSING INPUT") == 1
+
+    @pytest.mark.asyncio
+    async def test_a_doubled_brace_is_not_cut_in_half(self):
+        """Replacing inside {{...}} would leave stray braces in the prompt."""
+        text = await self._render("Emit {{raw_data?}} verbatim.", {})
+
+        assert "MISSING INPUT" not in text
+
+    @pytest.mark.asyncio
+    async def test_only_the_absent_reference_is_marked(self):
+        text = await self._render(
+            "From {raw_data?} and {calc?}", {"raw_data": "zone T3ZH2"}
+        )
+
+        assert "zone T3ZH2" in text
+        assert 'MISSING INPUT "calc"' in text
+        assert 'MISSING INPUT "raw_data"' not in text
+
+
+class TestInstructionProviderIsOnlyUsedWhenNeeded:
+    def test_static_instruction_stays_a_string(self):
+        """No refs, no per-call work: ADK takes a plain string as-is."""
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="greeter", instruction="Say hello.", output_key="greeting"
+            ),
+            None,
+            None,
+        )
+
+        assert "Say hello." in agent.instruction
+
+    def test_instruction_with_a_reference_becomes_a_provider(self):
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="writer",
+                instruction="Use {raw_data}.",
+                output_key="report",
+            ),
+            None,
+            None,
+        )
+
+        assert callable(agent.instruction)
+
+
+class TestAutonomyPreamble:
+    """A pipeline runs unattended, so an agent must never wait on a reply."""
+
+    def _instruction(self, text: str, output_key: str = "out") -> str:
+        agent = _build_llm_agent(
+            MAWAgentConfig(name="w", instruction=text, output_key=output_key),
+            None,
+            None,
+        )
+        return agent.instruction
+
+    def test_a_static_instruction_carries_it(self):
+        assert AUTONOMY_PREAMBLE in self._instruction("Say hello.")
+
+    def test_the_agents_own_instruction_sits_between_the_two(self):
+        text = self._instruction("Say hello.")
+
+        assert text.index(AUTONOMY_PREAMBLE) < text.index("Say hello.")
+        assert text.index("Say hello.") < text.index(AUTONOMY_CLOSING)
+
+    def test_a_multi_paragraph_instruction_survives_whole(self):
+        """Framing must not swallow anything past the first blank line."""
+        instruction = "First paragraph.\n\nSecond paragraph."
+
+        assert self._instruction(instruction) == (
+            f"{AUTONOMY_PREAMBLE}\n\n{instruction}\n\n{AUTONOMY_CLOSING}"
+        )
+
+    def test_the_closing_anchor_is_last(self):
+        """A preamble alone lost to recency once answers ran to the end."""
+        assert self._instruction("Say hello.").endswith(AUTONOMY_CLOSING)
+
+    @pytest.mark.asyncio
+    async def test_an_instruction_with_a_reference_carries_it_too(self):
+        """The provider path must not be the way an agent loses the preamble."""
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="writer", instruction="Use {raw_data}.", output_key="report"
+            ),
+            None,
+            None,
+        )
+        text = await agent.instruction(_readonly_context({"raw_data": "zone T3ZH2"}))
+
+        assert AUTONOMY_PREAMBLE in text
+        assert AUTONOMY_CLOSING in text
+        assert "zone T3ZH2" in text
+
+    def test_it_holds_no_state_references_of_its_own(self):
+        """A brace in the preamble would make ADK look for a state key."""
+        for text in (AUTONOMY_PREAMBLE, AUTONOMY_CLOSING):
+            assert not _STATE_REF_RE.search(text)
+            assert "{" not in text
+
+    def test_a_caller_with_a_person_in_the_loop_can_turn_it_off(self):
+        agent = _build_llm_agent(
+            MAWAgentConfig(name="w", instruction="Say hello.", output_key="out"),
+            None,
+            None,
+            autonomous=False,
+        )
+
+        assert agent.instruction == "Say hello."
+
+    def test_the_flag_reaches_every_agent_in_a_nested_pipeline(self):
+        cfg = MAWConfig(
+            agents=[
+                MAWAgentConfig(name="a", instruction="Do a.", output_key="a_out"),
+                MAWAgentConfig(name="b", instruction="Do b.", output_key="b_out"),
+            ],
+            pipeline=MAWStepConfig(
+                type="sequential",
+                children=[
+                    MAWStepConfig(type="agent", agent_name="a"),
+                    MAWStepConfig(
+                        type="parallel",
+                        children=[MAWStepConfig(type="agent", agent_name="b")],
+                    ),
+                ],
+            ),
+        )
+
+        served = build(cfg, autonomous=False)
+        unattended = build(cfg)
+
+        assert [a.instruction for a in _llm_agents(served)] == ["Do a.", "Do b."]
+        assert all(AUTONOMY_PREAMBLE in a.instruction for a in _llm_agents(unattended))
+
+
+def _llm_agents(root):
+    """Every LlmAgent in a built tree, in pipeline order."""
+    from google.adk.agents import LlmAgent
+
+    if isinstance(root, LlmAgent):
+        return [root]
+    return [a for child in root.sub_agents for a in _llm_agents(child)]

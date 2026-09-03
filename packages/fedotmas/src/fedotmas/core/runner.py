@@ -37,6 +37,10 @@ class PipelineResult:
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
     elapsed: float = 0.0
+    #: Agents that spent their whole token budget without emitting content.
+    #: The pipeline carries on past them, so callers need this to tell "the
+    #: model answered wrongly" from "the model never got to answer".
+    truncated_agents: list[str] = field(default_factory=list)
 
 
 async def run_pipeline(
@@ -112,6 +116,7 @@ async def run_pipeline(
     _log.info("Pipeline run started | pipeline={}", root_name)
     total_prompt = 0
     total_completion = 0
+    truncated_agents: list[str] = []
     pipeline_start = time.monotonic()
 
     async with Runner(
@@ -127,6 +132,7 @@ async def run_pipeline(
                 message=message,
                 total_prompt=total_prompt,
                 total_completion=total_completion,
+                truncated_agents=truncated_agents,
                 timeout=timeout,
             )
         except (asyncio.TimeoutError, TimeoutError):
@@ -157,6 +163,7 @@ async def run_pipeline(
                     message=recovery_message,
                     total_prompt=total_prompt,
                     total_completion=total_completion,
+                    truncated_agents=truncated_agents,
                     timeout=timeout,
                 )
             except (asyncio.TimeoutError, TimeoutError):
@@ -192,6 +199,7 @@ async def run_pipeline(
         total_prompt_tokens=total_prompt,
         total_completion_tokens=total_completion,
         elapsed=total_elapsed,
+        truncated_agents=truncated_agents,
     )
 
 
@@ -203,6 +211,7 @@ async def _consume_with_timeout(
     message: types.Content,
     total_prompt: int,
     total_completion: int,
+    truncated_agents: list[str],
     timeout: float | None,
 ) -> tuple[int, int]:
     """Consume runner events, optionally bounded by *timeout* seconds.
@@ -218,6 +227,7 @@ async def _consume_with_timeout(
         message=message,
         total_prompt=total_prompt,
         total_completion=total_completion,
+        truncated_agents=truncated_agents,
     )
     if timeout is None or timeout <= 0:
         return await coro
@@ -232,6 +242,7 @@ async def _consume_runner_events(
     message: types.Content,
     total_prompt: int,
     total_completion: int,
+    truncated_agents: list[str],
 ) -> tuple[int, int]:
     async for event in runner.run_async(
         user_id=user_id,
@@ -249,6 +260,32 @@ async def _consume_runner_events(
 
         # Error handling (control flow — stays in runner)
         if event.error_code:
+            if event.error_code == types.FinishReason.MAX_TOKENS:
+                # LiteLLM flags any non-STOP finish reason, content or not, so
+                # check for content rather than trusting the code.  Thought
+                # parts do not count: ADK writes output_key only from
+                # non-thought text (llm_agent.py, __handle_output_key).
+                parts = (event.content.parts if event.content else None) or []
+                has_content = any(p.text and not p.thought for p in parts)
+                # One step falling short is not a reason to discard what every
+                # earlier step produced: carry on with this output empty, the
+                # same way a timeout salvages partial state.
+                if has_content:
+                    _log.warning(
+                        "Agent '{}' hit its token budget; its answer is cut short",
+                        event.author,
+                    )
+                else:
+                    _log.warning(
+                        "Agent '{}' produced no content within its token budget; "
+                        "continuing with an empty result for this step",
+                        event.author,
+                    )
+                    # The field names which steps came up empty, not how often.
+                    if event.author and event.author not in truncated_agents:
+                        truncated_agents.append(event.author)
+                continue
+
             _log.error(
                 "LLM error | agent={} code={} msg={}",
                 event.author,

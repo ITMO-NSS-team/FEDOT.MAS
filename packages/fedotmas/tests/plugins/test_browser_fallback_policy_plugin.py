@@ -95,3 +95,21 @@ class TestBrowserFallbackPolicyPlugin:
         )
 
         assert result is None
+
+
+class TestPrefixedBrowserTools:
+    """web-scraping declares a tool_name_prefix; the policy must still fire."""
+
+    def test_prefixed_tool_is_recognised(self):
+        plugin = BrowserFallbackPolicyPlugin()
+        tool = MagicMock()
+        tool.name = "web_scraping_goto"
+
+        assert plugin._is_browser_tool(tool)
+
+    def test_unrelated_tool_is_not(self):
+        plugin = BrowserFallbackPolicyPlugin()
+        tool = MagicMock()
+        tool.name = "download_file"
+
+        assert not plugin._is_browser_tool(tool)

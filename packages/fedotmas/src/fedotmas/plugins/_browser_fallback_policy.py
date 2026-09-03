@@ -9,6 +9,7 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 
 from fedotmas.common.logging import get_logger
+from fedotmas.mcp import strip_tool_name_prefix
 
 _log = get_logger("fedotmas.plugins.browser_fallback_policy")
 
@@ -139,7 +140,9 @@ class BrowserFallbackPolicyPlugin(BasePlugin):
         }
 
     def _is_browser_tool(self, tool: BaseTool) -> bool:
-        return tool.name.lower() in self._browser_tool_names
+        # Through the prefix: BROWSER_TOOL_NAMES holds the bare names, and a
+        # server declaring tool_name_prefix renames all of its tools.
+        return strip_tool_name_prefix(tool.name).lower() in self._browser_tool_names
 
 
 def _target_from_args(tool_args: dict[str, Any]) -> str:

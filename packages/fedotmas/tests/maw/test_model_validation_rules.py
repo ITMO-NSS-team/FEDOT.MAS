@@ -5,6 +5,9 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from fedotmas.maw.maw import (
+    _drop_generated_token_budgets,
+)
 from fedotmas.maw.models import (
     AgentPoolConfig,
     MAWAgentConfig,
@@ -219,3 +222,40 @@ class TestAgentNameChildrenConflict:
         assert step.type == "agent"
         assert step.agent_name == "a"
         assert step.children == []
+
+
+class TestGeneratedTokenBudget:
+    """Nothing asks the meta-agent for a cap, so nothing it returns is one."""
+
+    def _config(self, max_output_tokens):
+        return MAWConfig(
+            agents=[
+                MAWAgentConfig(
+                    name="calculator",
+                    instruction="Compute things.",
+                    output_key="calc",
+                    max_output_tokens=max_output_tokens,
+                )
+            ],
+            pipeline=MAWStepConfig(type="agent", agent_name="calculator"),
+        )
+
+    def test_a_small_budget_is_dropped_not_clamped(self):
+        """Clamping made the floor the cap every generated agent hit."""
+        config = self._config(2000)
+        _drop_generated_token_budgets(config)
+
+        assert config.agents[0].max_output_tokens is None
+
+    def test_a_roomier_budget_is_dropped_too(self):
+        """A larger guess is still a guess: no threshold earns trust here."""
+        config = self._config(8000)
+        _drop_generated_token_budgets(config)
+
+        assert config.agents[0].max_output_tokens is None
+
+    def test_unset_stays_unset(self):
+        config = self._config(None)
+        _drop_generated_token_budgets(config)
+
+        assert config.agents[0].max_output_tokens is None

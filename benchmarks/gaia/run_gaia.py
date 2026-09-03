@@ -22,6 +22,7 @@ from fedotmas.plugins import (
     LangfusePlugin,
     LoggingPlugin,
     ToolErrorCircuitBreakerPlugin,
+    UnknownToolRecoveryPlugin,
     ToolErrorCircuitOpen,
     ToolResultTruncationPlugin,
     WebSearchLimitExceeded,
@@ -525,6 +526,11 @@ def build_plugins(task, enable_langfuse: bool) -> list:
                 "FEDOTMAS_GAIA_MAX_SAME_TOOL_ERROR_TYPE", 2
             ),
         ),
+        # After the breaker on purpose: ADK stops at the first plugin that
+        # returns a value, so recovering first would hide unresolved names from
+        # the breaker's counters.  The thresholds therefore win here -- one
+        # recovery, then abort, rather than the three a plain run allows.
+        UnknownToolRecoveryPlugin(),
     ]
     if enable_langfuse:
         plugins.append(

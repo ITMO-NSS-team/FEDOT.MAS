@@ -124,3 +124,4 @@ class TestToolErrorCircuitBreakerPlugin:
         )
 
         assert result is None
+

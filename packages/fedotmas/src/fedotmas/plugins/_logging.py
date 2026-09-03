@@ -6,6 +6,7 @@ from typing import Optional
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.events import Event
+from google.adk.models.llm_response import LlmResponse
 from google.adk.plugins import BasePlugin
 from google.adk.runners import InvocationContext
 from google.genai import types
@@ -21,6 +22,19 @@ def _is_workflow_node(name: str) -> bool:
     return name.startswith(_WORKFLOW_PREFIXES)
 
 
+def _session_key(
+    context: CallbackContext | InvocationContext, agent_name: str
+) -> tuple[str, str]:
+    """Scope per-agent bookkeeping to one session.
+
+    One callback writes a bucket and another reads it, so both derive the id
+    the same way.  No fallback on purpose: were only one of the two to lose its
+    session, a fallback would send writer and reader to different buckets and
+    report every agent as silent.
+    """
+    return (context.session.id, agent_name)
+
+
 class LoggingPlugin(BasePlugin):
     """Default FEDOT.MAS plugin that logs agent lifecycle and event details.
 
@@ -31,26 +45,97 @@ class LoggingPlugin(BasePlugin):
 
     def __init__(self) -> None:
         super().__init__(name="fedotmas_logging")
-        self._agent_start: dict[str, float] = {}
+        self._agent_start: dict[tuple[str, str], float] = {}
+        # Keyed by (session, agent): benchmarks and the optimizer drive several
+        # sessions through one plugin instance, where a bare agent name would
+        # let one run's bookkeeping stand in for another's.
+        self._written_keys: dict[tuple[str, str], set[str]] = {}
+
+    async def before_run_callback(
+        self, *, invocation_context: InvocationContext
+    ) -> None:
+        # A run that aborts mid-agent never reaches after_agent_callback, and
+        # a session-keyed entry is never overwritten, so prune here.  Only this
+        # session's: clearing outright would erase a concurrent run's.
+        session_id = invocation_context.session.id
+        self._agent_start = {
+            key: value
+            for key, value in self._agent_start.items()
+            if key[0] != session_id
+        }
+        self._written_keys = {
+            key: value
+            for key, value in self._written_keys.items()
+            if key[0] != session_id
+        }
+        return None
 
     async def before_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
     ) -> Optional[types.Content]:
         if not _is_workflow_node(agent.name):
             _log.info("Agent started | name={}", agent.name)
-        self._agent_start[agent.name] = time.monotonic()
+        key = _session_key(callback_context, agent.name)
+        self._agent_start[key] = time.monotonic()
+        self._written_keys.pop(key, None)
         return None
 
     async def after_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
     ) -> Optional[types.Content]:
-        t0 = self._agent_start.pop(agent.name, None)
+        key = _session_key(callback_context, agent.name)
+        t0 = self._agent_start.pop(key, None)
         if t0 is not None and not _is_workflow_node(agent.name):
             _log.info(
                 "Agent done | name={} elapsed={:.1f}s",
                 agent.name,
                 time.monotonic() - t0,
             )
+
+        # The "Empty output" warning below only fires once a key has been
+        # written, so an agent that writes nothing is otherwise invisible.
+        # Against the agent's own key, not any state write: a tool that stashes
+        # something in state would otherwise mask a silent agent.
+        output_key = getattr(agent, "output_key", None)
+        written = self._written_keys.get(key, set())
+        if (
+            output_key
+            and not _is_workflow_node(agent.name)
+            and output_key not in written
+        ):
+            _log.warning(
+                "No output | agent={} key='{}' — nothing was written to state",
+                agent.name,
+                output_key,
+            )
+        self._written_keys.pop(key, None)
+        return None
+
+    async def after_model_callback(
+        self, *, callback_context: CallbackContext, llm_response: LlmResponse
+    ) -> Optional[LlmResponse]:
+        """Record the shape of each model turn.
+
+        Without this, a turn that returns only reasoning and no content is
+        indistinguishable from one that never happened.
+        """
+        parts = (llm_response.content.parts if llm_response.content else None) or []
+        # Counted apart: ADK writes output_key only from parts that are *not*
+        # thoughts (llm_agent.py, __handle_output_key), so a turn that is all
+        # reasoning silently leaves state untouched.
+        answer = sum(len(p.text) for p in parts if p.text and not p.thought)
+        thought = sum(len(p.text) for p in parts if p.text and p.thought)
+        calls = [p.function_call.name for p in parts if p.function_call]
+        _log.debug(
+            "Model turn | agent={} finish={} parts={} answer_chars={} "
+            "thought_chars={} calls={}",
+            callback_context.agent_name,
+            llm_response.finish_reason,
+            len(parts),
+            answer,
+            thought,
+            calls or None,
+        )
         return None
 
     async def on_event_callback(
@@ -110,6 +195,10 @@ class LoggingPlugin(BasePlugin):
 
         # State changes
         if event.actions.state_delta:
+            if event.author:
+                self._written_keys.setdefault(
+                    _session_key(invocation_context, event.author), set()
+                ).update(event.actions.state_delta)
             for key, value in event.actions.state_delta.items():
                 if value is None or (isinstance(value, str) and not value.strip()):
                     _log.warning(

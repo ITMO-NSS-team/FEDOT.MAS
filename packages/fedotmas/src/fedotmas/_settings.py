@@ -4,13 +4,18 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from fedotmas.common.logging import get_logger
 
-load_dotenv()
+# Working directory first: installed as a dependency, only the consumer's project
+# holds a .env, never the package tree.  The bare call is the clone fallback.
+_DOTENV_PATH = find_dotenv(usecwd=True) or find_dotenv()
+if _DOTENV_PATH:
+    load_dotenv(_DOTENV_PATH)
 
 _log = get_logger("fedotmas.settings")
+
 
 DEFAULT_META_MODEL = "qwen/qwen3.6-finetuned"
 DEFAULT_WORKER_MODELS: list[str] = ["openai/gpt-5-mini"]

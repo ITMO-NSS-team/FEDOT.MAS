@@ -80,6 +80,7 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
             tool_context=tool_context,
             error_type=type(error).__name__,
         )
+
         return None
 
     def _record_error(

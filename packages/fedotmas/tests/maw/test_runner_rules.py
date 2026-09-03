@@ -150,6 +150,89 @@ class TestLlmErrorRaises:
                 )
 
 
+class TestMaxTokensIsNotFatal:
+    """Rule 3a: one step running out of budget must not discard the others."""
+
+    @pytest.mark.asyncio
+    async def test_max_tokens_does_not_abort_the_pipeline(self, mock_session_service):
+        from google.genai import types
+
+        events = [
+            FakeEvent(
+                author="calculator",
+                error_code=types.FinishReason.MAX_TOKENS,
+                error_message="Maximum tokens reached",
+            ),
+            FakeEvent(
+                author="writer",
+                usage_metadata=FakeUsageMetadata(
+                    prompt_token_count=7, candidates_token_count=3
+                ),
+            ),
+        ]
+        async with _patch_runner(events):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        # the later step still ran and was still counted
+        assert result.total_prompt_tokens == 7
+        assert result.total_completion_tokens == 3
+        assert result.truncated_agents == ["calculator"]
+
+    @pytest.mark.asyncio
+    async def test_a_repeated_truncation_is_listed_once(self, mock_session_service):
+        """A loop brings the same agent back; the field names steps, not hits."""
+        from google.genai import types
+
+        events = [
+            FakeEvent(
+                author="calculator",
+                error_code=types.FinishReason.MAX_TOKENS,
+                error_message="Maximum tokens reached",
+            )
+            for _ in range(3)
+        ]
+        async with _patch_runner(events):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        assert result.truncated_agents == ["calculator"]
+
+
+    @pytest.mark.asyncio
+    async def test_a_truncated_answer_is_not_recorded_as_missing(
+        self, mock_session_service
+    ):
+        """LiteLLM flags MAX_TOKENS even when the answer came through."""
+        from google.genai import types
+
+        content = types.Content(
+            role="model", parts=[types.Part.from_text(text="a partial answer")]
+        )
+        events = [
+            FakeEvent(
+                author="writer",
+                content=content,
+                error_code=types.FinishReason.MAX_TOKENS,
+                error_message="Maximum tokens reached",
+            ),
+        ]
+        async with _patch_runner(events):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        assert result.truncated_agents == []
+
+
 class TestSessionLostAfterRun:
     """Rule 4: get_session returns None → RuntimeError."""
 
@@ -429,3 +512,32 @@ class TestExecutionTimeoutSalvage:
 
         assert isinstance(result, PipelineResult)
         assert result.state["sub_answer"] == "42"
+
+
+class TestReasoningOnlyTurnCountsAsEmpty:
+    """A turn made only of thoughts writes no output_key, however many parts."""
+
+    @pytest.mark.asyncio
+    async def test_thought_parts_do_not_count_as_an_answer(
+        self, mock_session_service
+    ):
+        from google.genai import types
+
+        thought = types.Part(text="Let me think about the cadastral registry")
+        thought.thought = True
+        events = [
+            FakeEvent(
+                author="data_collector",
+                content=types.Content(role="model", parts=[thought]),
+                error_code=types.FinishReason.MAX_TOKENS,
+                error_message="Maximum tokens reached",
+            ),
+        ]
+        async with _patch_runner(events):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        assert result.truncated_agents == ["data_collector"]

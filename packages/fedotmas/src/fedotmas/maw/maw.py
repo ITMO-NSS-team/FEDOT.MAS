@@ -71,6 +71,7 @@ class MAW(BaseMAS[MAWConfig]):
         self._resolved_workers = meta_result.worker_models
         config = meta_result.config
         assert isinstance(config, MAWConfig)
+        _drop_generated_token_budgets(config)
         _log.info(
             "Config generated | agents={} pipeline_type={}",
             len(config.agents),
@@ -125,13 +126,38 @@ class MAW(BaseMAS[MAWConfig]):
             + (pipe_r.elapsed if pipe_r else 0.0),
         )
 
-    def build(self, config: MAWConfig) -> BaseAgent:
+    def build(self, config: MAWConfig, *, autonomous: bool = True) -> BaseAgent:
         """Build an ADK agent tree from *config*."""
         _log.info("Building agent tree")
         agent = build(
             config,
             mcp_registry=self._mcp_registry,
             worker_models=self._worker_map(),
+            autonomous=autonomous,
         )
         _log.info("Config:\n{}", config)
         return agent
+
+
+def _drop_generated_token_budgets(config: MAWConfig) -> None:
+    """Clear ``max_output_tokens`` on a freshly generated config.
+
+    ``maw_prompts.py`` never asks for the field, so a value arriving in it is
+    the meta-agent filling in the JSON schema, not sizing the step.  Treating
+    small values as too small and raising them to a floor made that floor the
+    cap every agent landed on, and a whole run came back cut off mid-sentence.
+    No threshold fixes that, because the number was never an estimate at any
+    magnitude: 4000 deserves no more trust than 2000 does.  Drop it and let the
+    provider default apply.  A hand-written config never reaches here -- an
+    explicit cap means what it says.
+    """
+    for agent in config.agents:
+        if agent.max_output_tokens is None:
+            continue
+        _log.warning(
+            "Dropping generated max_output_tokens for '{}' ({}): nothing asked "
+            "the meta-agent for this number; using the provider default",
+            agent.name,
+            agent.max_output_tokens,
+        )
+        agent.max_output_tokens = None
