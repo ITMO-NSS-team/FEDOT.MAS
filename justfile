@@ -88,9 +88,12 @@ deps-external:
     echo ""
     just doctor
 
+# The -W filter drops ADK's experimental-feature banner, which lands on stderr
+# at import time -- before doctor can capture it, and above its own table.
+
 # Check every MCP server and the things it needs outside Python
 doctor *args:
-    uv run python -m fedotmas.mcp.doctor {{ args }}
+    uv run python -W "ignore::UserWarning:google.adk.features._feature_decorator" -m fedotmas.mcp.doctor {{ args }}
 
 # SearXNG
 
