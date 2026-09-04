@@ -38,6 +38,7 @@ def build_routing_system(
                 worker_models,
                 autonomous=autonomous,
                 mode="single_turn",
+                disallow_transfer_to_parent=True,
             )
         )
 
@@ -68,6 +69,7 @@ def _build_routing_agent(
     autonomous: bool = True,
     mode: Literal["chat", "task", "single_turn"] | None = None,
     sub_agents: list[BaseAgent] | None = None,
+    disallow_transfer_to_parent: bool = False,
 ) -> LlmAgent:
     tools: list = []
     for tool_name in cfg.tools:
@@ -87,4 +89,5 @@ def _build_routing_agent(
         tools=tools,
         mode=mode,
         sub_agents=sub_agents or [],
+        disallow_transfer_to_parent=disallow_transfer_to_parent,
     )

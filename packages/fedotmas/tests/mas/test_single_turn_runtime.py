@@ -39,6 +39,15 @@ def _text(text: str) -> types.Content:
     return types.Content(role="model", parts=[types.Part.from_text(text=text)])
 
 
+def _function_names(request: LlmRequest) -> list[str]:
+    return [
+        declaration.name
+        for tool in request.config.tools or []
+        for declaration in tool.function_declarations or []
+        if declaration.name
+    ]
+
+
 async def test_single_turn_workers_return_control_and_receive_session_state():
     coordinator_llm = _ScriptedLlm(
         model="test",
@@ -57,6 +66,7 @@ async def test_single_turn_workers_return_control_and_receive_session_state():
         model=worker1_llm,
         mode="single_turn",
         output_key="worker1_output",
+        disallow_transfer_to_parent=True,
     )
     worker2 = LlmAgent(
         name="worker2",
@@ -65,6 +75,7 @@ async def test_single_turn_workers_return_control_and_receive_session_state():
         model=worker2_llm,
         mode="single_turn",
         output_key="worker2_output",
+        disallow_transfer_to_parent=True,
     )
     coordinator = LlmAgent(
         name="coordinator",
@@ -104,6 +115,8 @@ async def test_single_turn_workers_return_control_and_receive_session_state():
         "coordinator",
     ]
     assert len(coordinator_llm.requests) == 3
+    assert "transfer_to_agent" not in _function_names(worker1_llm.requests[0])
+    assert "transfer_to_agent" not in _function_names(worker2_llm.requests[0])
     worker1_response_content = coordinator_llm.requests[1].contents[-1]
     assert worker1_response_content.parts
     worker1_result = worker1_response_content.parts[0].function_response

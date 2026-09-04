@@ -211,6 +211,9 @@ class TestSingleTurnWorkerRegistration:
 
         tools = await coordinator.canonical_tools()
         assert [tool.name for tool in tools] == ["alpha", "beta"]
+        assert all(
+            worker.disallow_transfer_to_parent for worker in coordinator.sub_agents
+        )
 
     @patch("fedotmas.mas.builder.create_toolset", return_value=[])
     @patch("fedotmas.mas.builder.LlmAgent", wraps=LlmAgent)
