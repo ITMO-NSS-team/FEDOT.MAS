@@ -44,7 +44,7 @@ async def test_single_turn_workers_return_control_and_receive_session_state():
         model="test",
         responses=[
             _function_call("worker1", "Calculate using N=20."),
-            _function_call("worker2", "Verify worker1's result."),
+            _function_call("worker2", "Verify worker1's result: calculation."),
             _text("Final verified answer."),
         ],
     )
@@ -104,6 +104,18 @@ async def test_single_turn_workers_return_control_and_receive_session_state():
         "coordinator",
     ]
     assert len(coordinator_llm.requests) == 3
+    worker1_response_content = coordinator_llm.requests[1].contents[-1]
+    assert worker1_response_content.parts
+    worker1_result = worker1_response_content.parts[0].function_response
+    assert worker1_result is not None
+    assert worker1_result.response == {"result": "calculation"}
+    worker2_call_content = events[3].content
+    assert worker2_call_content is not None
+    assert worker2_call_content.parts
+    worker2_call = worker2_call_content.parts[0].function_call
+    assert worker2_call is not None
+    assert isinstance(worker2_call.args, dict)
+    assert worker2_call.args["request"] == "Verify worker1's result: calculation."
     worker1_instruction = worker1_llm.requests[0].config.system_instruction
     worker2_instruction = worker2_llm.requests[0].config.system_instruction
     assert isinstance(worker1_instruction, str)

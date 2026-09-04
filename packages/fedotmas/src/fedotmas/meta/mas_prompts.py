@@ -61,8 +61,8 @@ The coordinator agent has workers as single-turn sub-agents, exposed to it as ca
 {
   "coordinator": {
     "name": "support_coordinator",
-    "description": "Routes customer requests to the appropriate specialist",
-    "instruction": "You are a customer support coordinator. Analyze incoming requests and delegate to the most appropriate specialist. For technical issues use the technical_support agent. For billing questions use the billing_agent.",
+    "description": "Coordinates customer requests with technical and billing specialists",
+    "instruction": "You are a customer support coordinator. Call the appropriate specialist with a self-contained request. If both technical and billing help are needed, call technical_support first, then call billing_agent with the technical_support result and all billing-relevant context. After the worker calls, compose the final answer.",
     "model": "openai/gpt-4o"
   },
   "workers": [
@@ -89,8 +89,8 @@ The coordinator agent has workers as single-turn sub-agents, exposed to it as ca
 {
   "coordinator": {
     "name": "research_coordinator",
-    "description": "Coordinates research tasks by delegating to specialized researchers",
-    "instruction": "You are a research coordinator. Analyze the research request and delegate to the appropriate specialist. For data gathering use the data_researcher. For analysis and synthesis use the analyst.",
+    "description": "Coordinates research tasks with data gathering and analysis specialists",
+    "instruction": "You are a research coordinator. Call data_researcher with a self-contained research request. Then call analyst with the data_researcher result and the original research constraints. After both worker calls, compose the final answer.",
     "model": "openai/gpt-4o"
   },
   "workers": [
