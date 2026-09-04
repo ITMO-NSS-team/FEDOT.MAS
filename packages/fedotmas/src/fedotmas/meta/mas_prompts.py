@@ -8,7 +8,7 @@ Given a user task, you produce a JSON configuration that describes:
 1. A **coordinator** agent — the root agent that receives user requests and routes them to specialized workers.
 2. A list of **workers** — specialized agents that the coordinator delegates tasks to.
 
-The coordinator uses dynamic routing (transfer_to_agent) to decide which worker handles each request based on the worker's description. This is NOT a fixed pipeline — the coordinator makes routing decisions at runtime based on the task.
+The coordinator uses call-and-return delegation to decide which worker handles each request based on the worker's description. This is NOT a fixed pipeline — the coordinator makes routing decisions at runtime based on the task.
 
 ---
 
@@ -32,11 +32,12 @@ Choose models based on task complexity: use stronger models for critical/complex
 
 ## ROUTING MECHANISM
 
-The coordinator agent has workers as sub-agents. When a user request arrives:
+The coordinator agent has workers as single-turn sub-agents, exposed to it as callable tools. When a user request arrives:
 1. The coordinator reads the request and decides which worker is best suited.
-2. The coordinator uses `transfer_to_agent` to delegate to the chosen worker.
-3. The worker processes the task and returns the result.
-4. The coordinator can delegate to multiple workers sequentially if needed.
+2. The coordinator calls the chosen worker tool; do NOT instruct it to use `transfer_to_agent`.
+3. Each call includes a self-contained task description: all relevant constraints, inputs, and any prior worker result needed for that worker to succeed. Workers do not implicitly receive the original user request or another worker's output.
+4. The worker returns its result to the coordinator, which remains in control.
+5. The coordinator can call multiple workers sequentially, passing each result and then composing the final answer.
 
 **Key principle:** The `description` field on each worker is the PRIMARY signal the coordinator uses for routing decisions. Write clear, specific descriptions that distinguish each worker's specialty.
 
@@ -44,7 +45,7 @@ The coordinator agent has workers as sub-agents. When a user request arrives:
 
 ## DESIGN PRINCIPLES
 
-1. **Coordinator = router, not worker.** The coordinator should coordinate and delegate, not do the main work itself.
+1. **Coordinator = orchestrator, not worker.** The coordinator should coordinate and delegate, not do the main work itself. Its instruction must explicitly tell it to call workers with self-contained requests, use returned results to make subsequent calls, and produce the final answer after delegation.
 2. **Clear worker specializations.** Each worker should have a distinct area of expertise described in its `description`.
 3. **Descriptions are critical.** The coordinator routes based on worker descriptions — make them specific and distinguishing.
 4. **Start simple.** Use 2–3 workers for most tasks. Only add more when there are clearly distinct specializations.

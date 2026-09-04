@@ -162,3 +162,63 @@ class TestAutonomyPreamble:
             assert AUTONOMY_PREAMBLE not in agent.instruction
             assert AUTONOMY_CLOSING not in agent.instruction
         assert coord.instruction == "Route requests."
+
+
+class TestSequentialDelegation:
+    """Workers are call-and-return tools, so a coordinator can invoke both."""
+
+    @patch("fedotmas.mas.builder.create_toolset", return_value=[])
+    def test_coordinator_calculates_then_verifies_then_finalizes(self, _mock_toolset):
+        config = MASConfig(
+            coordinator={
+                "name": "coordinator",
+                "description": "Coordinates Fibonacci calculation and verification",
+                "instruction": (
+                    "Call fib_calculator with N=20, pass its returned sequence "
+                    "to fib_verifier, then give the final answer."
+                ),
+            },
+            workers=[
+                {
+                    "name": "fib_calculator",
+                    "description": "Calculates Fibonacci sequences",
+                    "instruction": "Return exactly the requested Fibonacci sequence.",
+                },
+                {
+                    "name": "fib_verifier",
+                    "description": "Verifies Fibonacci sequences",
+                    "instruction": "Validate the supplied sequence.",
+                },
+            ],
+        )
+
+        coordinator = build_routing_system(config)
+
+        # ADK exposes single-turn children as callable tools. This permits the
+        # required control flow: coordinator -> calculator(N=20) ->
+        # coordinator -> verifier(sequence) -> coordinator -> final answer.
+        assert coordinator.mode is None
+        assert [worker.mode for worker in coordinator.sub_agents] == [
+            "single_turn",
+            "single_turn",
+        ]
+        assert [worker.name for worker in coordinator.sub_agents] == [
+            "fib_calculator",
+            "fib_verifier",
+        ]
+
+    @patch("fedotmas.mas.builder.create_toolset", return_value=[])
+    @patch("fedotmas.mas.builder.LlmAgent", wraps=LlmAgent)
+    def test_registers_single_turn_workers_during_coordinator_construction(
+        self, agent_constructor, _mock_toolset
+    ):
+        build_routing_system(_config())
+
+        coordinator_call = next(
+            call
+            for call in agent_constructor.call_args_list
+            if call.kwargs["name"] == "coord"
+        )
+        workers = coordinator_call.kwargs["sub_agents"]
+        assert [worker.name for worker in workers] == ["alpha", "beta"]
+        assert [worker.mode for worker in workers] == ["single_turn", "single_turn"]

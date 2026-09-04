@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from google.adk.models.lite_llm import LiteLlm
 
 from fedotmas.common.llm import _ProxyClient, make_llm
@@ -164,3 +167,87 @@ class TestResolveModelConfig:
         )
         result = resolve_model_config(original)
         assert result is original
+
+
+class TestProxyClientToolCompatibility:
+    """ADK single-turn agent tools must be valid OpenAI-compatible tools."""
+
+    @staticmethod
+    def _client_with_response(response):
+        client = _ProxyClient("http://localhost:9090/v1", "test", None)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(return_value=response)
+        return client
+
+    @staticmethod
+    def _response(finish_reason: str = "stop"):
+        response = MagicMock()
+        response.choices = [{"finish_reason": finish_reason}]
+        response.model_dump.return_value = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "openai/gpt-oss-120b",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "done"},
+                    "finish_reason": finish_reason,
+                }
+            ],
+        }
+        return response
+
+    async def test_normalizes_single_turn_worker_tool_schema(self):
+        client = self._client_with_response(self._response())
+        adk_worker_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "worker1",
+                    "description": "First worker",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {"request": {"type": "STRING"}},
+                        "required": ["request"],
+                        "additional_properties": False,
+                    },
+                    "response": {"type": "STRING"},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "worker2",
+                    "description": "Second worker",
+                    "parameters_json_schema": {
+                        "type": "OBJECT",
+                        "properties": {"request": {"type": "STRING"}},
+                    },
+                },
+            },
+        ]
+
+        await client.acompletion(
+            "openai/gpt-oss-120b", [{"role": "user", "content": "run"}], adk_worker_tools
+        )
+
+        payload = client._client.chat.completions.create.await_args.kwargs["tools"]
+        assert [tool["function"]["name"] for tool in payload] == ["worker1", "worker2"]
+        assert payload[0]["function"]["parameters"] == {
+            "type": "object",
+            "properties": {"request": {"type": "string"}},
+            "required": ["request"],
+            "additionalProperties": False,
+        }
+        assert "response" not in payload[0]["function"]
+        assert payload[1]["function"]["parameters"]["type"] == "object"
+        assert "parameters_json_schema" not in payload[1]["function"]
+
+    async def test_error_finish_reason_raises(self):
+        client = self._client_with_response(self._response("error"))
+
+        with pytest.raises(RuntimeError, match="finish_reason='error'"):
+            await client.acompletion(
+                "openai/gpt-oss-120b", [{"role": "user", "content": "run"}], []
+            )

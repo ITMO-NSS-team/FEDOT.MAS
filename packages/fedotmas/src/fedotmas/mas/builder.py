@@ -19,22 +19,37 @@ def build_routing_system(
     worker_models: dict[str, ModelConfig] | None = None,
     autonomous: bool = True,
 ) -> BaseAgent:
-    """Build an ADK agent tree with LLM-driven routing via AutoFlow.
+    """Build an ADK agent tree with a coordinating parent agent.
 
-    The coordinator agent gets workers as ``sub_agents``, which enables
-    ADK AutoFlow's ``transfer_to_agent`` mechanism for dynamic routing.
+    Workers use ADK's ``single_turn`` mode. In a sub-agent hierarchy this
+    exposes each worker as a call-and-return tool instead of a transfer
+    target, so the coordinator retains control after every delegation.
     """
     workers = []
     for w in config.workers:
         if not w.output_key:
             w = w.model_copy(update={"output_key": f"{w.name}_output"})
         workers.append(
-            _build_routing_agent(w, mcp_registry, worker_models, autonomous=autonomous)
+            _build_routing_agent(
+                w,
+                mcp_registry,
+                worker_models,
+                autonomous=autonomous,
+                mode="single_turn",
+            )
         )
+
+    # ADK registers ``single_turn`` children as call-and-return tools during
+    # parent construction. Assigning them later leaves the coordinator's tool
+    # registry unchanged.
     coord = _build_routing_agent(
-        config.coordinator, mcp_registry, worker_models, autonomous=autonomous
+        config.coordinator,
+        mcp_registry,
+        worker_models,
+        autonomous=autonomous,
+        sub_agents=workers,
     )
-    coord.sub_agents = workers  # ADK AutoFlow activates automatically
+
     _log.info(
         "Built routing system | coordinator={} workers={}",
         coord.name,
@@ -49,6 +64,8 @@ def _build_routing_agent(
     worker_models: dict[str, ModelConfig] | None,
     *,
     autonomous: bool = True,
+    mode: str | None = None,
+    sub_agents: list[BaseAgent] | None = None,
 ) -> LlmAgent:
     tools: list = []
     for tool_name in cfg.tools:
@@ -56,7 +73,8 @@ def _build_routing_agent(
 
     model = _resolve_llm(cfg.model, worker_models)
     _log.debug("Built routing agent | name={} model={}", cfg.name, model)
-    return LlmAgent(
+
+    agent_kwargs = dict(
         name=cfg.name,
         description=cfg.description,
         model=model,
@@ -66,3 +84,10 @@ def _build_routing_agent(
         output_key=cfg.output_key,
         tools=tools,
     )
+
+    if mode is not None:
+        agent_kwargs["mode"] = mode
+    if sub_agents is not None:
+        agent_kwargs["sub_agents"] = sub_agents
+
+    return LlmAgent(**agent_kwargs)
