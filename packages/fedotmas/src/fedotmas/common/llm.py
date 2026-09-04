@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -19,16 +18,6 @@ __all__ = ["make_llm"]
 
 _log = get_logger("fedotmas.llm")
 
-_OPENAI_SCHEMA_TYPES = {
-    "STRING": "string",
-    "INTEGER": "integer",
-    "NUMBER": "number",
-    "BOOLEAN": "boolean",
-    "ARRAY": "array",
-    "OBJECT": "object",
-    "NULL": "null",
-}
-
 
 def _json_value(value: Any) -> Any:
     """Convert ADK/Pydantic request objects to JSON-compatible values."""
@@ -41,51 +30,19 @@ def _json_value(value: Any) -> Any:
     return value
 
 
-def _normalize_openai_schema(value: Any) -> Any:
-    """Normalize ADK schema conventions accepted by OpenAI-compatible APIs."""
-    if isinstance(value, list):
-        return [_normalize_openai_schema(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-
-    normalized = {
-        ("additionalProperties" if key == "additional_properties" else key):
-        _normalize_openai_schema(item)
-        for key, item in value.items()
-    }
-    schema_type = normalized.get("type")
-    if isinstance(schema_type, str):
-        normalized["type"] = _OPENAI_SCHEMA_TYPES.get(schema_type.upper(), schema_type)
-    return normalized
-
-
-def _normalize_openai_tools(tools: Any) -> list[dict[str, Any]] | None:
-    """Translate ADK-generated function declarations to OpenAI tool payloads.
-
-    ADK versions emit schemas with Google-style uppercase types and may retain
-    ``response`` metadata on agent tools. OpenAI-compatible endpoints reject
-    those forms even though they accept ordinary function tools.
-    """
+def _tool_names_for_log(tools: Any) -> str:
+    """Summarize worker-tool registration without serializing full schemas."""
+    if tools is None:
+        return "none"
     if not tools:
-        return None
+        return "empty"
 
-    normalized_tools: list[dict[str, Any]] = []
-    for tool in _json_value(tools):
-        if not isinstance(tool, dict):
-            raise TypeError(f"Unsupported tool declaration type: {type(tool)!r}")
-        normalized_tool = _normalize_openai_schema(tool)
-        function = normalized_tool.get("function")
-        if isinstance(function, dict):
-            # These describe an ADK agent-tool return value, not an OpenAI
-            # Chat Completions function parameter, and are rejected by many
-            # OpenAI-compatible gateways.
-            function.pop("response", None)
-            function.pop("response_json_schema", None)
-            parameters_json_schema = function.pop("parameters_json_schema", None)
-            if parameters_json_schema is not None and "parameters" not in function:
-                function["parameters"] = parameters_json_schema
-        normalized_tools.append(normalized_tool)
-    return normalized_tools
+    names = []
+    for tool in tools:
+        function = tool.get("function", {}) if isinstance(tool, Mapping) else {}
+        name = function.get("name") if isinstance(function, Mapping) else None
+        names.append(str(name) if name else "<unnamed>")
+    return ",".join(names)
 
 
 def _finish_reason_is_error(response: Any) -> bool:
@@ -144,9 +101,8 @@ class _ProxyClient:
 
     async def acompletion(self, model, messages, tools, **kwargs):
         kw = {"model": model, "messages": messages, **kwargs}
-        normalized_tools = _normalize_openai_tools(tools)
-        if normalized_tools:
-            kw["tools"] = normalized_tools
+        if tools:
+            kw["tools"] = tools
         kw.pop("api_base", None)
         kw.pop("api_key", None)
         if self._extra_body:
@@ -158,9 +114,7 @@ class _ProxyClient:
         _log.debug(
             "OpenAI-compatible request | model={} tools={}",
             model,
-            json.dumps(
-                normalized_tools, ensure_ascii=False, sort_keys=True, default=str
-            ),
+            _tool_names_for_log(tools),
         )
         resp = await self._client.chat.completions.create(**kw)
         if _finish_reason_is_error(resp):

@@ -5,10 +5,11 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from google.adk.models.lite_llm import LiteLlm
-
-from fedotmas.common.llm import _ProxyClient, make_llm
 from fedotmas._settings import ModelConfig, resolve_model_config
+from fedotmas.common.llm import _ProxyClient, make_llm
+from fedotmas.mas.builder import build_routing_system
+from fedotmas.mas.models import MASConfig
+from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
 
 
 class TestMakeLlm:
@@ -198,51 +199,47 @@ class TestProxyClientToolCompatibility:
         }
         return response
 
-    async def test_normalizes_single_turn_worker_tool_schema(self):
+    async def test_forwards_actual_single_turn_worker_tool_schema(self):
         client = self._client_with_response(self._response())
-        adk_worker_tools = [
-            {
-                "type": "function",
-                "function": {
+        config = MASConfig(
+            coordinator={
+                "name": "coordinator",
+                "description": "Coordinates",
+                "instruction": "Route.",
+            },
+            workers=[
+                {
                     "name": "worker1",
                     "description": "First worker",
-                    "parameters": {
-                        "type": "OBJECT",
-                        "properties": {"request": {"type": "STRING"}},
-                        "required": ["request"],
-                        "additional_properties": False,
-                    },
-                    "response": {"type": "STRING"},
+                    "instruction": "Work.",
                 },
-            },
-            {
-                "type": "function",
-                "function": {
+                {
                     "name": "worker2",
                     "description": "Second worker",
-                    "parameters_json_schema": {
-                        "type": "OBJECT",
-                        "properties": {"request": {"type": "STRING"}},
-                    },
+                    "instruction": "Work.",
                 },
-            },
+            ],
+        )
+        coordinator = build_routing_system(config, autonomous=False)
+        adk_worker_tools = [
+            _function_declaration_to_tool_param(tool._get_declaration())
+            for tool in await coordinator.canonical_tools()
         ]
 
         await client.acompletion(
-            "openai/gpt-oss-120b", [{"role": "user", "content": "run"}], adk_worker_tools
+            "openai/gpt-oss-120b",
+            [{"role": "user", "content": "run"}],
+            adk_worker_tools,
         )
 
         payload = client._client.chat.completions.create.await_args.kwargs["tools"]
-        assert [tool["function"]["name"] for tool in payload] == ["worker1", "worker2"]
+        assert payload == adk_worker_tools
         assert payload[0]["function"]["parameters"] == {
             "type": "object",
             "properties": {"request": {"type": "string"}},
             "required": ["request"],
-            "additionalProperties": False,
         }
-        assert "response" not in payload[0]["function"]
-        assert payload[1]["function"]["parameters"]["type"] == "object"
-        assert "parameters_json_schema" not in payload[1]["function"]
+        assert [tool["function"]["name"] for tool in payload] == ["worker1", "worker2"]
 
     async def test_error_finish_reason_raises(self):
         client = self._client_with_response(self._response("error"))

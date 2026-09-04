@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from google.adk.agents import LlmAgent
 from google.adk.agents.base_agent import BaseAgent
 
-from fedotmas.common.logging import get_logger
 from fedotmas._settings import ModelConfig
-from fedotmas.mas.models import MASConfig, MASAgentConfig
+from fedotmas.common.logging import get_logger
+from fedotmas.mas.models import MASAgentConfig, MASConfig
 from fedotmas.maw.builder import _resolve_llm, frame_instruction
 from fedotmas.mcp import MCPServerConfig, create_toolset
 
@@ -25,7 +27,7 @@ def build_routing_system(
     exposes each worker as a call-and-return tool instead of a transfer
     target, so the coordinator retains control after every delegation.
     """
-    workers = []
+    workers: list[BaseAgent] = []
     for w in config.workers:
         if not w.output_key:
             w = w.model_copy(update={"output_key": f"{w.name}_output"})
@@ -64,7 +66,7 @@ def _build_routing_agent(
     worker_models: dict[str, ModelConfig] | None,
     *,
     autonomous: bool = True,
-    mode: str | None = None,
+    mode: Literal["chat", "task", "single_turn"] | None = None,
     sub_agents: list[BaseAgent] | None = None,
 ) -> LlmAgent:
     tools: list = []
@@ -74,20 +76,15 @@ def _build_routing_agent(
     model = _resolve_llm(cfg.model, worker_models)
     _log.debug("Built routing agent | name={} model={}", cfg.name, model)
 
-    agent_kwargs = dict(
+    return LlmAgent(
         name=cfg.name,
         description=cfg.description,
         model=model,
-        instruction=(
-            frame_instruction(cfg.instruction) if autonomous else cfg.instruction
-        ),
+        instruction=frame_instruction(cfg.instruction)
+        if autonomous
+        else cfg.instruction,
         output_key=cfg.output_key,
         tools=tools,
+        mode=mode,
+        sub_agents=sub_agents or [],
     )
-
-    if mode is not None:
-        agent_kwargs["mode"] = mode
-    if sub_agents is not None:
-        agent_kwargs["sub_agents"] = sub_agents
-
-    return LlmAgent(**agent_kwargs)

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from fedotmas.mas.builder import build_routing_system
+from fedotmas.mas.models import MASConfig
+from fedotmas.maw.builder import AUTONOMY_CLOSING, AUTONOMY_PREAMBLE
 from google.adk.agents import LlmAgent
 from google.adk.tools.base_toolset import BaseToolset
-
-from fedotmas.mas.builder import build_routing_system
-from fedotmas.maw.builder import AUTONOMY_CLOSING, AUTONOMY_PREAMBLE
-from fedotmas.mas.models import MASConfig
 
 
 def _config(**overrides) -> MASConfig:
@@ -119,7 +118,7 @@ class TestModelResolution:
     def test_custom_model(self, mock_resolve, _mock_toolset):
         mock_resolve.return_value = "resolved-model"
         config = _config()
-        root = build_routing_system(config)
+        build_routing_system(config)
         # _resolve_llm called for coordinator + 2 workers = 3 times
         assert mock_resolve.call_count == 3
 
@@ -164,11 +163,11 @@ class TestAutonomyPreamble:
         assert coord.instruction == "Route requests."
 
 
-class TestSequentialDelegation:
-    """Workers are call-and-return tools, so a coordinator can invoke both."""
+class TestSingleTurnWorkerRegistration:
+    """Workers are registered as call-and-return coordinator tools."""
 
     @patch("fedotmas.mas.builder.create_toolset", return_value=[])
-    def test_coordinator_calculates_then_verifies_then_finalizes(self, _mock_toolset):
+    def test_builds_workers_for_sequential_delegation(self, _mock_toolset):
         config = MASConfig(
             coordinator={
                 "name": "coordinator",
@@ -206,6 +205,12 @@ class TestSequentialDelegation:
             "fib_calculator",
             "fib_verifier",
         ]
+
+    async def test_exposes_single_turn_workers_as_coordinator_tools(self):
+        coordinator = build_routing_system(_config(), autonomous=False)
+
+        tools = await coordinator.canonical_tools()
+        assert [tool.name for tool in tools] == ["alpha", "beta"]
 
     @patch("fedotmas.mas.builder.create_toolset", return_value=[])
     @patch("fedotmas.mas.builder.LlmAgent", wraps=LlmAgent)
