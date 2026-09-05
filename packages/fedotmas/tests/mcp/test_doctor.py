@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from fedotmas.mcp import doctor
+from fedotmas.mcp._config import StdioMCPServer
 from fedotmas.mcp.doctor import DEGRADED, FAIL, OK, Prerequisite, ServerReport
 
 
@@ -25,7 +26,7 @@ class TestFatalPrerequisite:
             {"srv": (_prerequisite("lightpanda is not on PATH", fatal=True),)},
         )
 
-        async def unreachable(name):
+        async def unreachable(name, timeout, registry):
             raise AssertionError("probe should be skipped")
 
         monkeypatch.setattr(doctor, "_probe", unreachable)
@@ -79,8 +80,8 @@ class TestNonFatalPrerequisite:
             doctor, "PREREQUISITES", {"srv": (_prerequisite("KEY is not set"),)}
         )
 
-        async def probe(name):
-            return FAIL, "ConnectionError: nope"
+        async def probe(name, timeout, registry):
+            return FAIL, "ConnectionError: nope", ""
 
         monkeypatch.setattr(doctor, "_probe", probe)
 
@@ -94,10 +95,10 @@ class TestProbe:
     async def test_a_broken_server_is_reported_not_raised(
         self, monkeypatch, no_prerequisites
     ):
-        def explode(name):
+        def explode(name, registry=None):
             raise ConnectionError("Client failed to connect")
 
-        monkeypatch.setattr("fedotmas.mcp.registry.create_toolset", explode)
+        monkeypatch.setattr(doctor, "create_toolset", explode)
 
         report = await doctor.check_server("srv")
 
@@ -112,51 +113,92 @@ class TestProbe:
             async def close(self):
                 pass
 
-        monkeypatch.setattr(doctor, "_PROBE_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(doctor, "_PROBE_GRACE_S", 0.05)
+        monkeypatch.setattr(doctor, "_server_timeout", lambda name, registry: 0.0)
         monkeypatch.setattr(
-            "fedotmas.mcp.registry.create_toolset", lambda name: Hanging()
+            doctor, "create_toolset", lambda name, registry=None: Hanging()
         )
 
         report = await doctor.check_server("srv")
 
         assert report.status == FAIL
-        assert "timed out" in report.detail
+        assert "hung past" in report.detail
+
+    async def test_a_session_timeout_points_at_the_unbuilt_venv(
+        self, monkeypatch, no_prerequisites
+    ):
+        """On a clean machine this is dependency resolution, not a broken server."""
+
+        def explode(name, registry=None):
+            raise ConnectionError(
+                "Failed to create MCP session: timed out after 180.0s waiting "
+                "for the session to become ready"
+            )
+
+        monkeypatch.setattr(doctor, "create_toolset", explode)
+        monkeypatch.setattr(doctor, "_server_timeout", lambda name, registry: 180)
+
+        report = await doctor.check_server("srv")
+
+        assert report.status == FAIL
+        assert report.detail == "timed out after 180s, venv likely unbuilt"
+        assert report.fix == "just mcp-sync"
+
+    async def test_the_probe_budget_follows_the_server_timeout(
+        self, monkeypatch, no_prerequisites
+    ):
+        """Being stricter than the runtime would fail healthy cold servers."""
+        seen = {}
+
+        async def probe(name, timeout, registry):
+            seen["timeout"] = timeout
+            return OK, "1 tool", ""
+
+        monkeypatch.setattr(doctor, "_probe", probe)
+        monkeypatch.setattr(
+            doctor, "get_mcp_servers", lambda: {"srv": StdioMCPServer("x", (), 999)}
+        )
+
+        await doctor.check_server("srv")
+
+        assert seen["timeout"] == 999
 
     async def test_a_long_error_is_truncated(self, monkeypatch, no_prerequisites):
-        def explode(name):
+        def explode(name, registry=None):
             raise ConnectionError("x" * 500)
 
-        monkeypatch.setattr("fedotmas.mcp.registry.create_toolset", explode)
+        monkeypatch.setattr(doctor, "create_toolset", explode)
 
         report = await doctor.check_server("srv")
 
         assert len(report.detail) < 200
 
 
-class TestRender:
+class TestSummary:
     def test_problems_are_listed_with_their_fixes(self):
-        rendered = doctor._render(
+        rendered = doctor._summary(
             [
                 ServerReport("alpha", OK, 1.0, "2 tools"),
                 ServerReport("beta", FAIL, 0.0, "missing", "just install-beta"),
-            ]
+            ],
+            width=5,
         )
 
         assert "1 ok, 0 degraded, 1 failed" in rendered
         assert "just install-beta" in rendered
-        # A healthy server has nothing to fix and must not appear in the list.
-        assert rendered.count("alpha") == 1
+        # A healthy server has nothing to fix and must not be listed.
+        assert "alpha" not in rendered
 
     def test_a_clean_report_has_no_fix_section(self):
-        rendered = doctor._render([ServerReport("alpha", OK, 1.0, "2 tools")])
+        rendered = doctor._summary([ServerReport("alpha", OK, 1.0, "2 tools")], width=5)
 
         assert "to fix:" not in rendered
 
     def test_a_problem_with_no_known_fix_leaves_no_empty_header(self):
-        rendered = doctor._render([ServerReport("alpha", FAIL, 1.0, "boom")])
+        rendered = doctor._summary([ServerReport("alpha", FAIL, 1.0, "boom")], width=5)
 
         assert "to fix:" not in rendered
 
 
-async def _probe_ok(name: str) -> tuple[str, str]:
-    return OK, "3 tools"
+async def _probe_ok(name, timeout, registry):
+    return OK, "3 tools", ""
