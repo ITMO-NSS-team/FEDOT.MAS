@@ -5,11 +5,12 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
+
 from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.common.llm import _ProxyClient, make_llm
 from fedotmas.mas.builder import build_routing_system
 from fedotmas.mas.models import MASConfig
-from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
 
 
 class TestMakeLlm:
@@ -221,6 +222,7 @@ class TestProxyClientToolCompatibility:
             ],
         )
         coordinator = build_routing_system(config, autonomous=False)
+        # Intentional canary: ADK exposes this conversion only as a private API.
         adk_worker_tools = [
             _function_declaration_to_tool_param(tool._get_declaration())
             for tool in await coordinator.canonical_tools()
@@ -233,13 +235,12 @@ class TestProxyClientToolCompatibility:
         )
 
         payload = client._client.chat.completions.create.await_args.kwargs["tools"]
-        assert payload == adk_worker_tools
-        assert payload[0]["function"]["parameters"] == {
-            "type": "object",
-            "properties": {"request": {"type": "string"}},
-            "required": ["request"],
-        }
+        assert payload is adk_worker_tools
         assert [tool["function"]["name"] for tool in payload] == ["worker1", "worker2"]
+        parameters = payload[0]["function"]["parameters"]
+        assert parameters["type"] == "object"
+        assert parameters["properties"]["request"]["type"] == "string"
+        assert parameters["required"] == ["request"]
 
     async def test_error_finish_reason_raises(self):
         client = self._client_with_response(self._response("error"))

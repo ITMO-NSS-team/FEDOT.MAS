@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from google.adk.models.lite_llm import LiteLlm
 from litellm import ModelResponse, ModelResponseStream
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 
 from fedotmas.common.logging import get_logger
 
@@ -21,7 +23,7 @@ _log = get_logger("fedotmas.llm")
 
 def _json_value(value: Any) -> Any:
     """Convert ADK/Pydantic request objects to JSON-compatible values."""
-    if hasattr(value, "model_dump"):
+    if isinstance(value, BaseModel):
         return _json_value(value.model_dump(by_alias=True, exclude_none=True))
     if isinstance(value, Mapping):
         return {key: _json_value(item) for key, item in value.items()}
@@ -58,10 +60,6 @@ def _finish_reason_is_error(response: Any) -> bool:
     return isinstance(reason, str) and reason.lower() == "error"
 
 
-def _response_payload(response: Any) -> Any:
-    return _json_value(response)
-
-
 class _StreamAdapter:
     """Wraps AsyncOpenAI async stream to yield ``ModelResponseStream`` objects."""
 
@@ -74,7 +72,10 @@ class _StreamAdapter:
     async def __anext__(self) -> ModelResponseStream:
         chunk = await self._stream.__anext__()
         if _finish_reason_is_error(chunk):
-            payload = _response_payload(chunk)
+            try:
+                payload = json.dumps(_json_value(chunk), default=str)[:2000]
+            except Exception:
+                payload = "<unserializable provider response>"
             _log.error(
                 "OpenAI-compatible streaming response finished with error: {}", payload
             )
@@ -117,14 +118,17 @@ class _ProxyClient:
             _tool_names_for_log(tools),
         )
         resp = await self._client.chat.completions.create(**kw)
+        if stream:
+            return _StreamAdapter(resp)
         if _finish_reason_is_error(resp):
-            payload = _response_payload(resp)
+            try:
+                payload = json.dumps(_json_value(resp), default=str)[:2000]
+            except Exception:
+                payload = "<unserializable provider response>"
             _log.error("OpenAI-compatible response finished with error: {}", payload)
             raise RuntimeError(
                 f"LLM provider returned finish_reason='error': {payload}"
             )
-        if stream:
-            return _StreamAdapter(resp)
         return ModelResponse(**resp.model_dump())
 
 
