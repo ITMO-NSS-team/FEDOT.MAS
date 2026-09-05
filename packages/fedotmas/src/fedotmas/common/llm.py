@@ -60,6 +60,13 @@ def _finish_reason_is_error(response: Any) -> bool:
     return isinstance(reason, str) and reason.lower() == "error"
 
 
+def _error_payload(response: Any) -> str:
+    try:
+        return json.dumps(_json_value(response), default=str)[:2000]
+    except Exception:
+        return "<unserializable provider response>"
+
+
 class _StreamAdapter:
     """Wraps AsyncOpenAI async stream to yield ``ModelResponseStream`` objects."""
 
@@ -72,10 +79,7 @@ class _StreamAdapter:
     async def __anext__(self) -> ModelResponseStream:
         chunk = await self._stream.__anext__()
         if _finish_reason_is_error(chunk):
-            try:
-                payload = json.dumps(_json_value(chunk), default=str)[:2000]
-            except Exception:
-                payload = "<unserializable provider response>"
+            payload = _error_payload(chunk)
             _log.error(
                 "OpenAI-compatible streaming response finished with error: {}", payload
             )
@@ -121,10 +125,7 @@ class _ProxyClient:
         if stream:
             return _StreamAdapter(resp)
         if _finish_reason_is_error(resp):
-            try:
-                payload = json.dumps(_json_value(resp), default=str)[:2000]
-            except Exception:
-                payload = "<unserializable provider response>"
+            payload = _error_payload(resp)
             _log.error("OpenAI-compatible response finished with error: {}", payload)
             raise RuntimeError(
                 f"LLM provider returned finish_reason='error': {payload}"

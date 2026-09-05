@@ -6,11 +6,25 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
+from pydantic import BaseModel
 
 from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.common.llm import _ProxyClient, make_llm
 from fedotmas.mas.builder import build_routing_system
 from fedotmas.mas.models import MASConfig
+
+
+class _ErrorResponse(BaseModel):
+    choices: list[dict[str, str]]
+    detail: str = ""
+
+
+class _SingleChunkStream:
+    def __init__(self, chunk):
+        self.chunk = chunk
+
+    async def __anext__(self):
+        return self.chunk
 
 
 class TestMakeLlm:
@@ -235,7 +249,7 @@ class TestProxyClientToolCompatibility:
         )
 
         payload = client._client.chat.completions.create.await_args.kwargs["tools"]
-        assert payload is adk_worker_tools
+        assert payload == adk_worker_tools
         assert [tool["function"]["name"] for tool in payload] == ["worker1", "worker2"]
         parameters = payload[0]["function"]["parameters"]
         assert parameters["type"] == "object"
@@ -249,3 +263,32 @@ class TestProxyClientToolCompatibility:
             await client.acompletion(
                 "openai/gpt-oss-120b", [{"role": "user", "content": "run"}], []
             )
+
+    async def test_stream_error_finish_reason_raises(self):
+        chunk = _ErrorResponse(choices=[{"finish_reason": "error"}])
+        client = self._client_with_response(_SingleChunkStream(chunk))
+
+        stream = await client.acompletion(
+            "openai/gpt-oss-120b",
+            [{"role": "user", "content": "run"}],
+            [],
+            stream=True,
+        )
+
+        with pytest.raises(RuntimeError, match="finish_reason='error'"):
+            await anext(stream)
+
+    async def test_error_finish_reason_payload_is_truncated(self):
+        response = _ErrorResponse(
+            choices=[{"finish_reason": "error"}], detail="x" * 3000
+        )
+        client = self._client_with_response(response)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            await client.acompletion(
+                "openai/gpt-oss-120b", [{"role": "user", "content": "run"}], []
+            )
+
+        message = str(exc_info.value)
+        assert '"detail": "' in message
+        assert len(message) <= len("LLM provider returned finish_reason='error': ") + 2000
