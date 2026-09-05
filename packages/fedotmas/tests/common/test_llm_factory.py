@@ -9,7 +9,7 @@ from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_pa
 from pydantic import BaseModel
 
 from fedotmas._settings import ModelConfig, resolve_model_config
-from fedotmas.common.llm import _ProxyClient, make_llm
+from fedotmas.common.llm import _ERROR_PAYLOAD_LEN, _ProxyClient, make_llm
 from fedotmas.mas.builder import build_routing_system
 from fedotmas.mas.models import MASConfig
 
@@ -25,6 +25,32 @@ class _SingleChunkStream:
 
     async def __anext__(self):
         return self.chunk
+
+
+def _client_with_response(response):
+    client = _ProxyClient("http://localhost:9090/v1", "test", None)
+    client._client = MagicMock()
+    client._client.chat.completions.create = AsyncMock(return_value=response)
+    return client
+
+
+def _response(finish_reason: str = "stop"):
+    response = MagicMock()
+    response.choices = [{"finish_reason": finish_reason}]
+    response.model_dump.return_value = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "openai/gpt-oss-120b",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+    return response
 
 
 class TestMakeLlm:
@@ -188,34 +214,8 @@ class TestResolveModelConfig:
 class TestProxyClientToolCompatibility:
     """ADK single-turn agent tools must be valid OpenAI-compatible tools."""
 
-    @staticmethod
-    def _client_with_response(response):
-        client = _ProxyClient("http://localhost:9090/v1", "test", None)
-        client._client = MagicMock()
-        client._client.chat.completions.create = AsyncMock(return_value=response)
-        return client
-
-    @staticmethod
-    def _response(finish_reason: str = "stop"):
-        response = MagicMock()
-        response.choices = [{"finish_reason": finish_reason}]
-        response.model_dump.return_value = {
-            "id": "chatcmpl-test",
-            "object": "chat.completion",
-            "created": 0,
-            "model": "openai/gpt-oss-120b",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "done"},
-                    "finish_reason": finish_reason,
-                }
-            ],
-        }
-        return response
-
     async def test_forwards_actual_single_turn_worker_tool_schema(self):
-        client = self._client_with_response(self._response())
+        client = _client_with_response(_response())
         config = MASConfig(
             coordinator={
                 "name": "coordinator",
@@ -256,8 +256,10 @@ class TestProxyClientToolCompatibility:
         assert parameters["properties"]["request"]["type"] == "string"
         assert parameters["required"] == ["request"]
 
+
+class TestProxyClientErrors:
     async def test_error_finish_reason_raises(self):
-        client = self._client_with_response(self._response("error"))
+        client = _client_with_response(_response("error"))
 
         with pytest.raises(RuntimeError, match="finish_reason='error'"):
             await client.acompletion(
@@ -266,7 +268,7 @@ class TestProxyClientToolCompatibility:
 
     async def test_stream_error_finish_reason_raises(self):
         chunk = _ErrorResponse(choices=[{"finish_reason": "error"}])
-        client = self._client_with_response(_SingleChunkStream(chunk))
+        client = _client_with_response(_SingleChunkStream(chunk))
 
         stream = await client.acompletion(
             "openai/gpt-oss-120b",
@@ -282,7 +284,7 @@ class TestProxyClientToolCompatibility:
         response = _ErrorResponse(
             choices=[{"finish_reason": "error"}], detail="x" * 3000
         )
-        client = self._client_with_response(response)
+        client = _client_with_response(response)
 
         with pytest.raises(RuntimeError) as exc_info:
             await client.acompletion(
@@ -291,4 +293,9 @@ class TestProxyClientToolCompatibility:
 
         message = str(exc_info.value)
         assert '"detail": "' in message
-        assert len(message) <= len("LLM provider returned finish_reason='error': ") + 2000
+        assert message.endswith("... (truncated)")
+        assert len(message) <= (
+            len("LLM provider returned finish_reason='error': ")
+            + _ERROR_PAYLOAD_LEN
+            + len("... (truncated)")
+        )

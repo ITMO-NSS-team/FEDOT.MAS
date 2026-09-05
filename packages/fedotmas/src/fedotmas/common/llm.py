@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 __all__ = ["make_llm"]
 
 _log = get_logger("fedotmas.llm")
+_ERROR_PAYLOAD_LEN = 2000
 
 
 def _json_value(value: Any) -> Any:
@@ -62,9 +63,12 @@ def _finish_reason_is_error(response: Any) -> bool:
 
 def _error_payload(response: Any) -> str:
     try:
-        return json.dumps(_json_value(response), default=str)[:2000]
+        payload = json.dumps(_json_value(response), default=str)
     except Exception:
         return "<unserializable provider response>"
+    if len(payload) > _ERROR_PAYLOAD_LEN:
+        return payload[:_ERROR_PAYLOAD_LEN] + "... (truncated)"
+    return payload
 
 
 class _StreamAdapter:
