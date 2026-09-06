@@ -68,6 +68,33 @@ mcp-sync:
     echo ""
     echo "All MCP servers synced."
 
+# Install what the servers need outside Python (downloads, Docker)
+deps-external:
+    #!/usr/bin/env bash
+    # No -e: one installer failing should not hide the state of the others,
+    # and doctor reports what actually landed.
+    set -uo pipefail
+
+    just lightpanda-install
+    just browser-use-install
+
+    if docker info >/dev/null 2>&1; then
+        just searxng-start
+    else
+        echo "Docker is not running; skipping SearXNG."
+        echo "Start Docker, then: just searxng-start"
+    fi
+
+    echo ""
+    just doctor
+
+# The -W filter drops ADK's experimental-feature banner, which lands on stderr
+# at import time -- before doctor can capture it, and above its own table.
+
+# Check every MCP server and the things it needs outside Python
+doctor *args:
+    uv run python -W "ignore::UserWarning:google.adk.features._feature_decorator" -m fedotmas.mcp.doctor {{ args }}
+
 # SearXNG
 
 searxng-install:

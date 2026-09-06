@@ -37,11 +37,23 @@ its session-ready timeout and fails:
 just mcp-sync
 ```
 
-Some servers also need things outside Python — Docker for `websearch-searxng`
-(`just searxng-start`), a browser for `browser-usage` (`just browser-use-install`)
-and `web-scraping` (`just lightpanda-install`), and an `E2B_API_KEY` for `sandbox`.
-Discovery lists a server whether or not its prerequisites are present, so install
-only what the task needs and pass those names to `mcp_servers=`.
+Some servers also need a browser or a Docker container:
+
+```sh
+just deps-external
+```
+
+`sandbox` also needs `E2B_API_KEY`, which is set in `.env` by hand.
+
+Discovery lists a server whether or not its prerequisites are present, and so does
+the server's own tool list — a missing one surfaces only mid-run. To see the real
+state of every server beforehand:
+
+```sh
+just doctor
+```
+
+Install only what the task needs and pass those names to `mcp_servers=`.
 
 ## Development
 

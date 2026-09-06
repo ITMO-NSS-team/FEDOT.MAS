@@ -66,8 +66,12 @@ class UnknownToolRecoveryPlugin(BasePlugin):
         if not _is_unknown_tool_error(tool, error):
             return None
 
-        session_id = tool_context._invocation_context.session.id
-        agent_name = tool_context._invocation_context.agent.name  # ty: ignore[unresolved-attribute]
+        # Bound to a local so the suppression stays on its own short line: the
+        # formatter wraps a longer one and leaves the comment on the closing
+        # paren, where ty stops honouring it and the check turns red.
+        invocation = tool_context._invocation_context
+        session_id = invocation.session.id
+        agent_name = invocation.agent.name  # ty: ignore[unresolved-attribute]
         key = (session_id, agent_name)
         used = self._recoveries.get(key, 0) + 1
         self._recoveries[key] = used
