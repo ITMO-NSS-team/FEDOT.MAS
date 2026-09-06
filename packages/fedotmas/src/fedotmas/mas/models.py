@@ -8,8 +8,8 @@ from fedotmas._settings import validate_model_name
 class MASAgentConfig(BaseModel):
     """Configuration for an agent in a routing-based multi-agent system.
 
-    The ``description`` field is critical — ADK AutoFlow uses it to decide
-    which agent to route tasks to.
+    The ``description`` field is exposed to the coordinator as a worker-tool
+    description and helps it select the right specialist.
     """
 
     name: str
@@ -28,8 +28,8 @@ class MASAgentConfig(BaseModel):
 class MASConfig(BaseModel):
     """Configuration for a routing-based multi-agent system.
 
-    The ``coordinator`` is the root agent that uses ADK AutoFlow to
-    dynamically route tasks to ``workers`` based on their descriptions.
+    The ``coordinator`` is the root agent that calls specialized ``workers``
+    based on their descriptions and combines their results.
     """
 
     coordinator: MASAgentConfig

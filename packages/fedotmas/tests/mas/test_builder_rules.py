@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from fedotmas.mas.builder import build_routing_system
+from fedotmas.mas.models import MASConfig
+from fedotmas.maw.builder import AUTONOMY_CLOSING, AUTONOMY_PREAMBLE
 from google.adk.agents import LlmAgent
 from google.adk.tools.base_toolset import BaseToolset
-
-from fedotmas.mas.builder import build_routing_system
-from fedotmas.maw.builder import AUTONOMY_CLOSING, AUTONOMY_PREAMBLE
-from fedotmas.mas.models import MASConfig
 
 
 def _config(**overrides) -> MASConfig:
@@ -119,7 +118,7 @@ class TestModelResolution:
     def test_custom_model(self, mock_resolve, _mock_toolset):
         mock_resolve.return_value = "resolved-model"
         config = _config()
-        root = build_routing_system(config)
+        build_routing_system(config)
         # _resolve_llm called for coordinator + 2 workers = 3 times
         assert mock_resolve.call_count == 3
 
@@ -162,3 +161,72 @@ class TestAutonomyPreamble:
             assert AUTONOMY_PREAMBLE not in agent.instruction
             assert AUTONOMY_CLOSING not in agent.instruction
         assert coord.instruction == "Route requests."
+
+
+class TestSingleTurnWorkerRegistration:
+    """Workers are registered as call-and-return coordinator tools."""
+
+    @patch("fedotmas.mas.builder.create_toolset", return_value=[])
+    def test_builds_workers_for_sequential_delegation(self, _mock_toolset):
+        config = MASConfig(
+            coordinator={
+                "name": "coordinator",
+                "description": "Coordinates Fibonacci calculation and verification",
+                "instruction": (
+                    "Call fib_calculator with N=20, pass its returned sequence "
+                    "to fib_verifier, then give the final answer."
+                ),
+            },
+            workers=[
+                {
+                    "name": "fib_calculator",
+                    "description": "Calculates Fibonacci sequences",
+                    "instruction": "Return exactly the requested Fibonacci sequence.",
+                },
+                {
+                    "name": "fib_verifier",
+                    "description": "Verifies Fibonacci sequences",
+                    "instruction": "Validate the supplied sequence.",
+                },
+            ],
+        )
+
+        coordinator = build_routing_system(config)
+
+        # ADK exposes single-turn children as callable tools. This permits the
+        # required control flow: coordinator -> calculator(N=20) ->
+        # coordinator -> verifier(sequence) -> coordinator -> final answer.
+        assert coordinator.mode is None
+        assert [worker.mode for worker in coordinator.sub_agents] == [
+            "single_turn",
+            "single_turn",
+        ]
+        assert [worker.name for worker in coordinator.sub_agents] == [
+            "fib_calculator",
+            "fib_verifier",
+        ]
+
+    async def test_exposes_single_turn_workers_as_coordinator_tools(self):
+        coordinator = build_routing_system(_config(), autonomous=False)
+
+        tools = await coordinator.canonical_tools()
+        assert [tool.name for tool in tools] == ["alpha", "beta"]
+        assert all(
+            worker.disallow_transfer_to_parent for worker in coordinator.sub_agents
+        )
+
+    @patch("fedotmas.mas.builder.create_toolset", return_value=[])
+    @patch("fedotmas.mas.builder.LlmAgent", wraps=LlmAgent)
+    def test_registers_single_turn_workers_during_coordinator_construction(
+        self, agent_constructor, _mock_toolset
+    ):
+        build_routing_system(_config())
+
+        coordinator_call = next(
+            call
+            for call in agent_constructor.call_args_list
+            if call.kwargs["name"] == "coord"
+        )
+        workers = coordinator_call.kwargs["sub_agents"]
+        assert [worker.name for worker in workers] == ["alpha", "beta"]
+        assert [worker.mode for worker in workers] == ["single_turn", "single_turn"]

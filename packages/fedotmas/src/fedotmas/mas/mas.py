@@ -12,11 +12,10 @@ _log = get_logger("fedotmas.mas")
 
 
 class MAS(BaseMAS[MASConfig]):
-    """Multi-Agent System are dynamic LLM-driven routing.
+    """A multi-agent system provides dynamic LLM-driven routing.
 
-    Generates and executes agent systems where a coordinator agent
-    dynamically routes tasks to specialized workers using ADK AutoFlow's
-    ``transfer_to_agent`` mechanism.
+    Generates and executes agent systems where a coordinator agent delegates
+    to specialized workers and retains control after each worker result.
 
     Usage::
 

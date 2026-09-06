@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from google.adk.models.lite_llm import LiteLlm
 from litellm import ModelResponse, ModelResponseStream
 from openai import AsyncOpenAI
+from pydantic import BaseModel
+
+from fedotmas.common.logging import get_logger
 
 if TYPE_CHECKING:
     from google.adk.models.base_llm import BaseLlm
@@ -12,6 +17,58 @@ if TYPE_CHECKING:
     from fedotmas._settings import ModelConfig
 
 __all__ = ["make_llm"]
+
+_log = get_logger("fedotmas.llm")
+_ERROR_PAYLOAD_LEN = 2000
+
+
+def _json_value(value: Any) -> Any:
+    """Convert ADK/Pydantic request objects to JSON-compatible values."""
+    if isinstance(value, BaseModel):
+        return _json_value(value.model_dump(by_alias=True, exclude_none=True))
+    if isinstance(value, Mapping):
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_value(item) for item in value]
+    return value
+
+
+def _tool_names_for_log(tools: Any) -> str:
+    """Summarize worker-tool registration without serializing full schemas."""
+    if tools is None:
+        return "none"
+    if not tools:
+        return "empty"
+
+    names = []
+    for tool in tools:
+        function = tool.get("function", {}) if isinstance(tool, Mapping) else {}
+        name = function.get("name") if isinstance(function, Mapping) else None
+        names.append(str(name) if name else "<unnamed>")
+    return ",".join(names)
+
+
+def _finish_reason_is_error(response: Any) -> bool:
+    choices = getattr(response, "choices", None)
+    if choices is None and isinstance(response, Mapping):
+        choices = response.get("choices")
+    if not choices:
+        return False
+    choice = choices[0]
+    reason = getattr(choice, "finish_reason", None)
+    if reason is None and isinstance(choice, Mapping):
+        reason = choice.get("finish_reason")
+    return isinstance(reason, str) and reason.lower() == "error"
+
+
+def _error_payload(response: Any) -> str:
+    try:
+        payload = json.dumps(_json_value(response), default=str)
+    except Exception:
+        return "<unserializable provider response>"
+    if len(payload) > _ERROR_PAYLOAD_LEN:
+        return payload[:_ERROR_PAYLOAD_LEN] + "... (truncated)"
+    return payload
 
 
 class _StreamAdapter:
@@ -25,6 +82,14 @@ class _StreamAdapter:
 
     async def __anext__(self) -> ModelResponseStream:
         chunk = await self._stream.__anext__()
+        if _finish_reason_is_error(chunk):
+            payload = _error_payload(chunk)
+            _log.error(
+                "OpenAI-compatible streaming response finished with error: {}", payload
+            )
+            raise RuntimeError(
+                f"LLM provider returned finish_reason='error': {payload}"
+            )
         return ModelResponseStream(**chunk.model_dump())
 
 
@@ -55,9 +120,20 @@ class _ProxyClient:
                 **kw.get("extra_body", {}),
             }
         stream = kw.get("stream", False)
+        _log.debug(
+            "OpenAI-compatible request | model={} tools={}",
+            model,
+            _tool_names_for_log(tools),
+        )
         resp = await self._client.chat.completions.create(**kw)
         if stream:
             return _StreamAdapter(resp)
+        if _finish_reason_is_error(resp):
+            payload = _error_payload(resp)
+            _log.error("OpenAI-compatible response finished with error: {}", payload)
+            raise RuntimeError(
+                f"LLM provider returned finish_reason='error': {payload}"
+            )
         return ModelResponse(**resp.model_dump())
 
 

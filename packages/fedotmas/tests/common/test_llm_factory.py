@@ -2,10 +2,55 @@
 
 from __future__ import annotations
 
-from google.adk.models.lite_llm import LiteLlm
+from unittest.mock import AsyncMock, MagicMock
 
-from fedotmas.common.llm import _ProxyClient, make_llm
+import pytest
+from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
+from pydantic import BaseModel
+
 from fedotmas._settings import ModelConfig, resolve_model_config
+from fedotmas.common.llm import _ERROR_PAYLOAD_LEN, _ProxyClient, make_llm
+from fedotmas.mas.builder import build_routing_system
+from fedotmas.mas.models import MASConfig
+
+
+class _ErrorResponse(BaseModel):
+    choices: list[dict[str, str]]
+    detail: str = ""
+
+
+class _SingleChunkStream:
+    def __init__(self, chunk):
+        self.chunk = chunk
+
+    async def __anext__(self):
+        return self.chunk
+
+
+def _client_with_response(response):
+    client = _ProxyClient("http://localhost:9090/v1", "test", None)
+    client._client = MagicMock()
+    client._client.chat.completions.create = AsyncMock(return_value=response)
+    return client
+
+
+def _response(finish_reason: str = "stop"):
+    response = MagicMock()
+    response.choices = [{"finish_reason": finish_reason}]
+    response.model_dump.return_value = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "openai/gpt-oss-120b",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+    return response
 
 
 class TestMakeLlm:
@@ -164,3 +209,93 @@ class TestResolveModelConfig:
         )
         result = resolve_model_config(original)
         assert result is original
+
+
+class TestProxyClientToolCompatibility:
+    """ADK single-turn agent tools must be valid OpenAI-compatible tools."""
+
+    async def test_forwards_actual_single_turn_worker_tool_schema(self):
+        client = _client_with_response(_response())
+        config = MASConfig(
+            coordinator={
+                "name": "coordinator",
+                "description": "Coordinates",
+                "instruction": "Route.",
+            },
+            workers=[
+                {
+                    "name": "worker1",
+                    "description": "First worker",
+                    "instruction": "Work.",
+                },
+                {
+                    "name": "worker2",
+                    "description": "Second worker",
+                    "instruction": "Work.",
+                },
+            ],
+        )
+        coordinator = build_routing_system(config, autonomous=False)
+        # Intentional canary: ADK exposes this conversion only as a private API.
+        adk_worker_tools = [
+            _function_declaration_to_tool_param(tool._get_declaration())
+            for tool in await coordinator.canonical_tools()
+        ]
+
+        await client.acompletion(
+            "openai/gpt-oss-120b",
+            [{"role": "user", "content": "run"}],
+            adk_worker_tools,
+        )
+
+        payload = client._client.chat.completions.create.await_args.kwargs["tools"]
+        assert payload == adk_worker_tools
+        assert [tool["function"]["name"] for tool in payload] == ["worker1", "worker2"]
+        parameters = payload[0]["function"]["parameters"]
+        assert parameters["type"] == "object"
+        assert parameters["properties"]["request"]["type"] == "string"
+        assert parameters["required"] == ["request"]
+
+
+class TestProxyClientErrors:
+    async def test_error_finish_reason_raises(self):
+        client = _client_with_response(_response("error"))
+
+        with pytest.raises(RuntimeError, match="finish_reason='error'"):
+            await client.acompletion(
+                "openai/gpt-oss-120b", [{"role": "user", "content": "run"}], []
+            )
+
+    async def test_stream_error_finish_reason_raises(self):
+        chunk = _ErrorResponse(choices=[{"finish_reason": "error"}])
+        client = _client_with_response(_SingleChunkStream(chunk))
+
+        stream = await client.acompletion(
+            "openai/gpt-oss-120b",
+            [{"role": "user", "content": "run"}],
+            [],
+            stream=True,
+        )
+
+        with pytest.raises(RuntimeError, match="finish_reason='error'"):
+            await anext(stream)
+
+    async def test_error_finish_reason_payload_is_truncated(self):
+        response = _ErrorResponse(
+            choices=[{"finish_reason": "error"}], detail="x" * 3000
+        )
+        client = _client_with_response(response)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            await client.acompletion(
+                "openai/gpt-oss-120b", [{"role": "user", "content": "run"}], []
+            )
+
+        message = str(exc_info.value)
+        assert '"detail": "' in message
+        assert message.endswith("... (truncated)")
+        assert len(message) <= (
+            len("LLM provider returned finish_reason='error': ")
+            + _ERROR_PAYLOAD_LEN
+            + len("... (truncated)")
+        )
