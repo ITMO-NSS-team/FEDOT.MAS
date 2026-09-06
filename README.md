@@ -37,11 +37,13 @@ its session-ready timeout and fails:
 just mcp-sync
 ```
 
-Some servers also need things outside Python — a browser, Docker, an API key:
+Some servers also need a browser or a Docker container:
 
 ```sh
 just deps-external
 ```
+
+`sandbox` also needs `E2B_API_KEY`, which is set in `.env` by hand.
 
 Discovery lists a server whether or not its prerequisites are present, and so does
 the server's own tool list — a missing one surfaces only mid-run. To see the real
