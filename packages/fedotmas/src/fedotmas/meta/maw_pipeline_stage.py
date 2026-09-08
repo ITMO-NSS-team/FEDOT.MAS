@@ -8,6 +8,7 @@ from fedotmas._settings import ModelConfig
 from fedotmas.mcp import MCPServerConfig
 from fedotmas.meta._adk_runner import LLMCallResult, run_meta_agent_call
 from fedotmas.meta._helpers import (
+    format_agent_pool,
     format_server_descriptions,
     parse_llm_output,
     resolve_meta_and_workers,
@@ -55,7 +56,7 @@ class PipelineGenerator:
             available_models=models_text,
         )
 
-        pool_text = self._format_pool(pool)
+        pool_text = format_agent_pool(pool)
         user_msg = f"TASK: {task}\n\nAGENT POOL:\n{pool_text}"
 
         self.result = await run_meta_agent_call(
@@ -95,17 +96,3 @@ class PipelineGenerator:
                 f"Pipeline references agents not in pool: {extra}. "
                 f"Pool agents: {pool_names}"
             )
-
-    @staticmethod
-    def _format_pool(pool: AgentPoolConfig) -> str:
-        """Format pool as readable text for the stage-2 user message."""
-        lines: list[str] = []
-        for a in pool.agents:
-            parts = [f"- **{a.name}**"]
-            if a.model:
-                parts.append(f"  model: {a.model}")
-            parts.append(f"  instruction: {a.instruction}")
-            if a.tools:
-                parts.append(f"  tools: {', '.join(a.tools)}")
-            lines.append("\n".join(parts))
-        return "\n\n".join(lines)

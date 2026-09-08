@@ -4,6 +4,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from fedotmas.maw.models import AgentPoolConfig
 from fedotmas.mcp import MCPServerConfig, get_server_descriptions
 from fedotmas._settings import (
     ModelConfig,
@@ -56,6 +57,20 @@ def resolve_tool_descriptions(
     if tool_catalog is not None:
         return dict(tool_catalog)
     return get_server_descriptions(mcp_registry)
+
+
+def format_agent_pool(pool: AgentPoolConfig) -> str:
+    """Format an agent pool as readable text for a meta-agent user message."""
+    lines: list[str] = []
+    for a in pool.agents:
+        parts = [f"- **{a.name}**"]
+        if a.model:
+            parts.append(f"  model: {a.model}")
+        parts.append(f"  instruction: {a.instruction}")
+        if a.tools:
+            parts.append(f"  tools: {', '.join(a.tools)}")
+        lines.append("\n".join(parts))
+    return "\n\n".join(lines)
 
 
 def parse_llm_output(raw: Any, schema: type[T]) -> T:

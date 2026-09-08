@@ -8,6 +8,7 @@ from fedotmas._settings import ModelConfig
 from fedotmas.mcp import MCPServerConfig
 from fedotmas.meta._adk_runner import LLMCallResult, run_meta_agent_call
 from fedotmas.meta._helpers import (
+    format_agent_pool,
     format_server_descriptions,
     parse_llm_output,
     resolve_meta_and_workers,
@@ -44,8 +45,15 @@ class PoolGenerator:
         self._plugins = plugins
         self.result: LLMCallResult | None = None
 
-    async def generate(self, task: str) -> AgentPoolConfig:
-        """Run LLM to produce ``AgentPoolConfig``."""
+    async def generate(
+        self, task: str, existing: AgentPoolConfig | None = None
+    ) -> AgentPoolConfig:
+        """Run LLM to produce ``AgentPoolConfig``.
+
+        *existing* lists agents the caller already has. They are appended to the
+        user message rather than the system prompt, so a run without them is
+        byte-identical to before.
+        """
         descriptions = resolve_tool_descriptions(self._mcp_registry, self._tool_catalog)
         desc_text = format_server_descriptions(descriptions)
         models_text = "\n".join(f"- `{m.model}`" for m in self._resolved_workers)
@@ -55,10 +63,18 @@ class PoolGenerator:
             available_models=models_text,
         )
 
+        user_message = f"TASK: {task}"
+        if existing is not None and existing.agents:
+            user_message += (
+                "\n\nEXISTING AGENTS — reuse the ones that fit this task, keeping "
+                "their names and instructions exactly as given, and add new agents "
+                "only for roles none of them covers:\n" + format_agent_pool(existing)
+            )
+
         self.result = await run_meta_agent_call(
             agent_name="pool_generator",
             instruction=instruction,
-            user_message=f"TASK: {task}",
+            user_message=user_message,
             output_schema=AgentPoolConfig,
             output_key="agent_pool",
             model=self._resolved_meta,

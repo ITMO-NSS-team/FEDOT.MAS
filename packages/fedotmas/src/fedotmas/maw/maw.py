@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from google.adk.agents.base_agent import BaseAgent
 
 from fedotmas.common.logging import get_logger
-from fedotmas._settings import resolve_model_config
+from fedotmas._settings import resolve_model_config, validate_model_name
 from fedotmas.core.base import BaseMAS
-from fedotmas.maw.builder import build
-from fedotmas.maw.models import MAWConfig
+from fedotmas.maw.builder import _STATE_REF_RE, build
+from fedotmas.maw.models import AgentPoolConfig, MAWAgentConfig, MAWConfig
 from fedotmas.meta._result import MetaAgentResult
 from fedotmas.meta.maw_single_stage import generate_pipeline_config
 from fedotmas.meta.maw_pipeline_stage import PipelineGenerator
@@ -41,20 +43,47 @@ class MAW(BaseMAS[MAWConfig]):
         super().__init__(**kwargs)
         self._two_stage = two_stage
 
-    async def generate_config(self, task: str) -> MAWConfig:
+    async def generate_config(
+        self,
+        task: str,
+        *,
+        existing_agents: AgentPoolConfig | None = None,
+        reuse: Literal["prefer", "only"] = "prefer",
+    ) -> MAWConfig:
         """Ask the meta-agent to design a pipeline for *task*.
 
         Returns a ``MAWConfig`` that can be inspected, serialised to
         JSON for human review, and optionally edited before execution.
+
+        Args:
+            existing_agents: Agents the caller already has. ``reuse="prefer"``
+                lets the meta-agent add roles they do not cover; ``"only"``
+                confines the pipeline to them. Either way their instructions,
+                models and tools survive generation unchanged — they are records
+                in someone else's system, to be wired rather than rewritten.
+            reuse: Ignored when *existing_agents* is ``None``.
         """
+        if existing_agents is not None and not existing_agents.agents:
+            existing_agents = None  # nothing to reuse; an ordinary generation
+        if existing_agents is not None:
+            # AgentPoolEntry accepts any model string; MAWAgentConfig does not,
+            # and would only say so after both LLM calls are paid for.
+            for entry in existing_agents.agents:
+                validate_model_name(entry.model)
+
         _log.info(
-            "Generating pipeline config for task (two_stage={}): {}",
+            "Generating pipeline config for task (two_stage={}, existing={}): {}",
             self._two_stage,
+            len(existing_agents.agents) if existing_agents else 0,
             task,
         )
 
-        if self._two_stage:
-            meta_result = await self._generate_two_stage(task)
+        if existing_agents is not None and reuse == "only":
+            meta_result = await self._generate_from_pool(task, existing_agents)
+        # A caller-supplied pool has no place in the single-stage prompt, so it
+        # forces the staged path regardless of how this instance was built.
+        elif existing_agents is not None or self._two_stage:
+            meta_result = await self._generate_two_stage(task, existing_agents)
         else:
             meta_result = await generate_pipeline_config(
                 task,
@@ -73,6 +102,8 @@ class MAW(BaseMAS[MAWConfig]):
         config = meta_result.config
         assert isinstance(config, MAWConfig)
         _drop_generated_token_budgets(config)
+        if existing_agents is not None:
+            config = _restore_external_agents(config, existing_agents)
         _log.info(
             "Config generated | agents={} pipeline_type={}",
             len(config.agents),
@@ -80,7 +111,9 @@ class MAW(BaseMAS[MAWConfig]):
         )
         return config
 
-    async def _generate_two_stage(self, task: str) -> MetaAgentResult:
+    async def _generate_two_stage(
+        self, task: str, existing: AgentPoolConfig | None = None
+    ) -> MetaAgentResult:
         """Run pool generation then pipeline generation."""
         from fedotmas._settings import get_worker_models
 
@@ -95,22 +128,13 @@ class MAW(BaseMAS[MAWConfig]):
             max_retries=self._max_retries,
             plugins=self._plugins,
         )
-        pool = await pool_gen.generate(task)
+        pool = await pool_gen.generate(task, existing)
 
         _log.info(
             "Stage 2/2: generating pipeline from {} agents",
             len(pool.agents),
         )
-        pipeline_gen = PipelineGenerator(
-            meta_model=self._meta_model,
-            worker_models=self._worker_models,
-            temperature=self._temperature,
-            mcp_registry=self._mcp_registry,
-            tool_catalog=self._tool_catalog,
-            session_service=self._session_service,
-            max_retries=self._max_retries,
-            plugins=self._plugins,
-        )
+        pipeline_gen = self._pipeline_generator()
         config = await pipeline_gen.generate(task, pool)
 
         sources = self._worker_models or get_worker_models()
@@ -129,6 +153,40 @@ class MAW(BaseMAS[MAWConfig]):
             + (pipe_r.elapsed if pipe_r else 0.0),
         )
 
+    def _pipeline_generator(self) -> PipelineGenerator:
+        return PipelineGenerator(
+            meta_model=self._meta_model,
+            worker_models=self._worker_models,
+            temperature=self._temperature,
+            mcp_registry=self._mcp_registry,
+            tool_catalog=self._tool_catalog,
+            session_service=self._session_service,
+            max_retries=self._max_retries,
+            plugins=self._plugins,
+        )
+
+    async def _generate_from_pool(
+        self, task: str, pool: AgentPoolConfig
+    ) -> MetaAgentResult:
+        """Design a pipeline over *pool* alone, skipping pool generation."""
+        from fedotmas._settings import get_worker_models
+
+        _log.info(
+            "Generating pipeline from {} caller-supplied agents", len(pool.agents)
+        )
+        pipeline_gen = self._pipeline_generator()
+        config = await pipeline_gen.generate(task, _pool_for_prompt(pool))
+
+        sources = self._worker_models or get_worker_models()
+        result = pipeline_gen.result
+        return MetaAgentResult(
+            config=config,
+            worker_models=[resolve_model_config(m) for m in sources],
+            total_prompt_tokens=result.prompt_tokens if result else 0,
+            total_completion_tokens=result.completion_tokens if result else 0,
+            elapsed=result.elapsed if result else 0.0,
+        )
+
     def build(self, config: MAWConfig, *, autonomous: bool = True) -> BaseAgent:
         """Build an ADK agent tree from *config*."""
         self._reject_foreign_tools(t for a in config.agents for t in a.tools)
@@ -141,6 +199,75 @@ class MAW(BaseMAS[MAWConfig]):
         )
         _log.info("Config:\n{}", config)
         return agent
+
+
+def _pool_for_prompt(pool: AgentPoolConfig) -> AgentPoolConfig:
+    """Drop models before the pool is shown to the meta-agent.
+
+    The prompt demands a model from this instance's worker list and the call
+    rejects anything else, so a caller's own model names would fail generation
+    outright.  ``_restore_external_agents`` puts them back afterwards.
+    """
+    return AgentPoolConfig(
+        agents=[a.model_copy(update={"model": None}) for a in pool.agents]
+    )
+
+
+def _keep_added_state_refs(original: str, generated: str) -> str:
+    """Return *original* carrying whatever state references *generated* added."""
+    added = [
+        ref
+        for ref in dict.fromkeys(_STATE_REF_RE.findall(generated))
+        if f"{{{ref}" not in original
+    ]
+    if not added:
+        return original
+    refs = "\n".join(f"{{{ref}?}}" for ref in added)
+    return f"{original}\n\nInput from earlier steps:\n{refs}"
+
+
+def _restore_external_agents(config: MAWConfig, pool: AgentPoolConfig) -> MAWConfig:
+    """Undo edits the meta-agent made to an agent it was handed.
+
+    A caller-supplied agent is a record in someone else's system: it may be
+    selected and wired, not rewritten.  What survives generation is wiring, not
+    content: ``output_key``, which the pool entry does not carry; the state
+    references stage 2 wrote into the instruction, without which a reused agent
+    reads nothing (``builder`` installs the state provider only for an
+    instruction that carries one); and an assigned model where the caller named
+    none, the alternative being no model at all.
+    """
+    originals = {a.name: a for a in pool.agents}
+    reused = [a.name for a in config.agents if a.name in originals]
+    if not reused:
+        _log.warning(
+            "None of the {} agents supplied were reused — the config is entirely "
+            "generated. Their names came back changed, so nothing could be matched.",
+            len(originals),
+        )
+        return config
+
+    agents = [
+        MAWAgentConfig.model_validate(
+            {
+                **a.model_dump(),
+                "instruction": _keep_added_state_refs(
+                    originals[a.name].instruction, a.instruction
+                ),
+                "model": originals[a.name].model or a.model,
+                "tools": list(originals[a.name].tools),
+            }
+        )
+        if a.name in originals
+        else a
+        for a in config.agents
+    ]
+    _log.info(
+        "Agents reused as given: {} | synthesized: {}",
+        len(reused),
+        len(config.agents) - len(reused),
+    )
+    return config.model_copy(update={"agents": agents})
 
 
 def _drop_generated_token_budgets(config: MAWConfig) -> None:
