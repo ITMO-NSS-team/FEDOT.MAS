@@ -333,3 +333,81 @@ class TestPoolGuards:
                 await maw.generate_config("task", existing_agents=pool)
 
         pool_call.assert_not_called()
+
+
+class TestPreferPathGuards:
+    """Rule 10: the default reuse mode is under the same guards as the strict one."""
+
+    async def test_foreign_models_kept_out_of_the_pool_prompt(self, maw, two_agent_data):
+        pool = AgentPoolConfig(
+            agents=[
+                {
+                    "name": "researcher",
+                    "instruction": "Theirs",
+                    "model": "openrouter/deepseek-v4-pro",
+                }
+            ]
+        )
+        captured = {}
+
+        async def _pool(**kwargs):
+            captured.update(kwargs)
+            return _result(
+                {
+                    "agents": [
+                        {"name": "researcher", "instruction": "x"},
+                        {"name": "writer", "instruction": "y"},
+                    ]
+                }
+            )
+
+        async def _pipeline(**kwargs):
+            return _result(two_agent_data)
+
+        with (
+            patch("fedotmas.meta.maw_pool_stage.run_meta_agent_call", side_effect=_pool),
+            patch(
+                "fedotmas.meta.maw_pipeline_stage.run_meta_agent_call",
+                side_effect=_pipeline,
+            ),
+        ):
+            config = await maw.generate_config("task", existing_agents=pool)
+
+        assert "openrouter/deepseek-v4-pro" not in captured["user_message"]
+        assert captured["allowed_models"] == ["openai/gpt-4o"]
+        # Stripped for the prompt only; the caller's model is what ships.
+        researcher = next(a for a in config.agents if a.name == "researcher")
+        assert researcher.model == "openrouter/deepseek-v4-pro"
+
+
+class TestStateRefMatching:
+    """Rule 11: a wired key is recognised whole, not by prefix."""
+
+    def test_prefix_of_an_existing_ref_is_still_added(self):
+        from fedotmas.maw.maw import _keep_added_state_refs
+
+        out = _keep_added_state_refs(
+            "Use {data_summary} well.", "Use {data_summary?} and {data?}"
+        )
+        assert "{data?}" in out
+        assert out.startswith("Use {data_summary} well.")
+
+    def test_nothing_appended_when_already_wired(self):
+        from fedotmas.maw.maw import _keep_added_state_refs
+
+        assert (
+            _keep_added_state_refs("Use {data}.", "Use {data?}.") == "Use {data}."
+        )
+
+
+class TestEmptyPoolUnderStrictReuse:
+    """Rule 12: 'invent nothing' over an empty pool is a mistake, not a mode switch."""
+
+    async def test_raises_before_any_call(self, maw):
+        with patch("fedotmas.meta.maw_pool_stage.run_meta_agent_call") as pool_call:
+            with pytest.raises(ValueError, match="pool is empty"):
+                await maw.generate_config(
+                    "task", existing_agents=AgentPoolConfig(agents=[]), reuse="only"
+                )
+
+        pool_call.assert_not_called()

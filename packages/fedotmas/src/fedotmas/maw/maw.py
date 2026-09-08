@@ -64,6 +64,11 @@ class MAW(BaseMAS[MAWConfig]):
             reuse: Ignored when *existing_agents* is ``None``.
         """
         if existing_agents is not None and not existing_agents.agents:
+            if reuse == "only":
+                raise ValueError(
+                    "reuse='only' confines the pipeline to existing_agents, but "
+                    "the pool is empty. Pass agents, or use reuse='prefer'."
+                )
             existing_agents = None  # nothing to reuse; an ordinary generation
         if existing_agents is not None:
             # MAWAgentConfig rejects model names AgentPoolEntry accepts, and
@@ -128,7 +133,9 @@ class MAW(BaseMAS[MAWConfig]):
             max_retries=self._max_retries,
             plugins=self._plugins,
         )
-        pool = await pool_gen.generate(task, existing)
+        pool = await pool_gen.generate(
+            task, _pool_for_prompt(existing) if existing else None
+        )
 
         _log.info(
             "Stage 2/2: generating pipeline from {} agents",
@@ -215,10 +222,11 @@ def _pool_for_prompt(pool: AgentPoolConfig) -> AgentPoolConfig:
 
 def _keep_added_state_refs(original: str, generated: str) -> str:
     """Return *original* carrying whatever state references *generated* added."""
+    present = set(_STATE_REF_RE.findall(original))
     added = [
         ref
         for ref in dict.fromkeys(_STATE_REF_RE.findall(generated))
-        if f"{{{ref}" not in original
+        if ref not in present
     ]
     if not added:
         return original
@@ -239,12 +247,12 @@ def _restore_external_agents(config: MAWConfig, pool: AgentPoolConfig) -> MAWCon
     """
     originals = {a.name: a for a in pool.agents}
     reused = [a.name for a in config.agents if a.name in originals]
+    unmatched = sorted(originals.keys() - {a.name for a in config.agents})
+    if unmatched:
+        # Either the task had no use for them or the meta-agent renamed them;
+        # the two are indistinguishable here, and only the second is a problem.
+        _log.info("Supplied agents absent from the config: {}", unmatched)
     if not reused:
-        _log.warning(
-            "None of the {} agents supplied were reused — the config is entirely "
-            "generated. Their names came back changed, so nothing could be matched.",
-            len(originals),
-        )
         return config
 
     agents = [

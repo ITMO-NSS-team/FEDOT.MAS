@@ -355,3 +355,113 @@ class TestIdentifiersTheirFormatRejects:
         workflow = export.bundle["items"]["workflows"][0]
         assert workflow["_id"] == "generated_flow"
         assert _WIRE_NAME_RE.match(workflow["_id"])
+
+
+class TestLoopFidelityIsReported:
+    """Rule 10: their structural gate cannot reject, so a loop runs once."""
+
+    def test_degraded_loops_counted(self):
+        config = MAWConfig(
+            agents=[_agent("drafter", "draft")],
+            pipeline=MAWStepConfig(
+                type="loop",
+                max_iterations=3,
+                children=[MAWStepConfig(type="agent", agent_name="drafter")],
+            ),
+        )
+        export = to_synapse_bundle(config, workflow_id="generated_flow")
+        assert export.degraded_loops == 1
+
+    def test_loop_without_a_limit_still_carries_one(self):
+        config = MAWConfig(
+            agents=[_agent("drafter", "draft")],
+            pipeline=MAWStepConfig(
+                type="loop",
+                children=[MAWStepConfig(type="agent", agent_name="drafter")],
+            ),
+        )
+        export = to_synapse_bundle(config, workflow_id="generated_flow")
+        validator = next(
+            n
+            for n in export.bundle["items"]["workflows"][0]["nodes"]
+            if n["type"] == "validator"
+        )
+        assert 0 <= validator["max_reject_retries"] <= 10
+
+    def test_iterations_beyond_their_cap_are_clamped(self):
+        config = MAWConfig(
+            agents=[_agent("drafter", "draft")],
+            pipeline=MAWStepConfig(
+                type="loop",
+                max_iterations=50,
+                children=[MAWStepConfig(type="agent", agent_name="drafter")],
+            ),
+        )
+        export = to_synapse_bundle(config, workflow_id="generated_flow")
+        validator = next(
+            n
+            for n in export.bundle["items"]["workflows"][0]["nodes"]
+            if n["type"] == "validator"
+        )
+        assert validator["max_reject_retries"] == 10
+
+
+class TestNonLatinNames:
+    """Rule 11: a Russian agent name keeps its identity through the slug."""
+
+    def test_transliterated(self):
+        assert to_wire_name("Исследователь") == "issledovatel"
+        assert to_wire_name("Мастер-планировщик") == "master_planirovshchik"
+
+    def test_names_stay_distinct_in_the_bundle(self):
+        config = MAWConfig(
+            agents=[_agent("Исследователь", "a"), _agent("Писатель", "b")],
+            pipeline=MAWStepConfig(
+                type="sequential",
+                children=[
+                    MAWStepConfig(type="agent", agent_name="Исследователь"),
+                    MAWStepConfig(type="agent", agent_name="Писатель"),
+                ],
+            ),
+        )
+        export = to_synapse_bundle(config, workflow_id="generated_flow")
+        _assert_accepted(export.bundle)
+
+        agents = export.bundle["items"]["agents"]
+        assert [a["_id"] for a in agents] == ["issledovatel", "pisatel"]
+        assert agents[0]["display_name"] == "Исследователь"
+
+
+class TestSuppliedAgentsMissingFromTheConfig:
+    """Rule 12: an id that never reached the config is reported, not lost."""
+
+    def test_unmatched_entry_reported(self, linear):
+        pool = AgentPoolConfig(
+            agents=[
+                {
+                    "name": "requirements_gatherer",
+                    "instruction": "Theirs",
+                    "id": "urban_requirements_gatherer",
+                }
+            ]
+        )
+        export = to_synapse_bundle(
+            linear, workflow_id="generated_flow", existing_agents=pool
+        )
+        _assert_accepted(export.bundle)
+
+        assert export.unmatched_agents == ("requirements_gatherer",)
+        assert export.reused_agents == ()
+        assert "urban_requirements_gatherer" not in [
+            a["_id"] for a in export.bundle["items"]["agents"]
+        ]
+
+    def test_nothing_reported_when_every_entry_is_used(self, linear):
+        pool = AgentPoolConfig(
+            agents=[{"name": "researcher", "instruction": "Theirs", "id": "researcher"}]
+        )
+        export = to_synapse_bundle(
+            linear, workflow_id="generated_flow", existing_agents=pool
+        )
+        assert export.unmatched_agents == ()
+        assert export.reused_agents == ("researcher",)

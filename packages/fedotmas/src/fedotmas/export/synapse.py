@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from fedotmas._settings import get_max_loop_iterations
 from fedotmas.common.logging import get_logger
 from fedotmas.maw.models import (
     AgentPoolConfig,
@@ -36,6 +37,46 @@ _MAX_REJECT_RETRIES = 10
 #: Our own optional-state syntax; meaningless outside this runtime.
 _OPTIONAL_STATE_REF_RE = re.compile(r"\{(\w+)\?\}")
 
+#: Their identifiers are ASCII, and this integration's agents are named in
+#: Russian; without this every such name slugs to nothing.
+_TRANSLIT = str.maketrans(
+    {
+        "а": "a",
+        "б": "b",
+        "в": "v",
+        "г": "g",
+        "д": "d",
+        "е": "e",
+        "ё": "e",
+        "ж": "zh",
+        "з": "z",
+        "и": "i",
+        "й": "i",
+        "к": "k",
+        "л": "l",
+        "м": "m",
+        "н": "n",
+        "о": "o",
+        "п": "p",
+        "р": "r",
+        "с": "s",
+        "т": "t",
+        "у": "u",
+        "ф": "f",
+        "х": "kh",
+        "ц": "ts",
+        "ч": "ch",
+        "ш": "sh",
+        "щ": "shch",
+        "ъ": "",
+        "ы": "y",
+        "ь": "",
+        "э": "e",
+        "ю": "yu",
+        "я": "ya",
+    }
+)
+
 
 @dataclass
 class SynapseExport:
@@ -51,6 +92,13 @@ class SynapseExport:
     #: Caller ids their format would reject, as ``(given, emitted)``.  Each will
     #: import as a new record rather than an update.
     renamed_ids: tuple[tuple[str, str], ...] = ()
+    #: Loops whose gate cannot reject, so they run once.  Their validator judges
+    #: structure, not content, and any non-empty result passes it.
+    degraded_loops: int = 0
+    #: Supplied agents the config does not name, so their ids went nowhere.  Work
+    #: they were meant to do is now carried by a freshly minted agent beside the
+    #: record the platform already has.
+    unmatched_agents: tuple[str, ...] = ()
 
 
 @dataclass
@@ -65,13 +113,14 @@ class _Walk:
     #: Nodes whose outgoing forward edge must say ``approved`` — validators.
     branching: set[str] = field(default_factory=set)
     linearized: int = 0
+    degraded_loops: int = 0
 
 
 def to_wire_name(value: str, taken: set[str] | None = None) -> str:
     """Return *value* as an identifier Synapse accepts, unique within *taken*."""
     slug = value.strip()
     if not _WIRE_NAME_RE.match(slug):
-        slug = re.sub(r"[^a-z0-9]+", "_", slug.lower()).strip("_")
+        slug = re.sub(r"[^a-z0-9]+", "_", slug.lower().translate(_TRANSLIT)).strip("_")
     if not slug or not slug[0].isalpha():
         slug = f"a_{slug}" if slug else "agent"
     slug = slug[:64]
@@ -137,6 +186,14 @@ def to_synapse_bundle(
                 wire[agent.name],
             )
 
+    unmatched = tuple(sorted(external.keys() - {a.name for a in config.agents}))
+    if unmatched:
+        _log.warning(
+            "Supplied agents missing from the config: {}; their ids cannot be "
+            "carried and the work goes to newly created records",
+            unmatched,
+        )
+
     unresolved: list[str] = []
     agents = [
         _agent_doc(
@@ -173,10 +230,12 @@ def to_synapse_bundle(
     }
 
     _log.info(
-        "Bundle emitted | agents={} nodes={} linearized={} unresolved_tools={}",
+        "Bundle emitted | agents={} nodes={} linearized={} degraded_loops={} "
+        "unresolved_tools={}",
         len(agents),
         len(walk.nodes),
         walk.linearized,
+        walk.degraded_loops,
         len(unresolved),
     )
     return SynapseExport(
@@ -191,9 +250,11 @@ def to_synapse_bundle(
             },
         },
         linearized_branches=walk.linearized,
+        degraded_loops=walk.degraded_loops,
         unresolved_tools=tuple(dict.fromkeys(unresolved)),
         reused_agents=tuple(reused),
         renamed_ids=tuple(renamed),
+        unmatched_agents=unmatched,
     )
 
 
@@ -293,12 +354,12 @@ def _emit(
             }
         ],
     }
-    if step.max_iterations:
-        # Ours counts passes, theirs counts rejections after the first one.
-        validator["max_reject_retries"] = min(
-            step.max_iterations - 1, _MAX_REJECT_RETRIES
-        )
+    # Ours counts passes and falls back to a configured default, theirs counts
+    # rejections after the first and is capped at save time.
+    iterations = step.max_iterations or get_max_loop_iterations()
+    validator["max_reject_retries"] = max(0, min(iterations - 1, _MAX_REJECT_RETRIES))
     walk.nodes.append(validator)
+    walk.degraded_loops += 1
     walk.branching.add(validator_id)
     walk.edges.append(_forward_edge(last, validator_id, walk))
     walk.edges.append({"from": validator_id, "to": first, "condition": "rejected"})

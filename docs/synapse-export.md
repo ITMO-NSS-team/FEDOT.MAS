@@ -64,7 +64,7 @@ Ours is a tree of `agent` / `sequential` / `parallel` / `loop`. Theirs is a flat
 | --- | --- | --- |
 | `agent` | `phase` | `agent_selection: "direct"` with `agent_type` naming the agent, and `writes` carrying its `output_key`. |
 | `sequential` | edges | A chain, plus the single `start` and `end` their validation requires. |
-| `loop` | `validator` + back edge | The body becomes phase nodes, followed by a validator that sends `approved` forward and `rejected` back to the first node of the body. |
+| `loop` | `validator` + back edge | The body becomes phase nodes, followed by a validator that sends `approved` forward and `rejected` back to the first node of the body. Counted in `degraded_loops`, see below. |
 | `max_iterations` | `max_reject_retries` | Ours counts passes, theirs rejections after the first. Capped at 10. |
 | `parallel` | — | Not expressible. Branches are pulled into the chain and counted in `linearized_branches`. |
 
@@ -72,19 +72,24 @@ Their engine keeps one current node and picks exactly one successor, so a fan-ou
 
 Their `validator` is not an LLM. Its checks are structural (presence, type, length) or a JSON schema, so an LLM critic stays an ordinary phase that writes its verdict into the state, and the validator gates on that verdict's key. Converting a critic straight into a validator gives a workflow that cannot work.
 
+That gate cannot judge content, and any non-empty verdict passes it, so an exported loop takes the `approved` edge on its first pass and runs once. `degraded_loops` counts them. A refine-until-good loop is the one construct that does not survive export as itself; a workflow that depends on iterating needs their approval gate and a human, or a check written against a verdict format the agent is required to produce.
+
 ## Data flow
 
 In a `MAWConfig` the connection between agents is implicit: an agent writes under its `output_key`, and the next one reads it by mentioning `{output_key}` in its instruction. Synapse declares reads on the node instead. Filling their `reads` accurately would mean mining those references out of prompt text, so the export sets `default_reads: ["*"]` on the workflow, which is what their own hand-built bundle does.
 
 ## Reusing agents the platform already has
 
-When the config was generated over a caller-supplied pool (`MAW.generate_config(task, existing_agents=...)`), pass that pool to the export as well. An entry's `id` is the identifier the agent already has on their side, and the import matches on it, so the record is updated rather than duplicated:
+When the config was generated over a caller-supplied pool (`MAW.generate_config(task, existing_agents=...)`), pass that pool to the export as well. An entry's `id` is the identifier the agent already has on their side. Their import matches on the wire name, which is what the bundle's `_id` becomes, so passing the id updates that record rather than duplicating it:
 
 ```python
 export = to_synapse_bundle(config, workflow_id="flow", existing_agents=pool)
-export.reused_agents   # ids carried over verbatim
-export.renamed_ids     # ids their format cannot carry, as (given, emitted)
+export.reused_agents     # ids carried over verbatim
+export.renamed_ids       # ids their format cannot carry, as (given, emitted)
+export.unmatched_agents  # supplied agents the config does not name
 ```
+
+`unmatched_agents` is the case to watch in `reuse="prefer"`: if the meta-agent renamed a supplied agent, the config no longer names it, its id goes nowhere, and the work it was meant to do is emitted as a new agent standing beside the record the platform already has.
 
 An id that does not match their wire-name pattern cannot be kept. It is slugified so the bundle still imports, and reported in `renamed_ids` with a warning: such an agent arrives as a new record rather than an update.
 
