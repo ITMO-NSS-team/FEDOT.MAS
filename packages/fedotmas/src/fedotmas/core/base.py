@@ -103,10 +103,8 @@ class BaseMAS(ABC, Generic[ConfigT]):
     def _reject_foreign_tools(self, tool_names: Iterable[str]) -> None:
         """Fail a build whose config names tools only the catalogue knows.
 
-        ``create_toolset`` would raise anyway, but on the first unknown name and
-        without the reason: a config generated against an external catalogue
-        describes another runtime's tools and is meant for export, not for a
-        local run.
+        A config generated against an external catalogue describes another
+        runtime's tools, and is meant for export rather than a local run.
         """
         if self._tool_catalog is None:
             return

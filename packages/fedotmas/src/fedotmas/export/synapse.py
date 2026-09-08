@@ -4,12 +4,8 @@ The target is the JSON that Synapse's ``/api/admin/config-bundle`` imports:
 ``{version, exported_from, items}`` with ``items`` keyed by kind.  Their engine
 executes it; nothing here builds or runs anything.
 
-Two shapes of ours have no counterpart there and are converted rather than
-copied.  Their workflow engine advances one node at a time and picks exactly one
-successor, so a ``parallel`` block has to be flattened into a chain.  Their
-loops exist only as a ``rejected`` back-edge out of a ``validator``, whose checks
-are structural — presence, type, length — so an LLM critic stays an ordinary
-phase writing its verdict, and the validator gates on that verdict's key.
+``parallel`` and ``loop`` have no counterpart there and are converted rather
+than copied; ``SynapseExport`` reports what that cost.
 """
 
 from __future__ import annotations
@@ -218,10 +214,8 @@ def _agent_doc(
 
     doc: dict[str, Any] = {
         "_id": wire_id,
-        # `name` is the wire identity their import matches on, `type` the kind an
-        # auction would match; every node we emit names its agent outright, so
-        # each agent is simply its own kind.  The human label lives in
-        # `display_name` (configuration_schemas.py:246-250).
+        # `name` is the identity their import matches on and `type` an auction
+        # kind, which nothing we emit uses (configuration_schemas.py:246-250).
         "name": wire_id,
         "type": wire_id,
         "description": _describe(agent.instruction),

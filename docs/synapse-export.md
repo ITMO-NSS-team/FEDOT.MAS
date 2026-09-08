@@ -2,7 +2,7 @@
 
 A generated configuration does not have to run here. `fedotmas.export` turns a `MAWConfig` into the JSON that the Synapse platform imports through its configuration bundle endpoint, so the agents, prompts, tool assignments and the workflow between them are handed over as an artifact and executed by their engine.
 
-Nothing in this module builds or runs anything. Generation and execution were already separate steps; this is the second half replaced by somebody else's runtime.
+Nothing in this module builds or runs anything. Generation and execution are separate steps here, and the export replaces the second one with their runtime.
 
 ## Quick start
 
@@ -32,7 +32,7 @@ async def main():
 asyncio.run(main())
 ```
 
-`tool_catalog` on `MAW` is what generation offers the meta-agent; the same catalogue passed to `to_synapse_bundle` is what the export is checked against. Give it their tenant's tool ids and descriptions, and the agents come out referencing tools that exist on the other side. Leave it out and the agents come out with no tools at all, which is the honest result rather than a guess.
+`tool_catalog` on `MAW` is what generation offers the meta-agent; the same catalogue passed to `to_synapse_bundle` is what the export is checked against. Give it their tenant's tool ids and descriptions, and the agents come out referencing tools that exist on the other side. Leave it out and the agents come out with no tools at all.
 
 An instance built with a `tool_catalog` cannot `build()` the config it produced: the tools belong to another runtime, so the configuration is for export only.
 
@@ -42,9 +42,9 @@ Their agent record and `MAWAgentConfig` line up almost field for field.
 
 | FEDOT.MAS | Synapse | Note |
 | --- | --- | --- |
-| `name` | `_id`, `name`, `type` | Identity is the wire name, matching `^[a-z][a-z0-9_]{1,63}$`. `type` is an auction kind; every node we emit names its agent, so each agent is its own kind. |
+| `name` | `_id`, `name`, `type` | Identity is the wire name, matching `^[a-z][a-z0-9_]{1,63}$`. `type` is an auction kind, unused here because every node names its agent. |
 | — | `display_name` | The original agent name, when it differs from the wire name. |
-| `instruction` | `system_prompt` | Our optional-state marker `{key?}` is normalized to `{key}`. |
+| `instruction` | `system_prompt` | The optional-state marker `{key?}` is normalized to `{key}`. |
 | `model` | `model` | Their identifiers (Bifrost). Ours require a provider prefix, which theirs already have. |
 | `tools` | `allowed_tools` | Ids outside the catalogue are dropped and reported in `unresolved_tools`. |
 | `output_key` | `output_save_key` | Required here, nullable there. |
@@ -64,19 +64,17 @@ Ours is a tree of `agent` / `sequential` / `parallel` / `loop`. Theirs is a flat
 | --- | --- | --- |
 | `agent` | `phase` | `agent_selection: "direct"` with `agent_type` naming the agent, and `writes` carrying its `output_key`. |
 | `sequential` | edges | A chain, plus the single `start` and `end` their validation requires. |
-| `loop` | `validator` + back edge | The body becomes phase nodes; a validator follows, sending `approved` forward and `rejected` back to the first node of the body. |
-| `max_iterations` | `max_reject_retries` | Ours counts passes, theirs counts rejections after the first, capped at 10. |
+| `loop` | `validator` + back edge | The body becomes phase nodes, followed by a validator that sends `approved` forward and `rejected` back to the first node of the body. |
+| `max_iterations` | `max_reject_retries` | Ours counts passes, theirs rejections after the first. Capped at 10. |
 | `parallel` | — | Not expressible. Branches are pulled into the chain and counted in `linearized_branches`. |
 
-Two things about the conversion are worth knowing before reading a bundle.
+Their engine keeps one current node and picks exactly one successor, so a fan-out that rejoins has no representation at all. The export flattens it and counts what it flattened rather than failing, but a bundle with a non-zero `linearized_branches` is running a different plan from the one that was generated.
 
-**Their engine has one current node.** It picks exactly one successor, so a fan-out that rejoins has no representation. The export never fails over this; it flattens and reports, because a silent loss is the failure mode that matters.
-
-**Their `validator` is not an LLM.** Its checks are structural — presence, type, length — or a JSON schema. An LLM critic therefore stays an ordinary phase that writes its verdict into the state, and the validator gates on that verdict's key. A converter written on the naive correspondence "critic becomes validator" produces a workflow that cannot work.
+Their `validator` is not an LLM. Its checks are structural (presence, type, length) or a JSON schema, so an LLM critic stays an ordinary phase that writes its verdict into the state, and the validator gates on that verdict's key. Converting a critic straight into a validator gives a workflow that cannot work.
 
 ## Data flow
 
-In a `MAWConfig` the connection between agents is implicit: an agent writes under its `output_key`, and the next one reads it by mentioning `{output_key}` in its instruction. Synapse declares reads on the node instead. Filling their `reads` accurately would mean mining those references out of prompt text, so the export sets `default_reads: ["*"]` on the workflow — which is what their own hand-built bundle does.
+In a `MAWConfig` the connection between agents is implicit: an agent writes under its `output_key`, and the next one reads it by mentioning `{output_key}` in its instruction. Synapse declares reads on the node instead. Filling their `reads` accurately would mean mining those references out of prompt text, so the export sets `default_reads: ["*"]` on the workflow, which is what their own hand-built bundle does.
 
 ## Reusing agents the platform already has
 
@@ -88,7 +86,7 @@ export.reused_agents   # ids carried over verbatim
 export.renamed_ids     # ids their format cannot carry, as (given, emitted)
 ```
 
-An id that does not match their wire-name pattern cannot be kept. It is slugified so the bundle still imports, and reported in `renamed_ids` with a warning — such an agent arrives as a new record, not an update.
+An id that does not match their wire-name pattern cannot be kept. It is slugified so the bundle still imports, and reported in `renamed_ids` with a warning: such an agent arrives as a new record rather than an update.
 
 `id` is the caller's field alone. `AgentPoolConfig` doubles as the meta-agent's output schema, so a generated pool can come back with the field filled in; `PoolGenerator` clears it, since an invented id would point the import at somebody's existing record.
 
@@ -96,4 +94,4 @@ An id that does not match their wire-name pattern cannot be kept. It is slugifie
 
 Synapse validates a workflow when it is saved: one `start` and one `end`, every edge endpoint present, `agent_type` set on direct phase nodes, a `rejected` edge out of every validator, and no cycles once those back edges are excluded. Those rules are ported into `packages/fedotmas/tests/export/test_synapse_bundle_rules.py`, so an emitted bundle can be checked here.
 
-What the port cannot check is whether tool ids and model names exist in a particular tenant. That needs their catalogue — which is also the thing that decides whether the exported agents can do anything at all.
+What the port cannot check is whether tool ids and model names exist in a particular tenant. That needs their catalogue, which is also what decides whether the exported agents can do anything at all.

@@ -1,9 +1,9 @@
 """Synapse bundle rules — checked against their own save-time validation.
 
-``_assert_accepted`` is a port of the workflow validation Synapse runs on import
-(``src/api/routes/workflow_definitions.py::validate_dag`` at 27424db) plus the
-configuration wire-name pattern. Keeping it here is what lets the emitter be
-verified without their tenant; only tool and model identifiers still need one.
+``_assert_accepted`` ports the validation Synapse runs when a workflow is saved
+(``src/api/routes/workflow_definitions.py::validate_dag`` at 27424db), so a
+bundle can be checked without their tenant. Tool and model identifiers still
+need one.
 """
 
 from __future__ import annotations

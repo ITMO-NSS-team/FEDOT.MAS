@@ -66,8 +66,8 @@ class MAW(BaseMAS[MAWConfig]):
         if existing_agents is not None and not existing_agents.agents:
             existing_agents = None  # nothing to reuse; an ordinary generation
         if existing_agents is not None:
-            # AgentPoolEntry accepts any model string; MAWAgentConfig does not,
-            # and would only say so after both LLM calls are paid for.
+            # MAWAgentConfig rejects model names AgentPoolEntry accepts, and
+            # would only do so after both LLM calls.
             for entry in existing_agents.agents:
                 validate_model_name(entry.model)
 
