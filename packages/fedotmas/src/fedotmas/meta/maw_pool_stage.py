@@ -5,12 +5,13 @@ from google.adk.sessions import BaseSessionService
 
 from fedotmas.common.logging import get_logger
 from fedotmas._settings import ModelConfig
-from fedotmas.mcp import MCPServerConfig, get_server_descriptions
+from fedotmas.mcp import MCPServerConfig
 from fedotmas.meta._adk_runner import LLMCallResult, run_meta_agent_call
 from fedotmas.meta._helpers import (
     format_server_descriptions,
     parse_llm_output,
     resolve_meta_and_workers,
+    resolve_tool_descriptions,
 )
 from fedotmas.meta.maw_prompts import POOL_AGENT_SYSTEM_PROMPT
 from fedotmas.maw.models import AgentPoolConfig
@@ -28,6 +29,7 @@ class PoolGenerator:
         worker_models: list[str | ModelConfig] | None = None,
         temperature: float | None = None,
         mcp_registry: dict[str, MCPServerConfig] | None = None,
+        tool_catalog: dict[str, str] | None = None,
         session_service: BaseSessionService | None = None,
         max_retries: int = 2,
         plugins: list[BasePlugin] | None = None,
@@ -36,6 +38,7 @@ class PoolGenerator:
             resolve_meta_and_workers(meta_model, worker_models, temperature)
         )
         self._mcp_registry = mcp_registry
+        self._tool_catalog = tool_catalog
         self._session_service = session_service
         self._max_retries = max_retries
         self._plugins = plugins
@@ -43,7 +46,7 @@ class PoolGenerator:
 
     async def generate(self, task: str) -> AgentPoolConfig:
         """Run LLM to produce ``AgentPoolConfig``."""
-        descriptions = get_server_descriptions(self._mcp_registry)
+        descriptions = resolve_tool_descriptions(self._mcp_registry, self._tool_catalog)
         desc_text = format_server_descriptions(descriptions)
         models_text = "\n".join(f"- `{m.model}`" for m in self._resolved_workers)
 

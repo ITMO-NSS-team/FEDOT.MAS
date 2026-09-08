@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from typing import Any, Generic, Literal, Protocol, TypeVar, cast
 
 from fastapi import FastAPI
@@ -51,6 +52,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
         | dict[str, MCPServerConfig]
         | Literal["all"]
         | None = None,
+        tool_catalog: dict[str, str] | None = None,
         session_service: BaseSessionService | None = None,
         memory_service: BaseMemoryService | None = None,
         plugins: list[BasePlugin] | None = None,
@@ -62,6 +64,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
         self._worker_models = worker_models
         self._temperature = temperature
         self._mcp_registry = resolve_mcp_registry(mcp_servers)
+        self._tool_catalog = dict(tool_catalog) if tool_catalog is not None else None
         self._session_service = session_service
         self._memory_service = memory_service
         if plugins is not None:
@@ -96,6 +99,35 @@ class BaseMAS(ABC, Generic[ConfigT]):
     def mcp_registry(self) -> dict[str, MCPServerConfig]:
         """Registry of MCP servers available to this instance."""
         return self._mcp_registry
+
+    def _reject_foreign_tools(self, tool_names: Iterable[str]) -> None:
+        """Fail a build whose config names tools only the catalogue knows.
+
+        ``create_toolset`` would raise anyway, but on the first unknown name and
+        without the reason: a config generated against an external catalogue
+        describes another runtime's tools and is meant for export, not for a
+        local run.
+        """
+        if self._tool_catalog is None:
+            return
+        unknown = sorted({t for t in tool_names if t not in self._mcp_registry})
+        if unknown:
+            raise ValueError(
+                f"Cannot build locally: {unknown} come from the tool_catalog this "
+                f"instance was given, not from its MCP registry "
+                f"({sorted(self._mcp_registry) or 'empty'}). A config generated "
+                f"against an external catalogue is meant to be exported and run "
+                f"by that runtime."
+            )
+
+    @property
+    def tool_catalog(self) -> dict[str, str] | None:
+        """Tool catalogue advertised to the meta-agent instead of the MCP registry.
+
+        Set it to generate configs for a runtime other than this one; such a
+        config names that runtime's tools and cannot be built locally.
+        """
+        return dict(self._tool_catalog) if self._tool_catalog is not None else None
 
     @property
     def mcp_servers(self) -> dict[str, MCPServerConfig]:

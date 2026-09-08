@@ -62,6 +62,7 @@ class MAW(BaseMAS[MAWConfig]):
                 worker_models=self._worker_models,
                 temperature=self._temperature,
                 mcp_registry=self._mcp_registry,
+                tool_catalog=self._tool_catalog,
                 session_service=self._session_service,
                 max_retries=self._max_retries,
                 plugins=self._plugins,
@@ -89,6 +90,7 @@ class MAW(BaseMAS[MAWConfig]):
             worker_models=self._worker_models,
             temperature=self._temperature,
             mcp_registry=self._mcp_registry,
+            tool_catalog=self._tool_catalog,
             session_service=self._session_service,
             max_retries=self._max_retries,
             plugins=self._plugins,
@@ -104,6 +106,7 @@ class MAW(BaseMAS[MAWConfig]):
             worker_models=self._worker_models,
             temperature=self._temperature,
             mcp_registry=self._mcp_registry,
+            tool_catalog=self._tool_catalog,
             session_service=self._session_service,
             max_retries=self._max_retries,
             plugins=self._plugins,
@@ -128,6 +131,7 @@ class MAW(BaseMAS[MAWConfig]):
 
     def build(self, config: MAWConfig, *, autonomous: bool = True) -> BaseAgent:
         """Build an ADK agent tree from *config*."""
+        self._reject_foreign_tools(t for a in config.agents for t in a.tools)
         _log.info("Building agent tree")
         agent = build(
             config,

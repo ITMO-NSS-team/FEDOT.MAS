@@ -40,6 +40,7 @@ class MAS(BaseMAS[MASConfig]):
             worker_models=self._worker_models,
             temperature=self._temperature,
             mcp_registry=self._mcp_registry,
+            tool_catalog=self._tool_catalog,
             session_service=self._session_service,
             max_retries=self._max_retries,
             plugins=self._plugins,
@@ -58,6 +59,9 @@ class MAS(BaseMAS[MASConfig]):
 
     def build(self, config: MASConfig, *, autonomous: bool = True) -> BaseAgent:
         """Build an ADK agent tree with routing from *config*."""
+        self._reject_foreign_tools(
+            t for a in [config.coordinator, *config.workers] for t in a.tools
+        )
         _log.info("Building routing system")
         agent = build_routing_system(
             config,
