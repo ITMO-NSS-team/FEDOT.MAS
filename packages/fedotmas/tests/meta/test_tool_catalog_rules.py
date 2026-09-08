@@ -70,3 +70,36 @@ class TestForeignToolsRejectedAtBuild:
 
         with pytest.raises(ValueError, match="tool_catalog"):
             maw.build(config)
+
+
+class TestGeneratedIdsAreStripped:
+    """Rule 5: `id` is the caller's to set, even though the pool schema exposes it."""
+
+    async def test_pool_stage_clears_invented_ids(self):
+        from fedotmas._settings import ModelConfig
+        from fedotmas.meta._adk_runner import LLMCallResult
+        from fedotmas.meta.maw_pool_stage import PoolGenerator
+
+        async def _pool(**kwargs):
+            return LLMCallResult(
+                raw_output={
+                    "agents": [
+                        {"name": "a", "instruction": "x", "id": "somebodys_record"}
+                    ]
+                },
+                prompt_tokens=1,
+                completion_tokens=1,
+                elapsed=0.1,
+            )
+
+        with patch(
+            "fedotmas.meta.maw_pool_stage.run_meta_agent_call", side_effect=_pool
+        ):
+            gen = PoolGenerator(
+                meta_model=ModelConfig(model="openai/gpt-4o"),
+                worker_models=[ModelConfig(model="openai/gpt-4o")],
+                tool_catalog={},
+            )
+            pool = await gen.generate("task")
+
+        assert pool.agents[0].id is None

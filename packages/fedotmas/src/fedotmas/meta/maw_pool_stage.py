@@ -86,6 +86,11 @@ class PoolGenerator:
         )
 
         pool = parse_llm_output(self.result.raw_output, AgentPoolConfig)
+        # ``AgentPoolConfig`` doubles as the output schema, so ``id`` is a field
+        # the meta-agent can fill in.  An invented one would send an export at
+        # somebody's existing record; only a caller may set it.
+        for entry in pool.agents:
+            entry.id = None
 
         _log.info(
             "Pool generated | agents={}",
