@@ -4,12 +4,19 @@
 (``src/api/routes/workflow_definitions.py::validate_dag`` at 27424db), so a
 bundle can be checked without their tenant. Tool and model identifiers still
 need one.
+
+``urban_bundle_structure.json`` is the structure of a bundle they built by hand,
+kept here so the port is checked against their shapes and not only against ours.
+It gates loops behind an `approval_gate` and holds no `validator` node, so the
+one construct this exporter invents is the one their own work cannot vouch for.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict, deque
+from pathlib import Path
 
 import pytest
 
@@ -465,3 +472,88 @@ class TestSuppliedAgentsMissingFromTheConfig:
         )
         assert export.unmatched_agents == ()
         assert export.reused_agents == ("researcher",)
+
+
+class TestReusedAgentsAreNotRewritten:
+    """Rule 13: their import is an upsert, so a reused agent is emitted thin."""
+
+    def test_only_owned_fields_are_emitted(self, linear):
+        pool = AgentPoolConfig(
+            agents=[{"name": "researcher", "instruction": "Theirs", "id": "researcher"}]
+        )
+        export = to_synapse_bundle(
+            linear, workflow_id="generated_flow", existing_agents=pool
+        )
+        _assert_accepted(export.bundle)
+
+        reused, generated = export.bundle["items"]["agents"]
+        assert set(reused) == {
+            "_id",
+            "name",
+            "type",
+            "model",
+            "allowed_tools",
+            "output_save_key",
+            "system_prompt",
+        }
+        # Everything left out stays as the platform has it; what cannot be left
+        # out is named in the report.
+        for field in ("temperature", "allowed_phases", "allowed_delegation_targets"):
+            assert field not in reused
+            assert field in generated
+        assert set(export.overwritten_fields) >= {"system_prompt", "allowed_tools"}
+
+    def test_tools_are_emitted_even_when_empty(self, linear):
+        # Their import derives both tool lists from what arrives, so an absent
+        # `allowed_tools` clears the ones the agent already has.
+        pool = AgentPoolConfig(
+            agents=[{"name": "researcher", "instruction": "Theirs", "id": "researcher"}]
+        )
+        export = to_synapse_bundle(
+            linear, workflow_id="generated_flow", existing_agents=pool
+        )
+        assert export.bundle["items"]["agents"][0]["allowed_tools"] == []
+
+    def test_their_tools_survive_a_narrower_catalogue(self):
+        config = MAWConfig(
+            agents=[
+                _agent("researcher", "research", tools=["urbanindicators.getprovision"]),
+                _agent("writer", "summary", tools=["urbanindicators.getprovision"]),
+            ],
+            pipeline=MAWStepConfig(
+                type="sequential",
+                children=[
+                    MAWStepConfig(type="agent", agent_name="researcher"),
+                    MAWStepConfig(type="agent", agent_name="writer"),
+                ],
+            ),
+        )
+        pool = AgentPoolConfig(
+            agents=[{"name": "researcher", "instruction": "Theirs", "id": "researcher"}]
+        )
+        export = to_synapse_bundle(
+            config,
+            workflow_id="generated_flow",
+            existing_agents=pool,
+            tool_catalog={"urbanprojects.getprojectbyid": "Get a project"},
+        )
+        _assert_accepted(export.bundle)
+
+        reused, generated = export.bundle["items"]["agents"]
+        assert reused["allowed_tools"] == ["urbanindicators.getprovision"]
+        # A generated agent has no tools of its own to lose, so the filter stands.
+        assert generated["allowed_tools"] == []
+        assert export.unresolved_tools == ("urbanindicators.getprovision",)
+
+    def test_nothing_reported_without_reuse(self, linear):
+        export = to_synapse_bundle(linear, workflow_id="generated_flow")
+        assert export.overwritten_fields == ()
+        assert "temperature" in export.bundle["items"]["agents"][0]
+
+
+class TestTheirOwnBundleIsAccepted:
+    """Rule 14: the ported validator accepts a bundle Synapse itself wrote."""
+
+    def test_hand_built_bundle_passes(self):
+        fixture = Path(__file__).parent / "urban_bundle_structure.json"
+        _assert_accepted(json.loads(fixture.read_text()))

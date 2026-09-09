@@ -52,7 +52,6 @@ Their agent record and `MAWAgentConfig` line up almost field for field.
 | — | `agent_class` | Always `GenericAgent`. |
 | — | `temperature` | Ours is set per meta-agent call, not per agent. Defaults to `1.0`, overridable. |
 | — | `allowed_phases` | The `phase_label` of the node the agent sits on. |
-| — | `eval_keywords` | Empty: only an auction reads them. |
 | — | `allowed_delegation_targets` | `null`. The graph is explicit, so no agent delegates. |
 | `max_output_tokens` | — | No counterpart; dropped. |
 
@@ -78,6 +77,8 @@ That gate cannot judge content, and any non-empty verdict passes it, so an expor
 
 In a `MAWConfig` the connection between agents is implicit: an agent writes under its `output_key`, and the next one reads it by mentioning `{output_key}` in its instruction. Synapse declares reads on the node instead. Filling their `reads` accurately would mean mining those references out of prompt text, so the export sets `default_reads: ["*"]` on the workflow, which is what their own hand-built bundle does.
 
+That is a conversion, not a translation, and `SynapseExport.wildcard_reads` reports it. A node with a `reads` contract has only the named keys rendered into its task; `["*"]` renders the whole shared state. An exported agent therefore sees output it was never wired to, where here the state provider gives it only the keys its instruction quotes. Narrowing it is not simply a matter of collecting those keys: a contract that does not name their conversation key also cuts the agent off from the original request.
+
 ## Reusing agents the platform already has
 
 When the config was generated over a caller-supplied pool (`MAW.generate_config(task, existing_agents=...)`), pass that pool to the export as well. An entry's `id` is the identifier the agent already has on their side. Their import matches on the wire name, which is what the bundle's `_id` becomes, so passing the id updates that record rather than duplicating it:
@@ -89,6 +90,12 @@ export.renamed_ids       # ids their format cannot carry, as (given, emitted)
 export.unmatched_agents  # supplied agents the config does not name
 ```
 
+Their import is an upsert that sets every field the bundle carries onto the record it matches, so a reused agent is emitted thin: `_id`, `name`, `type`, `model`, `system_prompt`, `allowed_tools` and `output_save_key`, and nothing else. What is left out — `description`, `agent_class`, `temperature`, `allowed_phases`, `allowed_delegation_targets`, `enabled` — stays as the platform has it.
+
+`allowed_tools` is not optional even when empty. Their import derives both tool lists from whatever arrives, so an omitted one clears the tools the agent already has. For the same reason a reused agent's tools are not filtered against `tool_catalog`: those assignments were made on their side, and a catalogue narrower than their tenant would strip a live agent of tools it is using. Ids outside the catalogue are logged instead of dropped.
+
+`SynapseExport.overwritten_fields` names what the caller loses anyway: the fields above that their schema requires, plus `temperature`, `model` and `reasoning_effort`, which their import fills in from its own defaults before saving whether or not the bundle mentions them. Pass the agent's own `model` on the pool entry, and treat its temperature as reset by any import.
+
 `unmatched_agents` is the case to watch in `reuse="prefer"`: if the meta-agent renamed a supplied agent, the config no longer names it, its id goes nowhere, and the work it was meant to do is emitted as a new agent standing beside the record the platform already has.
 
 An id that does not match their wire-name pattern cannot be kept. It is slugified so the bundle still imports, and reported in `renamed_ids` with a warning: such an agent arrives as a new record rather than an update.
@@ -97,6 +104,6 @@ An id that does not match their wire-name pattern cannot be kept. It is slugifie
 
 ## Checking a bundle without their tenant
 
-Synapse validates a workflow when it is saved: one `start` and one `end`, every edge endpoint present, `agent_type` set on direct phase nodes, a `rejected` edge out of every validator, and no cycles once those back edges are excluded. Those rules are ported into `packages/fedotmas/tests/export/test_synapse_bundle_rules.py`, so an emitted bundle can be checked here.
+Synapse validates a workflow when it is saved: one `start` and one `end`, every edge endpoint present, `agent_type` set on direct phase nodes, a `rejected` edge out of every validator, and no cycles once those back edges are excluded. Those rules are ported into `packages/fedotmas/tests/export/test_synapse_bundle_rules.py`, so an emitted bundle can be checked here. The port is itself checked against `urban_bundle_structure.json` beside it — the topology and field shape of a bundle Synapse wrote by hand, with their prompts and tenant tool ids removed — so a rule transcribed too strictly fails on their own work rather than on ours. That bundle gates its loops behind an `approval_gate` and contains no `validator`, so the loop conversion — the one construct with no counterpart to copy — is checked against the transcription alone.
 
 What the port cannot check is whether tool ids and model names exist in a particular tenant. That needs their catalogue, which is also what decides whether the exported agents can do anything at all.

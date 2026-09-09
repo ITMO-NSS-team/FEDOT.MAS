@@ -61,6 +61,7 @@ async def over_existing_agents():
     )
     _log.info("Reused as given: {}", export.reused_agents)
     _log.info("Renamed, so imported as new records: {}", export.renamed_ids)
+    _log.info("Their import overwrites: {}", export.overwritten_fields)
 
 
 if __name__ == "__main__":

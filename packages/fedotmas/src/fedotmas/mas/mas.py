@@ -59,9 +59,7 @@ class MAS(BaseMAS[MASConfig]):
 
     def build(self, config: MASConfig, *, autonomous: bool = True) -> BaseAgent:
         """Build an ADK agent tree with routing from *config*."""
-        self._reject_foreign_tools(
-            t for a in [config.coordinator, *config.workers] for t in a.tools
-        )
+        self._reject_external_build()
         _log.info("Building routing system")
         agent = build_routing_system(
             config,

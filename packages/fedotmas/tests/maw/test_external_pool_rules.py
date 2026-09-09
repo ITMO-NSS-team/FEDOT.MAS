@@ -411,3 +411,58 @@ class TestEmptyPoolUnderStrictReuse:
                 )
 
         pool_call.assert_not_called()
+
+
+class TestStageTwoSeesTheCallersAgent:
+    """Rule 13: stage 2 designs around the caller's agent, not stage 1's edit."""
+
+    async def test_pool_stage_edits_are_undone_before_the_pipeline(
+        self, maw, existing, two_agent_data
+    ):
+        captured = {}
+
+        async def _pool(**kwargs):
+            return _result(
+                {
+                    "agents": [
+                        {
+                            "name": "researcher",
+                            "instruction": "Rewritten by stage 1",
+                            "tools": [],
+                        },
+                        {"name": "writer", "instruction": "y"},
+                    ]
+                }
+            )
+
+        async def _pipeline(**kwargs):
+            captured.update(kwargs)
+            return _result(two_agent_data)
+
+        with (
+            patch("fedotmas.meta.maw_pool_stage.run_meta_agent_call", side_effect=_pool),
+            patch(
+                "fedotmas.meta.maw_pipeline_stage.run_meta_agent_call",
+                side_effect=_pipeline,
+            ),
+        ):
+            await maw.generate_config("task", existing_agents=existing)
+
+        assert "Their own prompt, written by them" in captured["user_message"]
+        assert "Rewritten by stage 1" not in captured["user_message"]
+        assert "urban.getproject" in captured["user_message"]
+        # A model of the caller's still has no place in that prompt.
+        assert "model:" not in captured["user_message"]
+
+
+class TestReuseModeIsValidated:
+    """Rule 14: `reuse` is public API, so an unknown mode is an error."""
+
+    async def test_unknown_mode_raises_before_any_call(self, maw, existing):
+        with patch("fedotmas.meta.maw_pool_stage.run_meta_agent_call") as pool_call:
+            with pytest.raises(ValueError, match="reuse must be"):
+                await maw.generate_config(
+                    "task", existing_agents=existing, reuse="foo"  # type: ignore[arg-type]
+                )
+
+        pool_call.assert_not_called()

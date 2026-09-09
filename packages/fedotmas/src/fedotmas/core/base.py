@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
 from typing import Any, Generic, Literal, Protocol, TypeVar, cast
 
 from fastapi import FastAPI
@@ -100,23 +99,20 @@ class BaseMAS(ABC, Generic[ConfigT]):
         """Registry of MCP servers available to this instance."""
         return self._mcp_registry
 
-    def _reject_foreign_tools(self, tool_names: Iterable[str]) -> None:
-        """Fail a build whose config names tools only the catalogue knows.
+    def _reject_external_build(self) -> None:
+        """Fail a build on an instance that generates for another runtime.
 
-        A config generated against an external catalogue describes another
-        runtime's tools, and is meant for export rather than a local run.
+        Provenance is the catalogue, not the tool names: a name this workspace
+        also happens to have is a different tool over there, and a config that
+        came out toolless was still designed against their catalogue.
         """
         if self._tool_catalog is None:
             return
-        unknown = sorted({t for t in tool_names if t not in self._mcp_registry})
-        if unknown:
-            raise ValueError(
-                f"Cannot build locally: {unknown} come from the tool_catalog this "
-                f"instance was given, not from its MCP registry "
-                f"({sorted(self._mcp_registry) or 'empty'}). A config generated "
-                f"against an external catalogue is meant to be exported and run "
-                f"by that runtime."
-            )
+        raise ValueError(
+            "Cannot build locally: this instance was given a tool_catalog, so the "
+            "configs it generates describe another runtime's tools and are meant "
+            "to be exported and run there. Build from an instance without one."
+        )
 
     @property
     def tool_catalog(self) -> dict[str, str] | None:

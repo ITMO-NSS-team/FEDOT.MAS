@@ -63,6 +63,8 @@ class MAW(BaseMAS[MAWConfig]):
                 in someone else's system, to be wired rather than rewritten.
             reuse: Ignored when *existing_agents* is ``None``.
         """
+        if reuse not in ("prefer", "only"):
+            raise ValueError(f"reuse must be 'prefer' or 'only', got {reuse!r}")
         if existing_agents is not None and not existing_agents.agents:
             if reuse == "only":
                 raise ValueError(
@@ -136,6 +138,8 @@ class MAW(BaseMAS[MAWConfig]):
         pool = await pool_gen.generate(
             task, _pool_for_prompt(existing) if existing else None
         )
+        if existing is not None:
+            pool = _restore_pool_agents(pool, existing)
 
         _log.info(
             "Stage 2/2: generating pipeline from {} agents",
@@ -196,7 +200,7 @@ class MAW(BaseMAS[MAWConfig]):
 
     def build(self, config: MAWConfig, *, autonomous: bool = True) -> BaseAgent:
         """Build an ADK agent tree from *config*."""
-        self._reject_foreign_tools(t for a in config.agents for t in a.tools)
+        self._reject_external_build()
         _log.info("Building agent tree")
         agent = build(
             config,
@@ -217,6 +221,33 @@ def _pool_for_prompt(pool: AgentPoolConfig) -> AgentPoolConfig:
     """
     return AgentPoolConfig(
         agents=[a.model_copy(update={"model": None}) for a in pool.agents]
+    )
+
+
+def _restore_pool_agents(
+    pool: AgentPoolConfig, existing: AgentPoolConfig
+) -> AgentPoolConfig:
+    """Undo stage 1's edits to a supplied agent before stage 2 sees the pool.
+
+    Stage 2 designs the topology around what it is shown, and that outlives the
+    final restore: rewritten here, an agent comes back as the caller wrote it
+    inside a pipeline built for somebody else.  Models are left as stage 1 has
+    them — ``_pool_for_prompt`` drops the caller's on purpose, and the pipeline
+    prompt requires one this instance owns.
+    """
+    originals = {a.name: a for a in existing.agents}
+    return AgentPoolConfig(
+        agents=[
+            a.model_copy(
+                update={
+                    "instruction": originals[a.name].instruction,
+                    "tools": list(originals[a.name].tools),
+                }
+            )
+            if a.name in originals
+            else a
+            for a in pool.agents
+        ]
     )
 
 

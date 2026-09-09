@@ -48,28 +48,56 @@ class TestNoCatalogueFallsBack:
         mocked.assert_called_once_with(None)
 
 
+def _config(tools: list[str]):
+    from fedotmas import MAWConfig
+    from fedotmas.maw.models import MAWAgentConfig, MAWStepConfig
+
+    return MAWConfig(
+        agents=[
+            MAWAgentConfig(
+                name="fetcher",
+                instruction="Fetch it",
+                output_key="fetched",
+                tools=tools,
+            )
+        ],
+        pipeline=MAWStepConfig(type="agent", agent_name="fetcher"),
+    )
+
+
 class TestForeignToolsRejectedAtBuild:
     """Rule 4: a config generated against a catalogue is not buildable locally."""
 
     def test_build_names_the_catalogue(self):
-        from fedotmas import MAW, MAWConfig
-        from fedotmas.maw.models import MAWAgentConfig, MAWStepConfig
+        from fedotmas import MAW
 
-        config = MAWConfig(
-            agents=[
-                MAWAgentConfig(
-                    name="fetcher",
-                    instruction="Fetch it",
-                    output_key="fetched",
-                    tools=["urban.getproject"],
-                )
-            ],
-            pipeline=MAWStepConfig(type="agent", agent_name="fetcher"),
-        )
         maw = MAW(tool_catalog={"urban.getproject": "Get a project"})
 
         with pytest.raises(ValueError, match="tool_catalog"):
-            maw.build(config)
+            maw.build(_config(["urban.getproject"]))
+
+    def test_a_name_the_registry_also_has_is_still_theirs(self):
+        from fedotmas import MAW
+
+        maw = MAW(
+            mcp_servers=_REGISTRY, tool_catalog={"download": "Their own downloader"}
+        )
+
+        with pytest.raises(ValueError, match="tool_catalog"):
+            maw.build(_config(["download"]))
+
+    def test_a_toolless_config_is_refused_too(self):
+        from fedotmas import MAW
+
+        maw = MAW(tool_catalog={"urban.getproject": "Get a project"})
+
+        with pytest.raises(ValueError, match="tool_catalog"):
+            maw.build(_config([]))
+
+    def test_an_instance_without_a_catalogue_builds(self):
+        from fedotmas import MAW
+
+        MAW().build(_config([]))
 
 
 class TestGeneratedIdsAreStripped:
