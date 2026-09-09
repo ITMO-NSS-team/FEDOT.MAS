@@ -118,8 +118,7 @@ class SynapseExport:
     overwritten_fields: tuple[str, ...] = ()
     #: Every node reads the whole state.  Ours flows through named keys quoted in
     #: instructions, so an exported agent sees more than it was wired to.  True
-    #: on every bundle this module emits; a narrowed-reads path would be what
-    #: ever sets it False.
+    #: on every bundle this module emits today.
     wildcard_reads: bool = True
 
 
@@ -256,13 +255,6 @@ def to_synapse_bundle(
         "is_default": False,
     }
 
-    if reused:
-        _log.warning(
-            "Reused agents {} will have {} overwritten by the import; every other "
-            "field of their records is left alone",
-            reused,
-            list(_OVERWRITTEN_ON_REUSE),
-        )
     _log.info(
         "Bundle emitted | agents={} nodes={} linearized={} degraded_loops={} "
         "unresolved_tools={}",
@@ -311,10 +303,10 @@ def _agent_doc(
     this side alone knows; the rest of their record survives the import.  An
     empty ``allowed_tools`` is not among the fields that may be left out — their
     import normalizes the pair of tool lists out of whatever arrives, so an
-    absent one would clear the tools the agent already has.  For the same reason
-    a reused agent's tools go out unfiltered: they were assigned on their side,
-    and a catalogue narrower than their tenant — a task-scoped one, a stale one —
-    would otherwise strip a live agent of tools it is already using.
+    absent one would clear the tools the agent already has.  A reused agent's
+    tools go out unfiltered for the same reason: they were assigned on their
+    side, and a catalogue narrower than their tenant would strip a live agent of
+    tools it is using.
     """
     if tool_catalog is None or reused:
         tools = list(agent.tools)
