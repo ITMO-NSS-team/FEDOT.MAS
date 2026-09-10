@@ -38,6 +38,14 @@ Leaving it out means something different on each side. Generation falls back to 
 
 An instance built with a `tool_catalog` cannot `build()` the config it produced: the tools belong to another runtime, so the configuration is for export only.
 
+## What the bundle carries
+
+Their `items` has five kinds — `agents`, `workflows`, `tools`, `run_configurations`, `a2a_servers`. The export fills the first two, sends the next two empty and omits the last.
+
+`tools` is not where an agent's tools live: that is `allowed_tools` on the agent record, which the export does fill. `items.tools` is the tenant's catalogue of tool definitions — id, category, an OpenAI function-calling schema — and it is theirs to own. An MCP tool cannot be shipped in a bundle at all: their import rejects any entry with `source: "mcp_server"` as "managed by Bifrost auto-discovery" (`bundle_service.py:450`), so MCP tools exist on their side only once an MCP server is registered and discovered. The one way to arm an exported agent is therefore to name ids the tenant's catalogue already has, which is what `tool_catalog` is for.
+
+`run_configurations` are their run presets — subsystem-to-model maps, per-agent overrides of model, temperature and step limit, plugin settings. Nothing here corresponds to them.
+
 ## Agents
 
 Their agent record and `MAWAgentConfig` line up almost field for field.
