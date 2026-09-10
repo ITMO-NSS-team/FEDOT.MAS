@@ -286,6 +286,9 @@ class BaseMAS(ABC, Generic[ConfigT]):
         *timeout* is set it bounds pipeline *execution*; on expiry the partial
         state gathered so far is returned rather than raising.
         """
+        # The build at the far end would refuse this instance anyway; refusing
+        # here keeps the generation call from being paid for first.
+        self._reject_external_build()
         _log.info("Full-auto run for task: {}", task)
         try:
             config = await self.generate_config(task)

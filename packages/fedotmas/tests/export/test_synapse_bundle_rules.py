@@ -133,7 +133,8 @@ class TestSequentialPipeline:
         assert export.bundle["version"] == 1
         # Identity is the wire name; `type` is only an auction kind, and their own
         # bundle has three agents sharing one.
-        assert doc["name"] == doc["_id"] == "researcher"
+        assert doc["name"] == doc["_id"] == "generated_flow_researcher"
+        assert doc["display_name"] == "researcher"
 
 
 class TestParallelIsLinearized:
@@ -212,7 +213,9 @@ class TestExternalAgentsKeepTheirIdentity:
         _assert_accepted(export.bundle)
 
         ids = [a["_id"] for a in export.bundle["items"]["agents"]]
-        assert ids == ["urban_requirements_gatherer", "writer"]
+        # Theirs verbatim so the import edits that record; ours scoped so it
+        # cannot edit anybody's.
+        assert ids == ["urban_requirements_gatherer", "generated_flow_writer"]
         assert export.reused_agents == ("urban_requirements_gatherer",)
         node = export.bundle["items"]["workflows"][0]["nodes"][1]
         assert node["agent_type"] == "urban_requirements_gatherer"
@@ -435,7 +438,10 @@ class TestNonLatinNames:
         _assert_accepted(export.bundle)
 
         agents = export.bundle["items"]["agents"]
-        assert [a["_id"] for a in agents] == ["issledovatel", "pisatel"]
+        assert [a["_id"] for a in agents] == [
+            "generated_flow_issledovatel",
+            "generated_flow_pisatel",
+        ]
         assert agents[0]["display_name"] == "Исследователь"
 
 
@@ -549,6 +555,65 @@ class TestReusedAgentsAreNotRewritten:
         export = to_synapse_bundle(linear, workflow_id="generated_flow")
         assert export.overwritten_fields == ()
         assert "temperature" in export.bundle["items"]["agents"][0]
+
+
+class TestGeneratedIdsAreWorkflowScoped:
+    """Rule 15: agent identity is tenant-wide there, so ours carry the workflow."""
+
+    def test_two_workflows_do_not_share_an_agent_record(self, linear):
+        first = to_synapse_bundle(linear, workflow_id="school_provisioning")
+        second = to_synapse_bundle(linear, workflow_id="transport_access")
+
+        ids = {a["_id"] for a in first.bundle["items"]["agents"]}
+        assert ids.isdisjoint({a["_id"] for a in second.bundle["items"]["agents"]})
+        assert "researcher" not in ids
+
+    def test_nodes_reference_the_scoped_agent(self, linear):
+        export = to_synapse_bundle(linear, workflow_id="generated_flow")
+        _assert_accepted(export.bundle)
+
+        node = export.bundle["items"]["workflows"][0]["nodes"][1]
+        # The node id stays workflow-local and readable; the reference does not.
+        assert node["id"] == "researcher"
+        assert node["agent_type"] == "generated_flow_researcher"
+
+    def test_a_long_workflow_id_never_eats_the_agent_name(self):
+        config = MAWConfig(
+            agents=[_agent("researcher", "research")],
+            pipeline=MAWStepConfig(type="agent", agent_name="researcher"),
+        )
+        export = to_synapse_bundle(config, workflow_id="w" * 80)
+
+        wire_id = export.bundle["items"]["agents"][0]["_id"]
+        assert _WIRE_NAME_RE.match(wire_id)
+        assert wire_id.endswith("researcher")
+
+    def test_ids_alike_past_the_cut_get_different_namespaces(self):
+        config = MAWConfig(
+            agents=[_agent("researcher", "research")],
+            pipeline=MAWStepConfig(type="agent", agent_name="researcher"),
+        )
+        shared = "urban_master_plan_" + "x" * 40
+        first = to_synapse_bundle(config, workflow_id=f"{shared}_alpha")
+        second = to_synapse_bundle(config, workflow_id=f"{shared}_beta")
+
+        assert (
+            first.bundle["items"]["agents"][0]["_id"]
+            != second.bundle["items"]["agents"][0]["_id"]
+        )
+
+    def test_a_name_with_no_room_left_keeps_its_namespace(self):
+        long_name = "a" * 62
+        config = MAWConfig(
+            agents=[_agent(long_name, "research")],
+            pipeline=MAWStepConfig(type="agent", agent_name=long_name),
+        )
+        export = to_synapse_bundle(config, workflow_id="school_provisioning")
+
+        wire_id = export.bundle["items"]["agents"][0]["_id"]
+        assert _WIRE_NAME_RE.match(wire_id)
+        # The agent name is what gives way, never the namespace.
+        assert wire_id.startswith("school_provisioning_")
 
 
 class TestTheirOwnBundleIsAccepted:

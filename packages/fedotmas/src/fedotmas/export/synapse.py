@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from hashlib import blake2s
 from typing import Any
 
 from fedotmas._settings import get_max_loop_iterations
@@ -47,6 +48,12 @@ _OVERWRITTEN_ON_REUSE = (
     "allowed_mcp_tools",
     "output_save_key",
 )
+
+#: Room kept for the workflow namespace inside their 64-character identifier.
+#: Whatever is left goes to the agent name, which may be shortened; the
+#: namespace may not, since it is what keeps one workflow out of another's
+#: records.
+_SCOPE_BUDGET = 40
 
 #: Our own optional-state syntax; meaningless outside this runtime.
 _OPTIONAL_STATE_REF_RE = re.compile(r"\{(\w+)\?\}")
@@ -137,6 +144,33 @@ class _Walk:
     degraded_loops: int = 0
 
 
+def _workflow_scope(wire_workflow_id: str) -> str:
+    """Return the namespace part of a generated agent's wire name.
+
+    A workflow id too long to carry whole is cut and fingerprinted rather than
+    simply truncated: two ids that differ only past the cut would otherwise
+    share a namespace, which is the collision this exists to prevent.
+    """
+    if len(wire_workflow_id) <= _SCOPE_BUDGET:
+        return wire_workflow_id
+    digest = blake2s(wire_workflow_id.encode(), digest_size=4).hexdigest()
+    return f"{wire_workflow_id[: _SCOPE_BUDGET - 9].rstrip('_')}_{digest}"
+
+
+def _scoped_wire_name(scope: str, name: str, taken: set[str]) -> str:
+    """Return a wire name for *name*, namespaced under the workflow *scope*.
+
+    Agent identity is tenant-wide over there while ours is per-config, so a
+    second bundle carrying the obvious ``researcher`` would import as an edit of
+    the first one's agent.  Their own bundles are namespaced by hand
+    (``urban_planner``, ``urban_zoning_finder``); this does the same by machine.
+    A name with no room left is shortened — ``taken`` still keeps it unique
+    inside the bundle, and the namespace it sits under is intact.
+    """
+    slug = to_wire_name(name)[: 63 - len(scope)].rstrip("_")
+    return to_wire_name(f"{scope}_{slug}" if slug else scope, taken)
+
+
 def to_wire_name(value: str, taken: set[str] | None = None) -> str:
     """Return *value* as an identifier Synapse accepts, unique within *taken*."""
     slug = value.strip()
@@ -184,6 +218,8 @@ def to_synapse_bundle(
             output quartet is one bundle's convention, not a fixed vocabulary.
     """
     external = {a.name: a for a in existing_agents.agents} if existing_agents else {}
+    wire_workflow_id = to_wire_name(workflow_id)
+    scope = _workflow_scope(wire_workflow_id)
 
     taken: set[str] = set()
     wire: dict[str, str] = {}
@@ -193,7 +229,11 @@ def to_synapse_bundle(
     for agent in config.agents:
         entry = external.get(agent.name)
         given = entry.id if entry is not None and entry.id else None
-        wire[agent.name] = to_wire_name(given or agent.name, taken)
+        wire[agent.name] = (
+            to_wire_name(given, taken)
+            if given is not None
+            else _scoped_wire_name(scope, agent.name, taken)
+        )
         if given is None:
             continue
         # Only an id that survived untouched still points at their record; a
@@ -241,7 +281,6 @@ def to_synapse_bundle(
     order = {node["id"]: i for i, node in enumerate(walk.nodes)}
     walk.edges.sort(key=lambda e: (order[e["from"]], order[e["to"]]))
 
-    wire_workflow_id = to_wire_name(workflow_id)
     workflow = {
         "_id": wire_workflow_id,
         "name": workflow_name or wire_workflow_id,
@@ -368,7 +407,9 @@ def _emit(
     """Append the nodes for *step* and return its (entry, exit) node ids."""
     if step.type == "agent":
         agent = walk.ids[str(step.agent_name)]
-        node_id = to_wire_name(wire[agent.name], walk.used)
+        # Node ids live inside the workflow, so they keep the plain agent name;
+        # only `agent_type` needs the tenant-wide identity.
+        node_id = to_wire_name(agent.name, walk.used)
         node: dict[str, Any] = {
             "id": node_id,
             "type": "phase",

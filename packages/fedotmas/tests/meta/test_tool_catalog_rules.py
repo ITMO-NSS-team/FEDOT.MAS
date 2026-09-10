@@ -94,6 +94,17 @@ class TestForeignToolsRejectedAtBuild:
         with pytest.raises(ValueError, match="tool_catalog"):
             maw.build(_config([]))
 
+    async def test_run_refuses_before_paying_for_generation(self):
+        from fedotmas import MAW
+
+        maw = MAW(tool_catalog={"urban.getproject": "Get a project"})
+
+        with patch("fedotmas.meta.maw_pool_stage.run_meta_agent_call") as pool_call:
+            with pytest.raises(ValueError, match="tool_catalog"):
+                await maw.run("task")
+
+        pool_call.assert_not_called()
+
     def test_an_instance_without_a_catalogue_builds(self):
         from fedotmas import MAW
 
