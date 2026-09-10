@@ -92,14 +92,14 @@ class TestAgentPassesAllowedModels:
             captured.update(kwargs)
             return _make_llm_result("pipeline_config", two_agent_data)
 
-        with (
-            patch("fedotmas.meta.maw_single_stage.run_meta_agent_call", side_effect=_capture),
-            patch("fedotmas.meta.maw_single_stage.get_server_descriptions", return_value={}),
+        with patch(
+            "fedotmas.meta.maw_single_stage.run_meta_agent_call", side_effect=_capture
         ):
             from fedotmas.meta.maw_single_stage import generate_pipeline_config
 
             await generate_pipeline_config(
                 "test task",
+                tool_catalog={},
                 meta_model=ModelConfig(model="openai/gpt-4o"),
                 worker_models=[
                     ModelConfig(model="openai/gpt-4o"),
@@ -122,13 +122,13 @@ class TestPoolGenPassesAllowedModels:
             captured.update(kwargs)
             return _make_llm_result("agent_pool", pool_data)
 
-        with (
-            patch("fedotmas.meta.maw_pool_stage.run_meta_agent_call", side_effect=_capture),
-            patch("fedotmas.meta.maw_pool_stage.get_server_descriptions", return_value={}),
+        with patch(
+            "fedotmas.meta.maw_pool_stage.run_meta_agent_call", side_effect=_capture
         ):
             from fedotmas.meta.maw_pool_stage import PoolGenerator
 
             gen = PoolGenerator(
+                tool_catalog={},
                 meta_model=ModelConfig(model="openai/gpt-4o"),
                 worker_models=[
                     ModelConfig(model="openai/gpt-4o"),
@@ -155,17 +155,13 @@ class TestPipelineGenPassesAllowedModels:
             captured.update(kwargs)
             return _make_llm_result("pipeline_config", two_agent_data)
 
-        with (
-            patch(
-                "fedotmas.meta.maw_pipeline_stage.run_meta_agent_call", side_effect=_capture
-            ),
-            patch(
-                "fedotmas.meta.maw_pipeline_stage.get_server_descriptions", return_value={}
-            ),
+        with patch(
+            "fedotmas.meta.maw_pipeline_stage.run_meta_agent_call", side_effect=_capture
         ):
             from fedotmas.meta.maw_pipeline_stage import PipelineGenerator
 
             gen = PipelineGenerator(
+                tool_catalog={},
                 meta_model=ModelConfig(model="openai/gpt-4o"),
                 worker_models=[
                     ModelConfig(model="openai/gpt-4o"),

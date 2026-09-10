@@ -10,12 +10,13 @@ from fedotmas._settings import ModelConfig
 from fedotmas.common.logging import get_logger
 from fedotmas.control._run import RunError
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig
-from fedotmas.mcp import MCPServerConfig, get_server_descriptions
+from fedotmas.mcp import MCPServerConfig
 from fedotmas.meta._adk_runner import run_meta_agent_call
 from fedotmas.meta._helpers import (
     format_server_descriptions,
     parse_llm_output,
     resolve_meta_and_workers,
+    resolve_tool_descriptions,
 )
 from fedotmas.meta.maw_debug_prompts import (
     CLASSIFIER_SYSTEM_PROMPT,
@@ -163,6 +164,7 @@ async def diagnose_and_fix(
     meta_model: str | ModelConfig | None = None,
     temperature: float = 0.3,
     mcp_registry: dict[str, MCPServerConfig] | None = None,
+    tool_catalog: dict[str, str] | None = None,
     worker_models: list[str | ModelConfig] | None = None,
     session_service: BaseSessionService | None = None,
     error_category: str | None = None,
@@ -178,7 +180,7 @@ async def diagnose_and_fix(
     if failing_agent is None:
         raise ValueError(f"Agent '{error.agent_name}' not found in config")
 
-    descriptions = get_server_descriptions(mcp_registry)
+    descriptions = resolve_tool_descriptions(mcp_registry, tool_catalog)
     desc_text = format_server_descriptions(descriptions)
     models_text = "\n".join(f"- `{m.model}`" for m in resolved_workers)
 

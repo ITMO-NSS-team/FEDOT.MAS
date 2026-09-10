@@ -1,10 +1,11 @@
 import warnings
 
 from fedotmas._settings import ModelConfig
+from fedotmas.export.synapse import SynapseExport, to_synapse_bundle
 from fedotmas.mas.mas import MAS
 from fedotmas.mas.models import MASConfig
 from fedotmas.maw.maw import MAW
-from fedotmas.maw.models import MAWConfig
+from fedotmas.maw.models import AgentPoolConfig, MAWConfig
 from fedotmas.mcp._config import HttpMCPServer, StdioMCPServer
 from fedotmas.mcp.discovery import discover_local_servers
 from fedotmas.optimize import Optimizer, OptimizationResult
@@ -38,6 +39,7 @@ warnings.filterwarnings(
 __all__ = [
     "MAS",
     "MAW",
+    "AgentPoolConfig",
     "MASConfig",
     "MAWConfig",
     "ModelConfig",
@@ -46,6 +48,8 @@ __all__ = [
     "discover_local_servers",
     "Optimizer",
     "OptimizationResult",
+    "SynapseExport",
+    "to_synapse_bundle",
 ]
 
 try:

@@ -1,0 +1,297 @@
+{
+  "_comment": "Structure of Synapse's own hand-built docs/urban/urban-bundle.json (codesynapse @ 27424db): ids, node/edge topology and field shape kept, their prompts, descriptions and tenant tool ids replaced. Fixture for the validator port, which reads none of what was removed.",
+  "version": 1,
+  "exported_from": "urban",
+  "items": {
+    "agents": [
+      {
+        "_id": "urban_requirements_gatherer",
+        "type": "urban_requirements_gatherer",
+        "name": "Urban Requirements Gatherer",
+        "description": "redacted",
+        "agent_class": "GenericAgent",
+        "model": "provider/model",
+        "temperature": 1,
+        "allowed_phases": [
+          "requirements"
+        ],
+        "eval_keywords": [],
+        "allowed_tools": [],
+        "allowed_delegation_targets": null,
+        "output_save_key": null,
+        "enabled": true,
+        "system_prompt": "redacted"
+      },
+      {
+        "_id": "urban_human_expert",
+        "type": "urban_human_expert",
+        "name": "Urban Human Expert",
+        "description": "redacted",
+        "agent_class": "GenericAgent",
+        "model": "provider/model",
+        "temperature": 1,
+        "allowed_phases": [
+          "requirements"
+        ],
+        "eval_keywords": [],
+        "allowed_tools": [],
+        "allowed_delegation_targets": null,
+        "output_save_key": null,
+        "enabled": true,
+        "system_prompt": "redacted"
+      },
+      {
+        "_id": "urban_requirements_finalizer",
+        "type": "urban_requirements_finalizer",
+        "name": "Urban Requirements Finalizer",
+        "description": "redacted",
+        "agent_class": "GenericAgent",
+        "model": "provider/model",
+        "temperature": 1,
+        "allowed_phases": [
+          "requirements"
+        ],
+        "eval_keywords": [],
+        "allowed_tools": [],
+        "allowed_delegation_targets": null,
+        "output_save_key": "requirements",
+        "enabled": true,
+        "system_prompt": "redacted"
+      },
+      {
+        "_id": "urban_planner",
+        "type": "urban_planner",
+        "name": "Urban Planner",
+        "description": "redacted",
+        "agent_class": "GenericAgent",
+        "model": "provider/model",
+        "temperature": 0.5,
+        "allowed_phases": [
+          "planning"
+        ],
+        "eval_keywords": [],
+        "allowed_tools": [],
+        "allowed_delegation_targets": null,
+        "output_save_key": "plan",
+        "enabled": true,
+        "system_prompt": "redacted"
+      },
+      {
+        "_id": "urban_master_planner",
+        "type": "master_urban_planner",
+        "name": "Urban Master Planner",
+        "description": "redacted",
+        "agent_class": "GenericAgent",
+        "model": "provider/model",
+        "temperature": 0.5,
+        "allowed_phases": [
+          "execution"
+        ],
+        "eval_keywords": [],
+        "allowed_tools": [
+          "server.tool"
+        ],
+        "allowed_delegation_targets": [
+          "urban_planner",
+          "provisioning_assessor",
+          "regulatory_expert",
+          "zoning_finder"
+        ],
+        "output_save_key": "urban_output",
+        "enabled": true,
+        "system_prompt": "redacted"
+      },
+      {
+        "_id": "provisioning_assessor",
+        "type": "urban_specialist",
+        "name": "Provisioning Assessor",
+        "description": "redacted",
+        "agent_class": "GenericAgent",
+        "model": "provider/model",
+        "temperature": 0.3,
+        "allowed_phases": [],
+        "eval_keywords": [],
+        "allowed_tools": [
+          "server.tool"
+        ],
+        "allowed_delegation_targets": null,
+        "output_save_key": null,
+        "enabled": true,
+        "system_prompt": "redacted"
+      },
+      {
+        "_id": "regulatory_expert",
+        "type": "urban_specialist",
+        "name": "Regulatory Expert",
+        "description": "redacted",
+        "agent_class": "GenericAgent",
+        "model": "provider/model",
+        "temperature": 0.3,
+        "allowed_phases": [],
+        "eval_keywords": [],
+        "allowed_tools": [
+          "server.tool"
+        ],
+        "allowed_delegation_targets": null,
+        "output_save_key": null,
+        "enabled": true,
+        "system_prompt": "redacted"
+      },
+      {
+        "_id": "zoning_finder",
+        "type": "urban_specialist",
+        "name": "Zoning Finder (MOCK)",
+        "description": "redacted",
+        "agent_class": "GenericAgent",
+        "model": "provider/model",
+        "temperature": 0,
+        "allowed_phases": [],
+        "eval_keywords": [],
+        "allowed_tools": [],
+        "allowed_delegation_targets": null,
+        "output_save_key": null,
+        "enabled": true,
+        "system_prompt": "redacted"
+      }
+    ],
+    "workflows": [
+      {
+        "_id": "urban_school_provisioning",
+        "name": "Urban School Provisioning",
+        "description": "redacted",
+        "default_reads": [
+          "*"
+        ],
+        "nodes": [
+          {
+            "id": "start",
+            "type": "start"
+          },
+          {
+            "id": "req_gather",
+            "type": "phase",
+            "task_type": "urban_requirements_gathering",
+            "description": "redacted",
+            "agent_selection": "direct",
+            "agent_type": "urban_requirements_gatherer",
+            "phase_label": "requirements"
+          },
+          {
+            "id": "human_expert",
+            "type": "phase",
+            "task_type": "urban_answer_questions",
+            "description": "redacted",
+            "agent_selection": "direct",
+            "agent_type": "urban_human_expert",
+            "phase_label": "requirements"
+          },
+          {
+            "id": "req_finalizer",
+            "type": "phase",
+            "task_type": "urban_finalize_requirements",
+            "description": "redacted",
+            "agent_selection": "direct",
+            "agent_type": "urban_requirements_finalizer",
+            "phase_label": "requirements",
+            "writes": [
+              "requirements"
+            ]
+          },
+          {
+            "id": "gate_req",
+            "type": "approval_gate",
+            "label": "Review urban requirements"
+          },
+          {
+            "id": "planning",
+            "type": "phase",
+            "task_type": "urban_planning",
+            "description": "redacted",
+            "agent_selection": "direct",
+            "agent_type": "urban_planner",
+            "phase_label": "planning",
+            "writes": [
+              "plan"
+            ]
+          },
+          {
+            "id": "gate_plan",
+            "type": "approval_gate",
+            "label": "Review urban plan"
+          },
+          {
+            "id": "urban_orchestration",
+            "type": "phase",
+            "task_type": "urban_orchestration",
+            "description": "redacted",
+            "agent_selection": "direct",
+            "agent_type": "urban_master_planner",
+            "phase_label": "execution",
+            "can_delegate": true,
+            "writes": [
+              "urban_output"
+            ]
+          },
+          {
+            "id": "gate_output",
+            "type": "approval_gate",
+            "label": "Review urban output"
+          },
+          {
+            "id": "end",
+            "type": "end"
+          }
+        ],
+        "edges": [
+          {
+            "from": "start",
+            "to": "req_gather"
+          },
+          {
+            "from": "req_gather",
+            "to": "human_expert"
+          },
+          {
+            "from": "human_expert",
+            "to": "req_finalizer"
+          },
+          {
+            "from": "req_finalizer",
+            "to": "gate_req"
+          },
+          {
+            "from": "gate_req",
+            "to": "planning",
+            "condition": "approved"
+          },
+          {
+            "from": "gate_req",
+            "to": "req_gather",
+            "condition": "rejected"
+          },
+          {
+            "from": "planning",
+            "to": "gate_plan"
+          },
+          {
+            "from": "gate_plan",
+            "to": "urban_orchestration",
+            "condition": "approved"
+          },
+          {
+            "from": "urban_orchestration",
+            "to": "gate_output"
+          },
+          {
+            "from": "gate_output",
+            "to": "end",
+            "condition": "approved"
+          }
+        ],
+        "is_default": false
+      }
+    ],
+    "tools": [],
+    "run_configurations": []
+  }
+}

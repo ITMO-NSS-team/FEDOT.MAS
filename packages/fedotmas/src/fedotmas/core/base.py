@@ -51,6 +51,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
         | dict[str, MCPServerConfig]
         | Literal["all"]
         | None = None,
+        tool_catalog: dict[str, str] | None = None,
         session_service: BaseSessionService | None = None,
         memory_service: BaseMemoryService | None = None,
         plugins: list[BasePlugin] | None = None,
@@ -62,6 +63,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
         self._worker_models = worker_models
         self._temperature = temperature
         self._mcp_registry = resolve_mcp_registry(mcp_servers)
+        self._tool_catalog = dict(tool_catalog) if tool_catalog is not None else None
         self._session_service = session_service
         self._memory_service = memory_service
         if plugins is not None:
@@ -96,6 +98,30 @@ class BaseMAS(ABC, Generic[ConfigT]):
     def mcp_registry(self) -> dict[str, MCPServerConfig]:
         """Registry of MCP servers available to this instance."""
         return self._mcp_registry
+
+    def _reject_external_build(self) -> None:
+        """Fail a build on an instance that generates for another runtime.
+
+        Provenance is the catalogue, not the tool names: a name this workspace
+        also happens to have is a different tool over there, and a config that
+        came out toolless was still designed against their catalogue.
+        """
+        if self._tool_catalog is None:
+            return
+        raise ValueError(
+            "Cannot build locally: this instance was given a tool_catalog, so the "
+            "configs it generates describe another runtime's tools and are meant "
+            "to be exported and run there. Build from an instance without one."
+        )
+
+    @property
+    def tool_catalog(self) -> dict[str, str] | None:
+        """Tool catalogue advertised to the meta-agent instead of the MCP registry.
+
+        Set it to generate configs for a runtime other than this one; such a
+        config names that runtime's tools and cannot be built locally.
+        """
+        return dict(self._tool_catalog) if self._tool_catalog is not None else None
 
     @property
     def mcp_servers(self) -> dict[str, MCPServerConfig]:
@@ -260,6 +286,9 @@ class BaseMAS(ABC, Generic[ConfigT]):
         *timeout* is set it bounds pipeline *execution*; on expiry the partial
         state gathered so far is returned rather than raising.
         """
+        # The build at the far end would refuse this instance anyway; refusing
+        # here keeps the generation call from being paid for first.
+        self._reject_external_build()
         _log.info("Full-auto run for task: {}", task)
         try:
             config = await self.generate_config(task)

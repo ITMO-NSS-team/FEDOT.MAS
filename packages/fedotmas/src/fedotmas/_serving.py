@@ -53,8 +53,8 @@ def serve(
     Args:
         agents: Mapping of agent name to BaseAgent or App instance.
         session_service: A BaseSessionService instance for backends not
-            natively supported by ADK (e.g. MongoSessionService from
-            fedotmas-synapse). Mutually exclusive with ``session_service_uri``.
+            natively supported by ADK. Mutually exclusive with
+            ``session_service_uri``.
         session_service_uri: URI for ADK built-in session backends:
             ``"memory://"``, ``"sqlite:///sessions.db"``,
             ``"postgresql://..."``, ``"mysql://..."``.

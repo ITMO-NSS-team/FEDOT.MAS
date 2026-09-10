@@ -85,6 +85,11 @@ class AgentPoolEntry(BaseModel):
     instruction: str
     model: str | None = None
     tools: list[str] = []
+    #: Identifier this agent already has in the caller's system, carried so an
+    #: export references that record instead of creating a duplicate.  This model
+    #: is also the meta-agent's output schema, so a generated pool may come back
+    #: with the field filled in; ``PoolGenerator`` clears it.
+    id: str | None = None
 
 
 class AgentPoolConfig(BaseModel):
