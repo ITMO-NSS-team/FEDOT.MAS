@@ -203,3 +203,5 @@ benchmarks/gaia/gaia_data/
 benchmarks/gaia/gaia_logs/
 maw_runs/
 outputs/
+data/
+artifacts/
