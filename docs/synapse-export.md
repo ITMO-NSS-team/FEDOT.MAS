@@ -32,7 +32,9 @@ async def main():
 asyncio.run(main())
 ```
 
-`tool_catalog` on `MAW` is what generation offers the meta-agent; the same catalogue passed to `to_synapse_bundle` is what the export is checked against. Give it their tenant's tool ids and descriptions, and the agents come out referencing tools that exist on the other side. Leave it out and the agents come out with no tools at all.
+`tool_catalog` on `MAW` is what generation offers the meta-agent; the same catalogue passed to `to_synapse_bundle` is what the export is checked against. Give it their tenant's tool ids and descriptions, and the agents come out referencing tools that exist on the other side.
+
+Leaving it out means something different on each side. Generation falls back to this instance's own MCP registry, which is empty unless `mcp_servers` was passed — that is the case above, and it produces agents with no tools. The export, given no catalogue, has nothing to check against and emits `tools` as they stand: an id their tenant does not have then imports as a broken reference rather than being dropped and reported.
 
 An instance built with a `tool_catalog` cannot `build()` the config it produced: the tools belong to another runtime, so the configuration is for export only.
 
@@ -46,13 +48,14 @@ Their agent record and `MAWAgentConfig` line up almost field for field.
 | — | `display_name` | The original agent name, when it differs from the wire name. |
 | `instruction` | `system_prompt` | The optional-state marker `{key?}` is normalized to `{key}`. |
 | `model` | `model` | Their identifiers (Bifrost). Ours require a provider prefix, which theirs already have. |
-| `tools` | `allowed_tools` | Ids outside the catalogue are dropped and reported in `unresolved_tools`. |
+| `tools` | `allowed_tools` | Ids outside the catalogue are dropped and reported in `unresolved_tools`; with no catalogue they are emitted unchecked. A reused agent's are never dropped. |
 | `output_key` | `output_save_key` | Required here, nullable there. |
 | — | `description` | Derived from the instruction; their UI shows it and we have no field for it. |
 | — | `agent_class` | Always `GenericAgent`. |
 | — | `temperature` | Ours is set per meta-agent call, not per agent. Defaults to `1.0`, overridable. |
 | — | `allowed_phases` | The `phase_label` of the node the agent sits on. |
 | — | `allowed_delegation_targets` | `null`. The graph is explicit, so no agent delegates. |
+| — | `eval_keywords` | Not emitted. Their schema marks it deprecated and ignored: bids are LLM-evaluated. Their older bundles still carry it. |
 | `max_output_tokens` | — | No counterpart; dropped. |
 
 Agent identity is tenant-wide on their side and per-config here, so a generated agent's wire name carries the workflow id: `school_provisioning_researcher`, not `researcher`. Without it the second exported workflow with an obvious role name would import as an edit of the first one's agent — or of an unrelated agent the tenant already had. Their own bundles are namespaced the same way by hand (`urban_planner`, `urban_zoning_finder`). The readable name survives as `display_name`, and node ids inside the workflow keep it too; only `agent_type` carries the prefixed identity. Their identifiers stop at 64 characters, and it is the agent name that gives way when the pair does not fit: a workflow id too long to carry whole is cut and fingerprinted, so two ids alike up to the cut still land in different namespaces. An agent reused by `id` is exempt: pointing at their record is the whole purpose of that id.
@@ -64,6 +67,7 @@ Ours is a tree of `agent` / `sequential` / `parallel` / `loop`. Theirs is a flat
 | FEDOT.MAS | Synapse | Note |
 | --- | --- | --- |
 | `agent` | `phase` | `agent_selection: "direct"` with `agent_type` naming the agent, and `writes` carrying its `output_key`. |
+| — | `task_type` | Not emitted. It labels what an auction bids on, and their engine defaults it to the node id for a direct node; their own bundle sets it because their UI groups by it. |
 | `sequential` | edges | A chain, plus the single `start` and `end` their validation requires. |
 | `loop` | `validator` + back edge | The body becomes phase nodes, followed by a validator that sends `approved` forward and `rejected` back to the first node of the body. Counted in `degraded_loops`, see below. |
 | `max_iterations` | `max_reject_retries` | Ours counts passes, theirs rejections after the first. Capped at 10. |

@@ -568,6 +568,31 @@ class TestGeneratedIdsAreWorkflowScoped:
         assert ids.isdisjoint({a["_id"] for a in second.bundle["items"]["agents"]})
         assert "researcher" not in ids
 
+    def test_a_caller_id_outranks_a_generated_name_that_wants_it(self, linear):
+        # `linear` is [researcher, writer]; the caller's planner-shaped entry
+        # carries the id a generated `writer` would otherwise take first.
+        pool = AgentPoolConfig(
+            agents=[
+                {
+                    "name": "researcher",
+                    "instruction": "Theirs",
+                    "id": "generated_flow_writer",
+                }
+            ]
+        )
+        export = to_synapse_bundle(
+            linear, workflow_id="generated_flow", existing_agents=pool
+        )
+        _assert_accepted(export.bundle)
+
+        assert export.reused_agents == ("generated_flow_writer",)
+        assert export.renamed_ids == ()
+        reused, generated = export.bundle["items"]["agents"]
+        assert reused["_id"] == "generated_flow_writer"
+        # The generated agent gives way, and stays a full document of its own.
+        assert generated["_id"] == "generated_flow_writer_2"
+        assert "temperature" in generated
+
     def test_nodes_reference_the_scoped_agent(self, linear):
         export = to_synapse_bundle(linear, workflow_id="generated_flow")
         _assert_accepted(export.bundle)

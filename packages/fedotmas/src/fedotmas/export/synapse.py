@@ -226,16 +226,16 @@ def to_synapse_bundle(
     reused: list[str] = []
     reused_names: set[str] = set()
     renamed: list[tuple[str, str]] = []
+    # Caller ids are claimed before any name is generated.  A scoped name can
+    # land on one of them — ids we minted for an earlier export have exactly
+    # that shape — and taking it would point a generated agent's document at
+    # their record while the agent that owns it is pushed aside as a duplicate.
     for agent in config.agents:
         entry = external.get(agent.name)
         given = entry.id if entry is not None and entry.id else None
-        wire[agent.name] = (
-            to_wire_name(given, taken)
-            if given is not None
-            else _scoped_wire_name(scope, agent.name, taken)
-        )
         if given is None:
             continue
+        wire[agent.name] = to_wire_name(given, taken)
         # Only an id that survived untouched still points at their record; a
         # slugified one silently becomes a second one beside it.
         if wire[agent.name] == given:
@@ -249,6 +249,9 @@ def to_synapse_bundle(
                 given,
                 wire[agent.name],
             )
+    for agent in config.agents:
+        if agent.name not in wire:
+            wire[agent.name] = _scoped_wire_name(scope, agent.name, taken)
 
     unmatched = tuple(sorted(external.keys() - {a.name for a in config.agents}))
     if unmatched:

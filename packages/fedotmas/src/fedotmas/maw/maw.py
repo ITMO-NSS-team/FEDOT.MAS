@@ -61,6 +61,8 @@ class MAW(BaseMAS[MAWConfig]):
                 confines the pipeline to them. Either way their instructions,
                 models and tools survive generation unchanged — they are records
                 in someone else's system, to be wired rather than rewritten.
+                That includes tool ids this instance has no server for, so a pool
+                naming them yields a config for export rather than for ``build``.
             reuse: Ignored when *existing_agents* is ``None``.
         """
         if reuse not in ("prefer", "only"):
