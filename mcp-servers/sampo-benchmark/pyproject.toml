@@ -1,0 +1,16 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-sampo-benchmark"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [ "fastmcp>=2.14.5" ]
+scripts.mcp-sampo-benchmark = "mcp_sampo_benchmark.server:main"
+
+[tool.fedotmas]
+mcp.name = "sampo-benchmark"
+mcp.description = "Public-only SAMPO benchmark access: allowed labels, bounded input batches, and safe batched TF-IDF predictions. No ground truth or database access."
+mcp.tags = [ "sampo", "benchmark", "entity-resolution", "public-data", "safe" ]
+mcp.timeout = 180
