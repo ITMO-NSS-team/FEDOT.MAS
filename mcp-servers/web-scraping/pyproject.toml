@@ -13,7 +13,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
 ]
-dependencies = [ "fastmcp>=2.14.5" ]
+dependencies = [ "fastmcp>=3" ]
 scripts.mcp-web-scraping = "mcp_web_scraping.server:main"
 
 [dependency-groups]
