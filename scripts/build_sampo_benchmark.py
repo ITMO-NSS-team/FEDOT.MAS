@@ -5,17 +5,21 @@ from __future__ import annotations
 import csv
 import json
 import os
+import random
 import time
 from pathlib import Path
 from typing import Any
 
 import psycopg
 from sampo_baselines import BASELINES
+from sampo_evaluation import evaluate_predictions
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT_DIR = ROOT / "artifacts" / "sampo_audit"
 OUTPUT = ROOT / "artifacts" / "sampo_benchmark"
 GT_PATH = AUDIT_DIR / "private_ground_truth.csv"
+PILOT_SEED = 42
+PILOT_SIZE = 1000
 
 
 def dsn() -> str:
@@ -38,36 +42,19 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> 
         writer.writerows(rows)
 
 
-def metrics(
-    targets: list[str], predictions: list[list[str | None]], labels: list[str]
-) -> dict[str, float]:
-    top_1 = sum(row[0] == target for target, row in zip(targets, predictions)) / len(
-        targets
-    )
-    top_3 = sum(target in row[:3] for target, row in zip(targets, predictions)) / len(
-        targets
-    )
-    f1_values = []
-    for label in labels:
-        true_positive = sum(
-            target == label and row[0] == label
-            for target, row in zip(targets, predictions)
-        )
-        false_positive = sum(
-            target != label and row[0] == label
-            for target, row in zip(targets, predictions)
-        )
-        false_negative = sum(
-            target == label and row[0] != label
-            for target, row in zip(targets, predictions)
-        )
-        denominator = 2 * true_positive + false_positive + false_negative
-        f1_values.append(2 * true_positive / denominator if denominator else 0.0)
-    return {
-        "top_1_accuracy": top_1,
-        "top_3_accuracy": top_3,
-        "macro_f1": sum(f1_values) / len(f1_values),
-    }
+def complete_top_three(
+    predictions: list[list[str | None]], labels: list[str]
+) -> list[list[str]]:
+    """Fill baseline gaps with distinct allowed labels for valid rank-3 output."""
+    completed = []
+    for prediction in predictions:
+        row = []
+        for label in prediction:
+            if label in labels and label not in row:
+                row.append(label)
+        row.extend(label for label in labels if label not in row)
+        completed.append(row[:3])
+    return completed
 
 
 def works_name_stats() -> dict[str, float | int]:
@@ -94,8 +81,7 @@ def works_name_stats() -> dict[str, float | int]:
 def main() -> int:
     ground_truth = read_ground_truth()
     examples = [row["source_work_name"] for row in ground_truth]
-    targets = [row["target_granular_name"] for row in ground_truth]
-    labels = sorted(set(targets))
+    labels = sorted({row["target_granular_name"] for row in ground_truth})
     if len(labels) != 466:
         raise RuntimeError(
             f"Expected 466 allowed labels, found {len(labels)}. Re-run the SAMPO audit before benchmarking."
@@ -109,6 +95,24 @@ def main() -> int:
             for index, value in enumerate(examples, start=1)
         ],
     )
+    public_inputs = list(csv.DictReader((OUTPUT / "benchmark_inputs.csv").open(encoding="utf-8", newline="")))
+    pilot_rows = random.Random(PILOT_SEED).sample(public_inputs, PILOT_SIZE)
+    write_csv(OUTPUT / "pilot_inputs.csv", ["example_id", "raw_work_name"], pilot_rows)
+    (OUTPUT / "pilot_manifest.json").write_text(
+        json.dumps(
+            {
+                "selection": "random.sample without replacement",
+                "seed": PILOT_SEED,
+                "sample_size": PILOT_SIZE,
+                "source": "benchmark_inputs.csv",
+                "example_ids": [row["example_id"] for row in pilot_rows],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     write_csv(
         OUTPUT / "allowed_target_labels.csv",
         ["target_label"],
@@ -119,8 +123,19 @@ def main() -> int:
         started = time.perf_counter()
         predictions = baseline(examples, labels, 3)
         elapsed = time.perf_counter() - started
+        predictions = complete_top_three(predictions, labels)
         results[name] = {
-            **metrics(targets, predictions, labels),
+            **evaluate_predictions(
+                [
+                    {"example_id": str(index), "target_granular_name": row["target_granular_name"]}
+                    for index, row in enumerate(ground_truth, start=1)
+                ],
+                [
+                    {"example_id": str(index), "top_1": row[0], "top_2": row[1], "top_3": row[2]}
+                    for index, row in enumerate(predictions, start=1)
+                ],
+                labels,
+            ),
             "runtime_seconds": elapsed,
         }
         write_csv(
@@ -131,6 +146,23 @@ def main() -> int:
                 for index, row in enumerate(predictions, start=1)
             ],
         )
+    pilot_predictions = BASELINES["tfidf_char_ngrams"](
+        [row["raw_work_name"] for row in pilot_rows], labels, 3
+    )
+    pilot_predictions = complete_top_three(pilot_predictions, labels)
+    write_csv(
+        OUTPUT / "predictions_tfidf_char_ngrams_pilot.csv",
+        ["example_id", "top_1", "top_2", "top_3"],
+        [
+            {
+                "example_id": row["example_id"],
+                "top_1": prediction[0],
+                "top_2": prediction[1],
+                "top_3": prediction[2],
+            }
+            for row, prediction in zip(pilot_rows, pilot_predictions)
+        ],
+    )
     inference_source = (ROOT / "scripts" / "sampo_baselines.py").read_text(
         encoding="utf-8"
     )
@@ -170,12 +202,13 @@ def main() -> int:
         "",
         f"- Examples: {len(examples):,}",
         f"- Public allowed target labels: {len(labels):,}",
+        f"- Pilot: {PILOT_SIZE:,} deterministic random examples (seed `{PILOT_SEED}`)",
         f"- `works_names_mv`: {result['works_names_mv']['unique_work_names']:,} unique names across {result['works_names_mv']['rows']:,} rows (duplication factor {result['works_names_mv']['duplication_factor']:.2f})",
         "",
-        "| Baseline | Top-1 | Top-3 | Macro-F1 | Runtime (s) |",
+        "| Baseline | Top-1 | Top-3 | Macro-F1 (observed labels) | Runtime (s) |",
         "| --- | ---: | ---: | ---: | ---: |",
         *[
-            f"| {name} | {scores['top_1_accuracy']:.4f} | {scores['top_3_accuracy']:.4f} | {scores['macro_f1']:.4f} | {scores['runtime_seconds']:.2f} |"
+            f"| {name} | {scores['top_1_accuracy']:.4f} | {scores['top_3_accuracy']:.4f} | {scores['macro_f1_observed_labels']:.4f} | {scores['runtime_seconds']:.2f} |"
             for name, scores in results.items()
         ],
         "",
