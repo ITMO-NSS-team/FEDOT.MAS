@@ -132,9 +132,6 @@ localhost.run меняет имя на живом соединении. Cloudfla
 | `GUI_UPLOAD_MAX_MB` | `25` | предел размера файла-источника |
 | `SMITHERY_API_KEY` | пусто | ключ реестра MCP: без него найденные серверы не подключаются |
 | `GUI_ALLOWED_HOSTS` | пусто | дополнительные имена хоста, с которых принимать запросы |
-
-Переменные вспомогательных скриптов: `GUI_BASE` (адрес стенда для `preflight.py`),
-`TUNNEL`, `SERVEO_SUBDOMAIN`, `LHR_KEY`, `LHR_USER`, `PYTHON` (для `serve-public.sh`).
 | `GUI_MODEL` | `openai/gpt-4.1-mini` | модель по умолчанию |
 | `GUI_JUDGE_MODEL` | `google/gemini-2.5-pro` | модель судьи |
 | `GUI_EXTRA_TOOLS` | пусто | подключить тяжёлые инструменты: `browser-usage,youtube-transcript` |
@@ -146,6 +143,9 @@ localhost.run меняет имя на живом соединении. Cloudfla
 | `GUI_JUDGE_MAX_TOKENS` | `16000` | лимит вывода судьи |
 | `GUI_JUDGE_RETRY_TIMEOUT` | `90` | сколько ждать строгий повтор судьи, секунды |
 | `E2B_API_KEY` | пусто | добавляет полную песочницу `sandbox` рядом с `sandbox-light` |
+
+Переменные вспомогательных скриптов: `GUI_BASE` — адрес стенда для `preflight.py`;
+`TUNNEL`, `SERVEO_SUBDOMAIN`, `LHR_KEY`, `LHR_USER`, `PYTHON` — для `serve-public.sh`.
 
 ## Инструменты агентов
 

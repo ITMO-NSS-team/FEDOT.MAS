@@ -12,7 +12,7 @@ import re
 
 from fedotmas import MAW, MAWConfig
 from fedotmas.common.logging import get_logger
-from fedotmas.plugins import LoggingPlugin
+from fedotmas.plugins import LoggingPlugin, UnknownToolRecoveryPlugin
 
 from .config import (JUDGE_FALLBACK, JUDGE_MAX_TOKENS, JUDGE_MODEL,
                      JUDGE_RETRY_TIMEOUT, SAFE_TOOLS)
@@ -59,7 +59,7 @@ async def _ask_judge(model: str, prompt: str, content: str = "",
             queue: asyncio.Queue = asyncio.Queue()
             stream = StreamPlugin(queue)
             system = MAW(worker_models=[model], mcp_servers=["sandbox-light"],
-                         plugins=[LoggingPlugin(), stream])
+                         plugins=[LoggingPlugin(), UnknownToolRecoveryPlugin(), stream])
             calls = 0
 
             async def pump() -> None:

@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import os
 import re
@@ -23,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from fedotmas import MAS, MAW, MASConfig, MAWConfig
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp import get_server_descriptions, resolve_mcp_registry
-from fedotmas.plugins import LoggingPlugin
+from fedotmas.plugins import LoggingPlugin, UnknownToolRecoveryPlugin
 
 from . import security
 from .config import (AGENT_MAX_OUTPUT_TOKENS, DEFAULT_MODEL, GENERATE_ATTEMPTS, JUDGE_MODEL, MODELS,
@@ -97,7 +99,7 @@ async def _generate_impl(body: GenerateIn, queue: asyncio.Queue) -> dict:
     cls = MAS if body.kind == "mas" else MAW
     system = cls(meta_model=model, worker_models=[model],
                  mcp_servers=servers,
-                 plugins=[LoggingPlugin(), stream])
+                 plugins=[LoggingPlugin(), UnknownToolRecoveryPlugin(), stream])
 
     task = body.task + (RU_HINT if body.russian else "")
     t0 = time.monotonic()
@@ -165,7 +167,11 @@ async def run(body: RunIn) -> StreamingResponse:
     stream = StreamPlugin(queue)
     is_mas = body.kind == "mas"
     cls = MAS if is_mas else MAW
-    system = cls(worker_models=[model], mcp_servers=servers, plugins=[LoggingPlugin(), stream])
+    # Свой список плагинов ЗАМЕНЯЕТ умолчания FEDOT.MAS, а среди них есть
+    # UnknownToolRecoveryPlugin: без него выдуманное моделью имя инструмента роняет
+    # весь прогон вместе с результатами уже отработавших шагов.
+    system = cls(worker_models=[model], mcp_servers=servers,
+                 plugins=[LoggingPlugin(), UnknownToolRecoveryPlugin(), stream])
     config = MASConfig(**body.config) if is_mas else MAWConfig(**body.config)
     config = sanitize_config(config, body.kind, custom_names)   # может прийти из файла
 
@@ -355,6 +361,51 @@ UPLOAD_MAX_BYTES = int(os.getenv("GUI_UPLOAD_MAX_MB", "25")) * 1024 * 1024
 UPLOAD_DIR = Path(tempfile.mkdtemp(prefix="fedotmas-gui-uploads-"))
 
 
+# Выгрузка из русского Excel — это «;» между столбцами и запятая в дробях. Инструмент
+# document читает такой файл через markitdown, а тот считает запятую разделителем
+# столбцов: «4,1» превращается в «4», и агент честно считает по испорченному числу.
+# Проверено: файл с «4,1» доходил до агента как «4». Приводим к обычному виду сами —
+# именно разбором, а не заменой символов: в ячейке «Санкт-Петербург, Россия» запятая
+# своя, и слепая замена разъехала бы столбцы.
+_DEC_CELL = re.compile(r"^-?\d+,\d+$")
+
+
+def _normalize_csv(name: str, data: bytes) -> tuple[bytes, str]:
+    """Чинит CSV с «;» и запятой в дробях. Возвращает (содержимое, пояснение)."""
+    if not name.lower().endswith((".csv", ".txt")):
+        return data, ""
+    for encoding in ("utf-8", "cp1251"):
+        try:
+            text = data.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        return data, ""
+    if ";" not in text:
+        return data, ""
+    try:
+        rows = list(csv.reader(io.StringIO(text), delimiter=";"))
+    except csv.Error:
+        return data, ""
+    if not rows or max(len(r) for r in rows) < 2:
+        return data, ""          # одна колонка — значит «;» был частью текста, не трогаем
+
+    fixed_cells = 0
+    for row in rows:
+        for i, cell in enumerate(row):
+            if _DEC_CELL.match(cell.strip()):
+                row[i] = cell.strip().replace(",", ".")
+                fixed_cells += 1
+    if not fixed_cells:
+        return data, ""          # чинить нечего: дробей с запятой нет
+
+    out = io.StringIO()
+    csv.writer(out, lineterminator="\n").writerows(rows)
+    return out.getvalue().encode("utf-8"), (
+        f"дробные числа приведены к точке ({fixed_cells} шт.), разделитель — запятая")
+
+
 @app.post("/api/upload")
 async def upload(request: Request, file: UploadFile = File(...)) -> dict:
     """Принимает файл-источник и возвращает путь, по которому его прочитает агент."""
@@ -376,9 +427,11 @@ async def upload(request: Request, file: UploadFile = File(...)) -> dict:
     # Длину режем — иначе слишком длинное имя роняет запись с OSError и отдаёт 500.
     safe = re.sub(r"[^\w.\- ]+", "_", Path(file.filename or "файл").name).strip()[:120] or "файл"
     target = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe}"
+    data, note = _normalize_csv(safe, data)
     target.write_bytes(data)
-    _log.info("Принят файл-источник | имя={} размер={} КБ", safe, len(data) // 1024)
-    return {"ok": True, "name": safe, "path": str(target), "size": len(data)}
+    _log.info("Принят файл-источник | имя={} размер={} КБ{}", safe, len(data) // 1024,
+              f" | {note}" if note else "")
+    return {"ok": True, "name": safe, "path": str(target), "size": len(data), "note": note}
 
 
 @app.get("/api/mcp_catalog")

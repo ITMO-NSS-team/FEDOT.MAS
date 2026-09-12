@@ -101,7 +101,7 @@ const S = {
   tokens: 0,
   seconds: 0,
   factor: 1,
-  k: 1, cx: 0, cy: 0, bbox: null, needFit: true, userAdjusted: false, genToken: 0, group: null,
+  k: 1, cx: 0, cy: 0, bbox: null, needFit: true, userAdjusted: false, group: null,
   backend: null, live: true, abort: null, liveTimer: null, custom: [], hidden: [],
   models: { gen: "", run: "", single: "", judge: "" }, mcpCustom: [],   // мета-агент, исполнение, судья
   answer: null, baseline: null, judge: null, query: "",
@@ -112,7 +112,9 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 // esc() экранирует символы разметки, но не схему адреса: «javascript:…» прошло бы
 // целиком и выполнилось по клику. Ссылки строим только на http(s).
 const safeUrl = (u) => (/^https?:\/\//i.test(String(u || "")) ? String(u) : "");
-const nfmt = (n) => n.toLocaleString("ru-RU").replace(/,/g, " ");
+// toLocaleString у строки возвращает её же: в импортированном файле на месте числа
+// может оказаться разметка. Приводим к числу, непригодное показываем прочерком.
+const nfmt = (n) => (Number.isFinite(Number(n)) ? Number(n).toLocaleString("ru-RU").replace(/,/g, " ") : "—");
 const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
 function fmtTime(sec) {
@@ -773,7 +775,7 @@ function renderAnswer() {
     blocks.push(`<div class="ans-card single">
       <h4>Ответ одной модели, без системы</h4>
       <div class="ans-text md">${mdToHtml(S.baseline.answer)}</div>
-      <div class="ans-meta">${esc(S.baseline.model || "")} · ${nfmt(S.baseline.tokens || 0)} токенов · ${esc(String(S.baseline.seconds ?? "—"))} с</div>
+      <div class="ans-meta">${esc(S.baseline.model || "")} · ${esc(nfmt(S.baseline.tokens || 0))} токенов · ${esc(String(S.baseline.seconds ?? "—"))} с</div>
     </div>`);
   }
   if (S.judge) {
@@ -784,7 +786,7 @@ function renderAnswer() {
       <h4>Оценка судьёй</h4>
       <div class="ans-winner ${w}">${esc(label)}</div>
       <div class="ans-text">${esc(S.judge.verdict)}</div>
-      <div class="ans-meta">судья: ${esc(S.judge.model || "")}${S.judge.tokens ? " · " + nfmt(S.judge.tokens) + " токенов" : ""}</div>
+      <div class="ans-meta">судья: ${esc(S.judge.model || "")}${S.judge.tokens ? " · " + esc(nfmt(S.judge.tokens)) + " токенов" : ""}</div>
     </div>`);
   }
   host.innerHTML = blocks.length ? blocks.join("")
@@ -1068,8 +1070,6 @@ function renderSources(p) {
 /* ─────────────────────────── Загрузка сценария ─────────────────────────── */
 function loadPreset(p) {
   pause();
-  S.genToken++;
-  $("overlay").classList.remove("on");
   S.preset = p;
   S.agents = indexAgents(p);
   S.events = p.trace;
@@ -1179,12 +1179,34 @@ function importScenario(text) {
   preset.sources = Array.isArray(preset.sources) ? preset.sources : [];
   preset.genSteps = Array.isArray(preset.genSteps) ? preset.genSteps : [];
   if (preset.breakdown && !Array.isArray(preset.breakdown.subtasks)) delete preset.breakdown;
+  // Конфигурация — единственное, без чего сценарий бессмыслен, и именно на ней
+  // отрисовка падала: пустой pipeline, agents не массивом, workers строкой. Проверяем
+  // до записи в хранилище, иначе битый файл оставался в списке и ронял интерфейс
+  // при каждой загрузке страницы.
+  const cfg = preset.config;
+  const agentsOk = preset.kind === "mas"
+    ? cfg.coordinator && typeof cfg.coordinator === "object" && Array.isArray(cfg.workers)
+    : Array.isArray(cfg.agents) && cfg.agents.length && cfg.pipeline
+      && typeof cfg.pipeline === "object";
+  if (!agentsOk) {
+    alert("Конфигурация в файле неполная: не хватает состава агентов или схемы запуска.");
+    return;
+  }
   // Идентификатор снимаем: addScenario выдаст новый. Свой оставлять нельзя —
   // при импорте того же файла дважды в списке оказались бы два сценария с одним id,
   // и правка одного меняла бы другой.
   delete preset.id;
-  addScenario(preset);
-  showTab("answer");
+  try {
+    addScenario(preset);
+    showTab("answer");
+  } catch (e) {
+    // Показать сценарий не вышло — убираем его из списка, иначе он останется
+    // висеть и ронять отрисовку при каждом открытии.
+    S.custom = S.custom.filter((p) => p !== preset);
+    storeScenarios();
+    renderPresetList();
+    alert("Файл не удалось открыть как сценарий: " + e.message);
+  }
 }
 
 function showRecordedRun(preset) {
@@ -1435,6 +1457,17 @@ async function liveRun() {
                              custom_mcp: S.preset.customMcp || null }),
       signal: S.abort.signal,
     });
+    // Единственный поток, где код ответа не проверялся: при 401 (нет токена доступа)
+    // или 403 (запрос сочтён межсайтовым) тело — обычный JSON без строк «data:»,
+    // цикл молча заканчивался, и человек видел «Система запущена…» и тишину.
+    if (!r.ok) {
+      let reason = `сервер ответил ${r.status}`;
+      try {
+        const body = await r.json();
+        if (body && body.error) reason = body.error;
+      } catch { /* тело не JSON — оставляем код ответа */ }
+      throw new Error(reason);
+    }
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -1628,7 +1661,9 @@ async function attachFiles(fileList) {
       const d = await readJson(r, "загрузка файла");
       if (!d.ok) { note.textContent = `${file.name}: ${d.error}`; continue; }
       S.files.push({ name: d.name, path: d.path });
-      note.textContent = "";
+      // Если файл пришлось привести к другому виду, человек должен об этом знать:
+      // молча изменённые данные хуже, чем изменённые с объяснением.
+      note.textContent = d.note ? `${d.name}: ${d.note}` : "";
       renderAttached();
     } catch (e) {
       note.textContent = `${file.name}: ${e.message}`;

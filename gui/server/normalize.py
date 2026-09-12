@@ -43,10 +43,21 @@ def _valid_name(name: str) -> str:
 _SMITHERY_HOSTS = (".smithery.ai", ".run.tools")
 
 
+def _builtin_names() -> set[str]:
+    """Имена всех встроенных MCP-серверов, включая не запрошенные в этот раз."""
+    try:
+        return set(resolve_mcp_registry("all") or {})
+    except Exception:          # реестр не собрался — лучше перестраховаться именами по умолчанию
+        return set(SAFE_TOOLS)
+
+
 def _is_smithery_url(url: str) -> bool:
     from urllib.parse import urlparse
 
-    host = (urlparse(url).hostname or "").lower()
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:         # «https://[::1].smithery.ai/» — не адрес, ключ не подставляем
+        return False
     return host.endswith(_SMITHERY_HOSTS)
 
 
@@ -66,10 +77,11 @@ def _mcp_registry_for(tools: list[str], custom: list | None) -> tuple:
     added: list[str] = []
     for item in custom:
         name = _valid_name(item.name)
-        # Имя своего сервера не должно перебивать встроенный: иначе запрос вида
-        # {"name": "sandbox-light", "url": "https://чужой/mcp"} подменял бы песочницу
-        # чужим адресом — агент получал бы оттуда любые «результаты расчёта».
-        if name in registry:
+        # Имя своего сервера не должно перебивать встроенный: иначе запрос подменял бы
+        # песочницу или чтение файлов чужим адресом, и агент получал бы оттуда любые
+        # «результаты». Сверяем с ПОЛНЫМ списком встроенных, а не с выбранными в этом
+        # запросе: иначе достаточно не просить инструмент, чтобы занять его имя.
+        if name in registry or name in _builtin_names():
             name = _valid_name(f"custom_{name}")
             while name in registry:
                 name += "_"

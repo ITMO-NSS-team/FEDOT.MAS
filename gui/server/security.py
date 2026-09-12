@@ -52,6 +52,7 @@ def _host_allowed(host: str) -> bool:
     """Свой ли это адрес. Пустой Host считаем своим: его не ставят только не-браузеры."""
     if not host:
         return True
+    host = host.strip().rstrip(".").strip("[]")     # «localhost.», «[::1]» — тот же адрес
     if host in _LOCAL_HOSTS or host in _EXTRA_HOSTS:
         return True
     # Туннели выдают имя при каждом запуске, заранее его не знаешь. В публичном режиме
@@ -75,7 +76,10 @@ def install(app: FastAPI) -> None:
         # сравнение «origin == host» проходило при DNS rebinding — злой домен,
         # переведённый на 127.0.0.1, присылает совпадающую пару и попадает внутрь.
         if request.method != "GET":
-            host = (request.headers.get("host") or "").split(":")[0].lower()
+            raw_host = (request.headers.get("host") or "").strip().lower()
+            # У IPv6 адрес в скобках, и разрезать по первому двоеточию нельзя
+            host = (raw_host.rsplit("]", 1)[0] + "]" if raw_host.startswith("[")
+                    else raw_host.split(":")[0])
             if host and not _host_allowed(host):
                 _log.warning("Запрос с неожиданным Host отклонён | host={}", host)
                 return JSONResponse({"error": "неожиданное имя хоста"}, status_code=403)
@@ -83,7 +87,14 @@ def install(app: FastAPI) -> None:
             if origin:
                 from urllib.parse import urlparse
 
-                if not _host_allowed((urlparse(origin).hostname or "").lower()):
+                # «null» присылает песочница iframe, srcdoc и страница из data:. Раньше
+                # у него не было имени хоста, пустое имя считалось своим — и заслон
+                # обходился именно тем способом, от которого он и ставился.
+                try:
+                    origin_host = (urlparse(origin).hostname or "").lower()
+                except ValueError:
+                    origin_host = ""
+                if not origin_host or not _host_allowed(origin_host):
                     _log.warning("Межсайтовый запрос отклонён | origin={}", origin)
                     return JSONResponse({"error": "запрос пришёл со стороннего сайта"},
                                         status_code=403)
