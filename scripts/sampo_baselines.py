@@ -13,6 +13,7 @@ from collections.abc import Callable
 from difflib import SequenceMatcher
 
 Prediction = list[str | None]
+RankedPrediction = list[tuple[str, float]]
 
 
 def normalize(value: str) -> str:
@@ -55,11 +56,17 @@ def _char_ngrams(value: str, minimum: int = 3, maximum: int = 5) -> Counter[str]
     )
 
 
-def tfidf_char_ngrams(
-    examples: list[str], labels: list[str], top_k: int = 3
-) -> list[Prediction]:
-    """Sparse cosine retrieval over TF-IDF character 3--5 grams."""
-    label_terms = [_char_ngrams(label) for label in labels]
+def _word_tokens(value: str) -> Counter[str]:
+    return Counter(re.findall(r"\w+", value.casefold(), flags=re.UNICODE))
+
+
+def _tfidf_ranked(
+    examples: list[str], labels: list[str], term_fn: Callable[[str], Counter[str]], k: int
+) -> list[RankedPrediction]:
+    """Return deterministic sparse cosine TF-IDF rankings and scores."""
+    if k < 1:
+        raise ValueError("k must be at least 1")
+    label_terms = [term_fn(label) for label in labels]
     document_frequency: Counter[str] = Counter()
     for terms in label_terms:
         document_frequency.update(terms.keys())
@@ -77,31 +84,71 @@ def tfidf_char_ngrams(
         )
         for term, weight in weights.items():
             postings[term].append((index, weight))
+
     results = []
     for example in examples:
-        terms = _char_ngrams(example)
+        terms = term_fn(example)
         weights = {
             term: count * idf[term] for term, count in terms.items() if term in idf
         }
-        source_norm = (
-            math.sqrt(sum(weight * weight for weight in weights.values())) or 1.0
-        )
+        source_norm = math.sqrt(sum(weight * weight for weight in weights.values())) or 1.0
         scores: defaultdict[int, float] = defaultdict(float)
         for term, weight in weights.items():
             for index, label_weight in postings[term]:
                 scores[index] += weight * label_weight
         ranked = sorted(
             (
-                (score / (source_norm * label_norms[index]), labels[index])
-                for index, score in scores.items()
+                (scores.get(index, 0.0) / (source_norm * label_norms[index]), labels[index])
+                for index in range(len(labels))
             ),
             key=lambda item: (-item[0], item[1]),
         )
-        results.append(
-            [label for _, label in ranked[:top_k]]
-            + [None] * max(0, top_k - len(ranked))
-        )
+        results.append([(label, score) for score, label in ranked[:k]])
     return results
+
+
+def tfidf_char_ngrams_ranked(
+    examples: list[str], labels: list[str], k: int
+) -> list[RankedPrediction]:
+    """Rank labels by character 3--5 gram TF-IDF cosine similarity."""
+    return _tfidf_ranked(examples, labels, _char_ngrams, k)
+
+
+def tfidf_word_ranked(
+    examples: list[str], labels: list[str], k: int
+) -> list[RankedPrediction]:
+    """Rank labels by Unicode word-token TF-IDF cosine similarity."""
+    return _tfidf_ranked(examples, labels, _word_tokens, k)
+
+
+def tfidf_char_word_hybrid_ranked(
+    examples: list[str], labels: list[str], k: int
+) -> list[RankedPrediction]:
+    """Fuse char and word rankings with equal-weight reciprocal-rank fusion."""
+    candidate_count = len(labels)
+    char_rankings = tfidf_char_ngrams_ranked(examples, labels, candidate_count)
+    word_rankings = tfidf_word_ranked(examples, labels, candidate_count)
+    results = []
+    for char_ranking, word_ranking in zip(char_rankings, word_rankings):
+        fused: defaultdict[str, float] = defaultdict(float)
+        # Fixed RRF constant 60 and equal sources; no private-GT tuning.
+        for ranking in (char_ranking, word_ranking):
+            for rank, (label, _) in enumerate(ranking, start=1):
+                fused[label] += 1 / (60 + rank)
+        results.append(sorted(fused.items(), key=lambda item: (-item[1], item[0]))[:k])
+    return results
+
+
+def tfidf_char_ngrams(
+    examples: list[str], labels: list[str], top_k: int = 3
+) -> list[Prediction]:
+    """Sparse cosine retrieval over TF-IDF character 3--5 grams."""
+    ranked = tfidf_char_ngrams_ranked(examples, labels, top_k)
+    return [
+        [label for label, score in row if score > 0]
+        + [None] * max(0, top_k - len([score for _, score in row if score > 0]))
+        for row in ranked
+    ]
 
 
 BASELINES: dict[str, Callable[[list[str], list[str], int], list[Prediction]]] = {

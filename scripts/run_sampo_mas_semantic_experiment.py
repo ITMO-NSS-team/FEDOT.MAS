@@ -32,8 +32,10 @@ PUBLIC_CONSTRAINTS = """Use only the public SAMPO benchmark inputs and the 466
 allowed labels available through the provided tools. Do not access databases,
 mapping tables, private ground truth, or labels not supplied by the tools.
 Create a valid CSV with example_id, top_1, top_2, top_3; every prediction must
-be an allowed label. For this run, produce exactly {count} predictions and save
-them through the public workspace as '{filename}'."""
+be an allowed label. For this run, use exactly the fixed public random pilot in
+pilot_inputs.csv (seed 42; see get_pilot_manifest), produce exactly {count}
+predictions for those IDs, and save them through the public workspace as
+'{filename}'."""
 
 
 class ModelCallCounter(BasePlugin):
@@ -106,35 +108,45 @@ def _previous_prediction_comparison() -> dict[str, Any]:
     }
 
 
-def _pilot_metrics(predictions: Path) -> dict[str, float]:
-    from evaluate_sampo_mas import GT, metrics
+def _pilot_metrics(predictions: Path) -> dict[str, float | int]:
+    from evaluate_sampo_mas import GT
+    from sampo_evaluation import evaluate_predictions
 
     with GT.open(encoding="utf-8", newline="") as file:
-        targets = [row["target_granular_name"] for row in csv.DictReader(file)]
+        ground_truth = list(csv.DictReader(file))
+    for index, row in enumerate(ground_truth, start=1):
+        row["example_id"] = str(index)
     with predictions.open(encoding="utf-8", newline="") as file:
         rows = list(csv.DictReader(file))
-    with (PUBLIC / "predictions_tfidf_char_ngrams.csv").open(
+    with (PUBLIC / "pilot_inputs.csv").open(encoding="utf-8", newline="") as file:
+        pilot_ids = {row["example_id"] for row in csv.DictReader(file)}
+    if {row["example_id"] for row in rows} != pilot_ids:
+        raise RuntimeError("Pilot predictions do not contain exactly the manifest IDs")
+    with (PUBLIC / "predictions_tfidf_char_ngrams_pilot.csv").open(
         encoding="utf-8", newline=""
     ) as file:
-        tfidf_rows = list(csv.DictReader(file))[: len(rows)]
-    if len(rows) > len(targets) or len(rows) != len(tfidf_rows):
-        raise RuntimeError(
-            "Pilot predictions cannot be aligned with private evaluation"
-        )
-    labels = sorted(set(targets))
-    values = metrics(
-        targets[: len(rows)],
-        [[row["top_1"], row["top_2"], row["top_3"]] for row in rows],
-        labels,
+        tfidf_rows = list(csv.DictReader(file))
+    if {row["example_id"] for row in tfidf_rows} != pilot_ids:
+        raise RuntimeError("TF-IDF pilot predictions do not contain exactly the manifest IDs")
+    labels = sorted({row["target_granular_name"] for row in ground_truth})
+    values = evaluate_predictions(
+        [row for row in ground_truth if row["example_id"] in pilot_ids], rows, labels
     )
     top3_columns = ("top_1", "top_2", "top_3")
     different_top_1 = sum(
-        row["top_1"] != baseline["top_1"] for row, baseline in zip(rows, tfidf_rows)
+        row["top_1"] != baseline["top_1"]
+        for row, baseline in zip(
+            sorted(rows, key=lambda item: int(item["example_id"])),
+            sorted(tfidf_rows, key=lambda item: int(item["example_id"])),
+        )
     )
     different_top_3 = sum(
         tuple(row[column] for column in top3_columns)
         != tuple(baseline[column] for column in top3_columns)
-        for row, baseline in zip(rows, tfidf_rows)
+        for row, baseline in zip(
+            sorted(rows, key=lambda item: int(item["example_id"])),
+            sorted(tfidf_rows, key=lambda item: int(item["example_id"])),
+        )
     )
     return {
         **values,
