@@ -42,6 +42,23 @@ def mask(key: str) -> str:
     return f"{key[:6]}…{key[-4:]}" if len(key) > 14 else "…"
 
 
+# Имена, под которыми стенд открывают штатно. Туннель добавляет своё — его имя
+# берётся из GUI_ALLOWED_HOSTS (через запятую), иначе запрос с него отклонится.
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"}
+_EXTRA_HOSTS = {h.strip().lower() for h in os.getenv("GUI_ALLOWED_HOSTS", "").split(",") if h.strip()}
+
+
+def _host_allowed(host: str) -> bool:
+    """Свой ли это адрес. Пустой Host считаем своим: его не ставят только не-браузеры."""
+    if not host:
+        return True
+    if host in _LOCAL_HOSTS or host in _EXTRA_HOSTS:
+        return True
+    # Туннели выдают имя при каждом запуске, заранее его не знаешь. В публичном режиме
+    # заслоном служит токен доступа, который межсайтовый запрос поставить не может.
+    return PUBLIC_MODE
+
+
 def install(app: FastAPI) -> None:
     """Вешает на приложение проверку доступа и запрет кеширования."""
 
@@ -54,15 +71,22 @@ def install(app: FastAPI) -> None:
         # Чужая страница, открытая в браузере владельца, может послать сюда простой
         # POST (тело Blob без Content-Type — предполётного запроса не будет) и
         # запустить агентов за его счёт. Ответ ей не виден, но действие произойдёт.
-        # Браузер обязан проставить Origin для межсайтового запроса — на этом и ловим.
-        # У curl и прочих не-браузеров заголовка нет, их не трогаем.
-        origin = request.headers.get("origin")
-        if origin and request.method != "GET":
-            host = request.headers.get("host", "")
-            if origin.split("://")[-1] != host:
-                _log.warning("Межсайтовый запрос отклонён | origin={} host={}", origin, host)
-                return JSONResponse({"error": "запрос пришёл со стороннего сайта"},
-                                    status_code=403)
+        # Сверяем и Host, и Origin со списком ожидаемых имён, а не друг с другом:
+        # сравнение «origin == host» проходило при DNS rebinding — злой домен,
+        # переведённый на 127.0.0.1, присылает совпадающую пару и попадает внутрь.
+        if request.method != "GET":
+            host = (request.headers.get("host") or "").split(":")[0].lower()
+            if host and not _host_allowed(host):
+                _log.warning("Запрос с неожиданным Host отклонён | host={}", host)
+                return JSONResponse({"error": "неожиданное имя хоста"}, status_code=403)
+            origin = request.headers.get("origin")
+            if origin:
+                from urllib.parse import urlparse
+
+                if not _host_allowed((urlparse(origin).hostname or "").lower()):
+                    _log.warning("Межсайтовый запрос отклонён | origin={}", origin)
+                    return JSONResponse({"error": "запрос пришёл со стороннего сайта"},
+                                        status_code=403)
         if PUBLIC_MODE and path not in OPEN_API:
             if not secrets.compare_digest(request.headers.get("x-access-token", ""), ACCESS_TOKEN):
                 return JSONResponse({"error": "нет доступа: откройте ссылку целиком, вместе с токеном"},

@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fedotmas import MAS, MAW, MASConfig, MAWConfig
@@ -93,9 +93,10 @@ async def _generate_impl(body: GenerateIn, queue: asyncio.Queue) -> dict:
     model = body.model or DEFAULT_MODEL
     tools = _allowed_tools(body.tools)
     stream = StreamPlugin(queue)
+    servers, custom_names = _mcp_registry_for(tools, body.custom_mcp)
     cls = MAS if body.kind == "mas" else MAW
     system = cls(meta_model=model, worker_models=[model],
-                 mcp_servers=_mcp_registry_for(tools, body.custom_mcp),
+                 mcp_servers=servers,
                  plugins=[LoggingPlugin(), stream])
 
     task = body.task + (RU_HINT if body.russian else "")
@@ -116,7 +117,7 @@ async def _generate_impl(body: GenerateIn, queue: asyncio.Queue) -> dict:
     if config is None:
         return {"ok": False, "error": f"{type(last_error).__name__}: {last_error}"}
 
-    config = sanitize_config(config, body.kind)
+    config = sanitize_config(config, body.kind, custom_names)
     if body.web and WEB_SEARCH:
         _ensure_web_tool(config, body.kind)
     _ensure_data_tools(config, body.kind, f"{body.task} {body.query or ''}")
@@ -159,14 +160,14 @@ async def generate_stream(body: GenerateIn) -> StreamingResponse:
 async def run(body: RunIn) -> StreamingResponse:
     tools = _allowed_tools(body.tools)
     model = body.model or DEFAULT_MODEL
-    servers = _mcp_registry_for(tools, body.custom_mcp)
+    servers, custom_names = _mcp_registry_for(tools, body.custom_mcp)
     queue: asyncio.Queue = asyncio.Queue()
     stream = StreamPlugin(queue)
     is_mas = body.kind == "mas"
     cls = MAS if is_mas else MAW
     system = cls(worker_models=[model], mcp_servers=servers, plugins=[LoggingPlugin(), stream])
     config = MASConfig(**body.config) if is_mas else MAWConfig(**body.config)
-    config = sanitize_config(config, body.kind)   # конфигурация может прийти из файла
+    config = sanitize_config(config, body.kind, custom_names)   # может прийти из файла
 
     # У агента в конфигурации своя модель, и она сильнее worker_models: без явной
     # перезаписи выбор модели запуска не влиял бы на сохранённые сценарии.
@@ -338,34 +339,42 @@ async def effort_breakdown(body: EffortIn) -> dict:
         return {"ok": False, "error": "не удалось разложить задачу на подзадачи"}
 
     total = round(sum(i["hours"] for i in items), 2)
-    # Человеко-день здесь — полные сутки, а не восьмичасовая смена: договорённость
-    # о длине рабочего дня — лишнее допущение, которое пришлось бы объяснять на показе.
+    # Человеко-дни считаем по восьмичасовому рабочему дню — так их и подписывает
+    # интерфейс. Сумма часов остаётся главной цифрой, дни — это перевод для наглядности.
     return {"ok": True, "subtasks": items, "total_hours": total,
-            "total_days": round(total / 8, 1), "model": model}   # рабочий день — восемь часов
+            "total_days": round(total / 8, 1), "model": model}
 
 
 # Файл как источник данных. Ссылку агент скачивает сам, а лежащий на компьютере
 # файл иначе до него не доходит: кладём его в отдельный каталог и передаём путь в
 # запросе — дальше его читает инструмент «document», тот же, что и скачанные файлы.
-UPLOAD_DIR = Path(tempfile.gettempdir()) / "fedotmas-gui-uploads"
 UPLOAD_MAX_BYTES = int(os.getenv("GUI_UPLOAD_MAX_MB", "25")) * 1024 * 1024
+# Каталог загрузок — свой на каждый запуск сервера и только для владельца (0700).
+# Предсказуемый путь в общем /tmp читался бы любым локальным пользователем, а его
+# можно было бы заранее подменить симлинком: mkdir(exist_ok=True) владельца не проверяет.
+UPLOAD_DIR = Path(tempfile.mkdtemp(prefix="fedotmas-gui-uploads-"))
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...)) -> dict:
+async def upload(request: Request, file: UploadFile = File(...)) -> dict:
     """Принимает файл-источник и возвращает путь, по которому его прочитает агент."""
     if "document" not in SAFE_TOOLS:
         # Без инструмента чтения файл бесполезен: в публичном режиме он отключён.
         return {"ok": False, "error": "чтение файлов на этом стенде отключено "
                                       "(инструмент document недоступен)"}
+    # Длину проверяем до чтения: Starlette спулит файл на диск целиком, и предел,
+    # применённый после, ограничивал бы только то, что осядет в каталоге загрузок.
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > UPLOAD_MAX_BYTES * 2:
+        return {"ok": False, "error": f"файл больше {UPLOAD_MAX_BYTES // 1024 // 1024} МБ"}
     data = await file.read(UPLOAD_MAX_BYTES + 1)
     if len(data) > UPLOAD_MAX_BYTES:
         return {"ok": False, "error": f"файл больше {UPLOAD_MAX_BYTES // 1024 // 1024} МБ"}
     if not data:
         return {"ok": False, "error": "файл пустой"}
     # Имя чистим целиком: в заголовке может приехать и «../», и что угодно ещё.
-    safe = re.sub(r"[^\w.\- ]+", "_", Path(file.filename or "файл").name).strip() or "файл"
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    # Длину режем — иначе слишком длинное имя роняет запись с OSError и отдаёт 500.
+    safe = re.sub(r"[^\w.\- ]+", "_", Path(file.filename or "файл").name).strip()[:120] or "файл"
     target = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe}"
     target.write_bytes(data)
     _log.info("Принят файл-источник | имя={} размер={} КБ", safe, len(data) // 1024)

@@ -1007,7 +1007,11 @@ function initMcpPicker() {
 /* ─────────────────────────── Разбор трудоёмкости ─────────────────────────── */
 // Итоговая трудоёмкость — не отдельная догадка модели, а сумма часов по подзадачам:
 // цифру, которую показывают на защите, должно быть чем объяснить построчно.
-const num = (v) => String(v).replace(".", ",");
+// Числа приходят и из импортированного файла, где на их месте может оказаться
+// разметка. Приводим к числу: непригодное превращается в прочерк, а не в тег.
+const num = (v) => (Number.isFinite(Number(v)) ? String(Number(v)).replace(".", ",") : "—");
+// Вид системы нужен и как подпись, и как класс — оба места должны быть предсказуемы.
+const kindLabel = (k) => (k === "mas" ? "MAS" : "MAW");
 const hoursText = (h) => `${num(h)} чел.-ч`;
 
 // «1,1 дня», «3 дня», «5 дней», «1 день» — при дробном числе русский всегда просит
@@ -1098,7 +1102,7 @@ function loadPreset(p) {
         + (p.breakdown.model ? ` Оценил ${p.breakdown.model}.` : "")
       : p.manualNote
         || "Экспертная оценка: сколько заняла бы разработка такой же системы вручную — "
-           "постановка, подбор инструментов, написание и отладка агентов. Не замерялась.";
+           + "постановка, подбор инструментов, написание и отладка агентов. Не замерялась.";
   }
   $("stat-auto").innerHTML = `<b class="hl">${esc(p.auto)}</b>`;
   const genRow = $("stat-gen-row");           // строки может не быть в старой разметке
@@ -1164,8 +1168,17 @@ function importScenario(text) {
     alert("В файле нет конфигурации системы — импортировать нечего.");
     return;
   }
-  preset.title = preset.title || "Импортированный сценарий";
-  preset.domain = preset.domain || "сценарий";
+  // Файл пришёл извне: всё, на что интерфейс опирается при отрисовке, приводим к
+  // ожидаемому виду. Иначе отсутствующее поле роняет renderPresetList или loadPreset,
+  // а сценарий к тому моменту уже записан в localStorage — интерфейс не открывается
+  // вовсе, пока руками не вычистить данные сайта.
+  preset.title = String(preset.title || "Импортированный сценарий");
+  preset.domain = String(preset.domain || "сценарий");
+  preset.kind = preset.kind === "mas" ? "mas" : "maw";
+  preset.trace = Array.isArray(preset.trace) ? preset.trace : [];
+  preset.sources = Array.isArray(preset.sources) ? preset.sources : [];
+  preset.genSteps = Array.isArray(preset.genSteps) ? preset.genSteps : [];
+  if (preset.breakdown && !Array.isArray(preset.breakdown.subtasks)) delete preset.breakdown;
   // Идентификатор снимаем: addScenario выдаст новый. Свой оставлять нельзя —
   // при импорте того же файла дважды в списке оказались бы два сценария с одним id,
   // и правка одного меняла бы другой.
@@ -1193,40 +1206,6 @@ function showRecordedRun(preset) {
   });
 }
 
-/* ─────────────────────────── Анимация генерации ─────────────────────────── */
-function runGeneration() {
-  if (!S.preset || !S.preset.genSteps.length) return;
-  pause();
-  const token = ++S.genToken;
-  const ov = $("overlay"), list = $("gen-steps");
-  $("graph").innerHTML = "";
-  list.innerHTML = S.preset.genSteps
-    .map((s, i) => `<li data-i="${i}"><span class="num">${i + 1}</span><span>${esc(s)}</span></li>`).join("");
-  ov.classList.add("on");
-  $("btn-run").disabled = true;
-  $("btn-generate").disabled = true;
-  $("gen-title").textContent = `Мета-агент проектирует систему · ${window.META_MODEL}`;
-
-  const items = [...list.children];
-  let i = 0;
-  (function next() {
-    if (token !== S.genToken) return;
-    if (i > 0) { items[i - 1].classList.remove("act"); items[i - 1].classList.add("done"); }
-    if (i >= items.length) {
-      setTimeout(() => {
-        if (token !== S.genToken) return;
-        ov.classList.remove("on");
-        $("btn-run").disabled = !S.preset.trace.length;
-        $("btn-generate").disabled = false;
-        renderGraph(); resetRun();
-      }, 420);
-      return;
-    }
-    items[i].classList.add("act");
-    i++;
-    setTimeout(next, 820);
-  })();
-}
 
 /* ─────────────────────────── Живой режим ───────────────────────────
  * Если рядом поднят run.py, интерфейс умеет не только проигрывать
@@ -1426,45 +1405,6 @@ function stopLive() {
   setPlayIcon(false);
 }
 
-/** Мета-агент проектирует систему по тексту из поля запроса. */
-async function liveGenerate() {
-  const task = $("query").value.trim();
-  if (!task) { $("scenario-sub").textContent = "Впишите задачу в поле запроса."; return; }
-  stopLive();
-  const ov = $("overlay"), list = $("gen-steps");
-  $("graph").innerHTML = "";
-  $("btn-generate").disabled = true;
-  $("btn-run").disabled = true;
-  list.innerHTML = ["Запрос отправлен мета-агенту",
-                    "Этап 1: пул агентов и подбор инструментов",
-                    "Этап 2: сборка дерева pipeline",
-                    "Валидация конфигурации"]
-    .map((s, i) => `<li class="act" data-i="${i}"><span class="num">${i + 1}</span><span>${esc(s)}</span></li>`).join("");
-  ov.classList.add("on");
-  $("gen-title").textContent = `Мета-агент проектирует систему · ${S.models.gen}`;
-
-  try {
-    const r = await fetch("api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task, kind: S.preset ? S.preset.kind : "maw", model: S.models.gen }),
-    });
-    const data = await readJson(r, "генерация системы");
-    if (!data.ok) throw new Error(data.error || "мета-агент вернул ошибку");
-    const gen = `${String(data.gen.seconds).replace(".", ",")} с · ${(data.gen.tokens / 1000).toFixed(1).replace(".", ",")}к токенов`;
-    loadPreset({
-      id: "__live__", title: "Живая генерация", domain: "live", kind: data.kind,
-      model: data.model, query: task,
-      summary: "Систему только что спроектировал мета-агент FEDOT.MAS. Нажмите «Запустить» — она исполнится по-настоящему.",
-      manual: "—", gen, auto: "—", genSteps: [], config: data.config, trace: [],
-    });
-  } catch (err) {
-    $("scenario-sub").textContent = "Генерация не удалась: " + err.message;
-  } finally {
-    ov.classList.remove("on");
-    renderMode();
-  }
-}
 
 /** Реальный запуск текущей конфигурации с потоковыми событиями. */
 async function liveRun() {
@@ -1842,6 +1782,7 @@ async function submitNewScenario() {
       body: JSON.stringify({ text, kind, model: S.models.gen, web, tools }),
     });
     const split = await readJson(pr, "разбор постановки");
+    if (!split.ok) throw new Error(split.error || "не удалось разобрать текст");
     // Путь к прикреплённому файлу должен оказаться в запросе: иначе агент о нём
     // не узнает. Читать его будет инструмент document — тот же, что и скачанные файлы.
     if (S.files.length) {
@@ -1849,7 +1790,6 @@ async function submitNewScenario() {
         + "по указанному пути, не выдумывай содержимое):\n"
         + S.files.map((f) => `- ${f.name}: ${f.path}`).join("\n");
     }
-    if (!split.ok) throw new Error(split.error || "не удалось разобрать текст");
     ui.note("Постановка и запрос выделены");
 
     // 2. Мета-агент проектирует систему; события приходят потоком
@@ -1988,7 +1928,7 @@ function renderPresetList() {
       <span class="preset-del" data-del="${esc(p.id)}" title="Убрать сценарий из списка">✕</span>
       <div class="preset-name">${esc(p.title)}</div>
       <div class="preset-meta">
-        <span class="tag tag-${p.kind}">${p.kind.toUpperCase()}</span>
+        <span class="tag tag-${p.kind === "mas" ? "mas" : "maw"}">${esc(kindLabel(p.kind))}</span>
         <span>${esc(p.domain)}</span>
         <span>·</span>
         <span>${p.kind === "mas" ? (p.config.workers || []).length + 1 : (p.config.agents || []).length} агентов</span>
@@ -2034,6 +1974,12 @@ const LS_RUN = "fedotmas-run";
 function initPresets() {
   S.custom = loadStored(LS_CUSTOM, []) || [];
   S.hidden = loadStored(LS_HIDDEN, []) || [];
+  // В автономной копии показывать нечего: запускать она не умеет, а список берётся
+  // из localStorage, которого у нового читателя нет. Подставляем записанные прогоны,
+  // вшитые в саму копию. На живом стенде флага нет и поведение прежнее.
+  if (window.OFFLINE_DEMO && !S.custom.length && Array.isArray(window.PRESETS)) {
+    S.custom = window.PRESETS.slice();
+  }
   renderPresetList();
 }
 
@@ -2053,52 +1999,6 @@ function resetOnServerRestart(runId) {
   showEmptyState();
 }
 
-/** Проверка загруженной конфигурации по правилам моделей fedotmas. Возвращает список проблем. */
-function validateConfig(cfg) {
-  const bad = [];
-  const dup = (names, what) => {
-    const seen = new Set();
-    names.forEach((n) => { if (seen.has(n)) bad.push(`повторяется ${what}: '${n}'`); seen.add(n); });
-  };
-
-  if (cfg.coordinator) {
-    const ws = cfg.workers || [];
-    if (!cfg.coordinator.name) bad.push("у координатора нет поля name");
-    if (!ws.length) bad.push("MASConfig должен содержать хотя бы одного worker");
-    dup([cfg.coordinator.name, ...ws.map((w) => w.name)], "имя агента");
-    ws.forEach((w) => {
-      if (!w.name) bad.push("у одного из воркеров нет поля name");
-      if (!w.description) bad.push(`у '${w.name}' нет description (по нему координатор маршрутизирует)`);
-    });
-    return bad;
-  }
-
-  const agents = cfg.agents || [];
-  if (!agents.length) bad.push("MAWConfig не содержит агентов");
-  if (!cfg.pipeline) bad.push("MAWConfig не содержит pipeline");
-  dup(agents.map((a) => a.name), "имя агента");
-  dup(agents.map((a) => a.output_key).filter(Boolean), "output_key");
-  agents.forEach((a) => {
-    if (!a.name) bad.push("у одного из агентов нет поля name");
-    else if (!a.output_key) bad.push(`у '${a.name}' нет output_key`);
-  });
-
-  const names = new Set(agents.map((a) => a.name));
-  (function walk(node) {
-    if (!node || bad.length > 6) return;
-    const type = node.type || (node.agent_name ? "agent" : "sequential");
-    if (type === "agent") {
-      if (!node.agent_name) bad.push("узел типа 'agent' без agent_name");
-      else if (!names.has(node.agent_name)) bad.push(`pipeline ссылается на неизвестного агента '${node.agent_name}'`);
-    } else if (!(node.children || []).length) {
-      bad.push(`узел типа '${type}' должен содержать хотя бы один дочерний узел`);
-    } else {
-      node.children.forEach(walk);
-    }
-  })(cfg.pipeline);
-
-  return bad;
-}
 
 function presetFromConfig(cfg, name) {
   const kind = cfg.coordinator ? "mas" : "maw";

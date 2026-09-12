@@ -6,7 +6,7 @@
 
 Запуск (из корня репозитория FEDOT.MAS, где лежит .env с ключом):
 
-    .venv/bin/python /path/to/gui/record_run.py \
+    .venv/bin/python gui/tools/record_run.py \
         --task "Оцени риск отказа ..." \
         --query "Данные: ..." \
         --model openai/gpt-4.1-mini \

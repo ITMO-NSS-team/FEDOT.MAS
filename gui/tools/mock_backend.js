@@ -8,6 +8,11 @@
 (function () {
   "use strict";
 
+  // Признак автономной копии: по нему интерфейс подхватывает записанные прогоны из
+  // presets.js. На живом стенде этого флага нет, и список остаётся пустым — там
+  // показывают только то, что создали сами.
+  window.OFFLINE_DEMO = true;
+
   const MODELS = [
     { id: "openai/gpt-4.1-mini", label: "gpt-4.1-mini", open: false },
     { id: "openai/gpt-oss-120b", label: "gpt-oss-120b (открытые веса)", open: true },
@@ -142,7 +147,7 @@
       const total = subtasks.reduce((a, t) => a + t.hours, 0);
       return sleep(1400).then(() => json({ ok: true, subtasks,
         total_hours: Math.round(total * 100) / 100,
-        total_days: Math.round((total / 24) * 10) / 10,
+        total_days: Math.round((total / 8) * 10) / 10,   // восьмичасовой день, как на сервере
         model: "openai/gpt-4.1-mini" }));
     }
 

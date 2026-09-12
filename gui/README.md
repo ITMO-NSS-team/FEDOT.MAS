@@ -131,6 +131,10 @@ localhost.run меняет имя на живом соединении. Cloudfla
 | `GUI_PUBLIC_ALLOW_FS` | выкл. | вернуть наружу `document` и `download` (чтение и запись файлов хоста) |
 | `GUI_UPLOAD_MAX_MB` | `25` | предел размера файла-источника |
 | `SMITHERY_API_KEY` | пусто | ключ реестра MCP: без него найденные серверы не подключаются |
+| `GUI_ALLOWED_HOSTS` | пусто | дополнительные имена хоста, с которых принимать запросы |
+
+Переменные вспомогательных скриптов: `GUI_BASE` (адрес стенда для `preflight.py`),
+`TUNNEL`, `SERVEO_SUBDOMAIN`, `LHR_KEY`, `LHR_USER`, `PYTHON` (для `serve-public.sh`).
 | `GUI_MODEL` | `openai/gpt-4.1-mini` | модель по умолчанию |
 | `GUI_JUDGE_MODEL` | `google/gemini-2.5-pro` | модель судьи |
 | `GUI_EXTRA_TOOLS` | пусто | подключить тяжёлые инструменты: `browser-usage,youtube-transcript` |
@@ -220,7 +224,7 @@ gui/
 │   ├── infra.py          проверки SearXNG и Lightpanda
 │   └── llm.py            прямой клиент провайдера
 ├── static/               интерфейс: index.html, app.js, styles.css, presets.js
-├── tools/                preflight, check_presets, record_run, build_offline
+├── tools/                preflight, check_presets, record_run, build_offline, mock_backend
 ├── example_config.json   пример MAWConfig от мета-агента
 └── .gitignore            токен доступа, ключи, сборки и журналы
 ```
@@ -252,6 +256,7 @@ gui/
 | `POST /api/generate`, `POST /api/judge` | то же, что потоковые версии, но одним ответом |
 | `POST /api/effort` | общая оценка трудоёмкости без разбора на подзадачи |
 | `POST /api/export-presets` | сохранить сценарии в файл (только локально) |
+| `POST /api/upload` | принять файл-источник и вернуть путь для агента |
 
 События потока: `agent_start`, `agent_done`, `tool`, `tool_result`, `text`, `tokens`,
 `done`, `error`. Раз в `GUI_SSE_HEARTBEAT` секунд уходит строка-пульс `: ping` —
@@ -268,8 +273,12 @@ python gui/tools/build_offline.py      # автономная HTML-копия с
 ```
 
 Автономная копия открывается двойным кликом на любой машине и показывает интерфейс с
-записанными прогонами. По-настоящему она ничего не исполняет — FEDOT.MAS живёт в
-Python, а не в браузере; на странице это помечено плашкой.
+записанными прогонами из `static/presets.js`. По-настоящему она ничего не исполняет —
+FEDOT.MAS живёт в Python, а не в браузере; на странице это помечено плашкой.
+
+Что уходит в выгруженный сценарий, стоит знать до пересылки: там полные входы и
+выходы агентов, а если источником был файл — путь к нему на вашей машине и всё, что
+агент из него прочитал.
 
 ## Если что-то не работает
 

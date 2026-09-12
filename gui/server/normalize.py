@@ -38,32 +38,67 @@ def _valid_name(name: str) -> str:
     return cleaned if cleaned.isidentifier() else "agent"
 
 
-def _mcp_registry_for(tools: list[str], custom: list | None) -> dict | list[str]:
+# Адреса, на которые допустимо отправлять ключ реестра. Реестр отдаёт развёрнутые
+# серверы на двух доменах; всё остальное — чужое, ключ туда не уходит.
+_SMITHERY_HOSTS = (".smithery.ai", ".run.tools")
+
+
+def _is_smithery_url(url: str) -> bool:
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    return host.endswith(_SMITHERY_HOSTS)
+
+
+def _mcp_registry_for(tools: list[str], custom: list | None) -> tuple:
     """Собирает реестр для FEDOT.MAS: встроенные серверы плюс свои по ссылке.
 
     resolve_mcp_registry принимает готовый словарь, а HttpMCPServer — штатный тип
     самого FEDOT.MAS, поэтому свой сервер подключается без обходных путей.
+
+    Возвращает пару (реестр, имена своих серверов). Имена нужны вызывающему:
+    sanitize_config вычищает у агентов всё, чего нет в SAFE_TOOLS, и без этого
+    списка подключённый сервер до агента не доходил — он оставался в пуле без дела.
     """
     if not custom:
-        return tools
+        return tools, []
     registry = dict(resolve_mcp_registry(tools) or {})
+    added: list[str] = []
     for item in custom:
         name = _valid_name(item.name)
+        # Имя своего сервера не должно перебивать встроенный: иначе запрос вида
+        # {"name": "sandbox-light", "url": "https://чужой/mcp"} подменял бы песочницу
+        # чужим адресом — агент получал бы оттуда любые «результаты расчёта».
+        if name in registry:
+            name = _valid_name(f"custom_{name}")
+            while name in registry:
+                name += "_"
+            _log.warning("Имя своего MCP-сервера занято встроенным, переименован в {}", name)
         headers = dict(item.headers or {})
-        # Серверы из реестра требуют ключ Smithery. Он живёт на сервере и в браузер
-        # не уходит, поэтому подставляем его здесь, а не принимаем от клиента.
+        # Ключ реестра подставляем только на адреса самого реестра. Раньше признак
+        # «source: smithery» приходил от клиента вместе с адресом — и любой запрос
+        # заставлял сервер отправить ключ владельца куда угодно.
         if getattr(item, "source", None) == "smithery" and SMITHERY_API_KEY:
-            headers.setdefault("Authorization", f"Bearer {SMITHERY_API_KEY}")
+            if _is_smithery_url(item.url):
+                headers.setdefault("Authorization", f"Bearer {SMITHERY_API_KEY}")
+            else:
+                _log.warning("Адрес {} не принадлежит реестру — ключ не подставлен", item.url)
         registry[name] = HttpMCPServer(
             url=item.url, headers=headers,
             description=f"Свой MCP-сервер: {item.url}", tags=("custom",))
+        added.append(name)
         _log.info("Подключён свой MCP-сервер | имя={} адрес={} ключ={}",
                   name, item.url, "есть" if headers.get("Authorization") else "нет")
-    return registry
+    return registry, added
 
 
-def sanitize_config(config, kind: str):
-    """Приводит имена агентов и ключи состояния к виду, который принимает ADK."""
+def sanitize_config(config, kind: str, extra_tools: list[str] | None = None):
+    """Приводит имена агентов и ключи состояния к виду, который принимает ADK.
+
+    *extra_tools* — имена своих MCP-серверов: они разрешены наравне со встроенными,
+    иначе чистка неизвестных инструментов выбросила бы их из агентов.
+    """
+    allowed_tools = set(SAFE_TOOLS) | set(extra_tools or [])
     agents = list(getattr(config, "agents", None) or ([config.coordinator] + list(config.workers)))
     renames: dict[str, str] = {}
     keys: dict[str, str] = {}
@@ -129,10 +164,10 @@ def sanitize_config(config, kind: str):
 
     dropped: dict[str, list[str]] = {}
     for agent in agents:                      # ссылка на неподнятый сервер роняет сборку целиком
-        unknown = [t for t in (agent.tools or []) if t not in SAFE_TOOLS]
+        unknown = [t for t in (agent.tools or []) if t not in allowed_tools]
         if unknown:
             dropped[agent.name] = unknown
-            agent.tools = [t for t in agent.tools if t in SAFE_TOOLS]
+            agent.tools = [t for t in agent.tools if t in allowed_tools]
 
     if renames or keys:
         _log.info("Имена приведены к идентификаторам | агенты={} ключи={}", renames, keys)

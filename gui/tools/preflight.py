@@ -17,7 +17,7 @@ import urllib.request
 
 # Порт стенда тот же, что у run.py; GUI_PORT позволяет проверить и публичную копию
 BASE = os.getenv("GUI_BASE") or f"http://localhost:{os.getenv('GUI_PORT', '4173')}"
-SEARX = "http://localhost:18888"
+SEARX = os.getenv("SEARXNG_URL", "http://localhost:18888")   # тот же адрес, что у сервера
 OPEN_METEO = ("https://archive-api.open-meteo.com/v1/archive?latitude=59.94&longitude=30.31"
               "&start_date=2024-01-01&end_date=2024-01-03&daily=temperature_2m_mean"
               "&timezone=Europe%2FMoscow&format=csv")
