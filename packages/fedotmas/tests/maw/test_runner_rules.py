@@ -8,16 +8,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import tenacity
-from tenacity import RetryError
-
 from fedotmas.core.runner import (
     SEARCH_LIMIT_RECOVERY_PROMPT,
+    PipelineExecutionError,
     PipelineResult,
     _enter_finalize_mode,
     _is_search_limit_exceeded,
     run_pipeline,
 )
 from fedotmas.plugins import WebSearchLimitExceeded, WebSearchLimitPlugin
+from tenacity import RetryError
 
 from .conftest import FakeActions, FakeEvent, FakeSession, FakeUsageMetadata
 
@@ -148,6 +148,27 @@ class TestLlmErrorRaises:
                     "hello",
                     session_service=mock_session_service,
                 )
+
+    @pytest.mark.asyncio
+    async def test_error_retains_prior_token_usage(self, mock_session_service):
+        events = [
+            FakeEvent(
+                usage_metadata=FakeUsageMetadata(
+                    prompt_token_count=10, candidates_token_count=5
+                )
+            ),
+            FakeEvent(error_code="RATE_LIMIT", error_message="Too many requests"),
+        ]
+        async with _patch_runner(events):
+            with pytest.raises(PipelineExecutionError, match="RATE_LIMIT") as error:
+                await run_pipeline(
+                    _fake_agent(),
+                    "hello",
+                    session_service=mock_session_service,
+                )
+
+        assert error.value.result.total_prompt_tokens == 10
+        assert error.value.result.total_completion_tokens == 5
 
 
 class TestMaxTokensIsNotFatal:
@@ -513,6 +534,11 @@ class TestExecutionTimeoutSalvage:
         mock_session_service.get_session = AsyncMock(return_value=partial)
 
         async def hanging_run_async(**_kwargs):
+            yield FakeEvent(
+                usage_metadata=FakeUsageMetadata(
+                    prompt_token_count=7, candidates_token_count=3
+                )
+            )
             await asyncio.sleep(5)
             yield  # pragma: no cover
 
@@ -542,6 +568,8 @@ class TestExecutionTimeoutSalvage:
 
         assert isinstance(result, PipelineResult)
         assert result.state["sub_answer"] == "42"
+        assert result.total_prompt_tokens == 7
+        assert result.total_completion_tokens == 3
 
 
 class TestReasoningOnlyTurnCountsAsEmpty:

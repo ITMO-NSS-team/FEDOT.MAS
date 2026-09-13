@@ -47,6 +47,22 @@ class PipelineResult:
     truncated_agents: list[str] = field(default_factory=list)
 
 
+class PipelineExecutionError(RuntimeError):
+    """Pipeline failure that retains state and token usage seen before it."""
+
+    def __init__(self, cause: Exception, result: PipelineResult) -> None:
+        super().__init__(str(cause))
+        self.result = result
+
+
+@dataclass
+class _TokenUsage:
+    """Mutable counters so cancellation cannot discard consumed event usage."""
+
+    prompt: int = 0
+    completion: int = 0
+
+
 async def run_pipeline(
     agent_or_app: BaseAgent | App,
     user_query: str,
@@ -118,10 +134,10 @@ async def run_pipeline(
 
     root_name = app.root_agent.name  # ty: ignore[unresolved-attribute]
     _log.info("Pipeline run started | pipeline={}", root_name)
-    total_prompt = 0
-    total_completion = 0
+    usage = _TokenUsage()
     truncated_agents: list[str] = []
     pipeline_start = time.monotonic()
+    failure: Exception | None = None
 
     async with Runner(
         app=app,
@@ -129,63 +145,64 @@ async def run_pipeline(
         memory_service=memory_service,
     ) as runner:
         try:
-            total_prompt, total_completion = await _consume_with_timeout(
-                runner=runner,
-                user_id=user_id,
-                session_id=session.id,
-                message=message,
-                total_prompt=total_prompt,
-                total_completion=total_completion,
-                truncated_agents=truncated_agents,
-                timeout=timeout,
-            )
-        except (asyncio.TimeoutError, TimeoutError):
-            _log.warning(
-                "Pipeline execution exceeded {}s budget; salvaging partial state",
-                timeout,
-            )
-        except BaseException as exc:
-            if not _is_search_limit_exceeded(exc):
-                raise
-
-            _log.warning(
-                "Search limit exceeded; requesting final answer from current evidence"
-            )
-            # Disable web/search/browser tools for the finalization turn so the
-            # agent cannot re-trigger the budget (which would re-raise uncaught)
-            # or loop on error results burning the remaining time budget.
-            _enter_finalize_mode(app.plugins)
-            recovery_message = types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=SEARCH_LIMIT_RECOVERY_PROMPT)],
-            )
             try:
-                total_prompt, total_completion = await _consume_with_timeout(
+                await _consume_with_timeout(
                     runner=runner,
                     user_id=user_id,
                     session_id=session.id,
-                    message=recovery_message,
-                    total_prompt=total_prompt,
-                    total_completion=total_completion,
+                    message=message,
+                    usage=usage,
                     truncated_agents=truncated_agents,
                     timeout=timeout,
                 )
-            except (asyncio.TimeoutError, TimeoutError):
-                _log.warning("Finalization turn timed out; salvaging partial state")
-            except BaseException as exc2:
-                if _is_search_limit_exceeded(exc2):
-                    _log.warning(
-                        "Finalization turn still hit budget; salvaging partial state"
-                    )
-                else:
+            except TimeoutError:
+                _log.warning(
+                    "Pipeline execution exceeded {}s budget; salvaging partial state",
+                    timeout,
+                )
+            except BaseException as exc:
+                if not _is_search_limit_exceeded(exc):
                     raise
+
+                _log.warning(
+                    "Search limit exceeded; requesting final answer from current evidence"
+                )
+                # Disable web/search/browser tools for the finalization turn so the
+                # agent cannot re-trigger the budget (which would re-raise uncaught)
+                # or loop on error results burning the remaining time budget.
+                _enter_finalize_mode(app.plugins)
+                recovery_message = types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=SEARCH_LIMIT_RECOVERY_PROMPT)],
+                )
+                try:
+                    await _consume_with_timeout(
+                        runner=runner,
+                        user_id=user_id,
+                        session_id=session.id,
+                        message=recovery_message,
+                        usage=usage,
+                        truncated_agents=truncated_agents,
+                        timeout=timeout,
+                    )
+                except TimeoutError:
+                    _log.warning("Finalization turn timed out; salvaging partial state")
+                except BaseException as exc2:
+                    if _is_search_limit_exceeded(exc2):
+                        _log.warning(
+                            "Finalization turn still hit budget; salvaging partial state"
+                        )
+                    else:
+                        raise
+        except Exception as exc:  # noqa: BLE001 - retain partial accounting for any agent failure
+            failure = exc
 
     total_elapsed = time.monotonic() - pipeline_start
     _log.info(
         "Pipeline complete | total_elapsed={:.1f}s total_prompt={} total_completion={}",
         total_elapsed,
-        total_prompt,
-        total_completion,
+        usage.prompt,
+        usage.completion,
     )
 
     # Re-fetch the session to get the fully-updated state.
@@ -198,13 +215,16 @@ async def run_pipeline(
         raise RuntimeError(
             f"Session '{session.id}' lost after pipeline execution — results unavailable"
         )
-    return PipelineResult(
+    result = PipelineResult(
         state=dict(final_session.state),
-        total_prompt_tokens=total_prompt,
-        total_completion_tokens=total_completion,
+        total_prompt_tokens=usage.prompt,
+        total_completion_tokens=usage.completion,
         elapsed=total_elapsed,
         truncated_agents=truncated_agents,
     )
+    if failure is not None:
+        raise PipelineExecutionError(failure, result) from failure
+    return result
 
 
 async def _consume_with_timeout(
@@ -213,11 +233,10 @@ async def _consume_with_timeout(
     user_id: str,
     session_id: str,
     message: types.Content,
-    total_prompt: int,
-    total_completion: int,
+    usage: _TokenUsage,
     truncated_agents: list[str],
     timeout: float | None,
-) -> tuple[int, int]:
+) -> None:
     """Consume runner events, optionally bounded by *timeout* seconds.
 
     On timeout the consuming coroutine is cancelled (stopping the pipeline) and
@@ -229,13 +248,13 @@ async def _consume_with_timeout(
         user_id=user_id,
         session_id=session_id,
         message=message,
-        total_prompt=total_prompt,
-        total_completion=total_completion,
+        usage=usage,
         truncated_agents=truncated_agents,
     )
     if timeout is None or timeout <= 0:
-        return await coro
-    return await asyncio.wait_for(coro, timeout=timeout)
+        await coro
+    else:
+        await asyncio.wait_for(coro, timeout=timeout)
 
 
 async def _consume_runner_events(
@@ -244,10 +263,9 @@ async def _consume_runner_events(
     user_id: str,
     session_id: str,
     message: types.Content,
-    total_prompt: int,
-    total_completion: int,
+    usage: _TokenUsage,
     truncated_agents: list[str],
-) -> tuple[int, int]:
+) -> None:
     async for event in runner.run_async(
         user_id=user_id,
         session_id=session_id,
@@ -259,8 +277,8 @@ async def _consume_runner_events(
         # Token accumulation (business logic — stays in runner)
         if event.usage_metadata:
             um = event.usage_metadata
-            total_prompt += um.prompt_token_count or 0
-            total_completion += um.candidates_token_count or 0
+            usage.prompt += um.prompt_token_count or 0
+            usage.completion += um.candidates_token_count or 0
 
         # Error handling (control flow — stays in runner)
         if event.error_code:
@@ -309,8 +327,6 @@ async def _consume_runner_events(
                 f"Agent '{event.author}' failed with error {event.error_code}: "
                 f"{event.error_message}"
             )
-
-    return total_prompt, total_completion
 
 
 def _record_empty_step(truncated_agents: list[str], author: str | None) -> None:
