@@ -5,13 +5,17 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
-from pydantic import BaseModel
-
 from fedotmas._settings import ModelConfig, resolve_model_config
-from fedotmas.common.llm import _ERROR_PAYLOAD_LEN, _ProxyClient, make_llm
+from fedotmas.common.llm import (
+    _DEFAULT_MAX_OUTPUT_TOKENS,
+    _ERROR_PAYLOAD_LEN,
+    _ProxyClient,
+    make_llm,
+)
 from fedotmas.mas.builder import build_routing_system
 from fedotmas.mas.models import MASConfig
+from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
+from pydantic import BaseModel
 
 
 class _ErrorResponse(BaseModel):
@@ -47,6 +51,21 @@ def _response(finish_reason: str = "stop"):
                 "index": 0,
                 "message": {"role": "assistant", "content": "done"},
                 "finish_reason": finish_reason,
+            }
+        ],
+    }
+    return response
+
+
+def _tool_response(arguments: str):
+    response = _response("tool_calls")
+    response.model_dump.return_value["choices"][0]["message"] = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "example_tool", "arguments": arguments},
             }
         ],
     }
@@ -299,3 +318,48 @@ class TestProxyClientErrors:
             + _ERROR_PAYLOAD_LEN
             + len("... (truncated)")
         )
+
+
+class TestProxyClientToolArgumentValidation:
+    async def test_retries_malformed_tool_arguments_then_returns_valid_response(self):
+        client = _client_with_response(_tool_response('{"broken":'))
+        valid = _tool_response('{"value": 1}')
+        client._client.chat.completions.create.side_effect = [
+            _tool_response('{"broken":'),
+            valid,
+        ]
+
+        result = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert (
+            result.choices[0].message.tool_calls[0].function.arguments == '{"value": 1}'
+        )
+        assert client._client.chat.completions.create.await_count == 2
+        retry = client._client.chat.completions.create.await_args_list[1].kwargs
+        assert retry["messages"][-1]["content"].startswith("The previous tool-call")
+        assert retry["max_tokens"] == _DEFAULT_MAX_OUTPUT_TOKENS
+
+    async def test_repeated_malformed_tool_arguments_fail_clearly(self):
+        client = _client_with_response(_tool_response("{"))
+        client._client.chat.completions.create.side_effect = [_tool_response("{")] * 3
+
+        with pytest.raises(RuntimeError, match="malformed JSON tool arguments"):
+            await client.acompletion(
+                "openai/test", [{"role": "user", "content": "x"}], []
+            )
+
+        assert client._client.chat.completions.create.await_count == 3
+
+    async def test_valid_tool_arguments_are_returned_unchanged(self):
+        client = _client_with_response(_tool_response('{"value": 1}'))
+
+        result = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert (
+            result.choices[0].message.tool_calls[0].function.arguments == '{"value": 1}'
+        )
+        assert client._client.chat.completions.create.await_count == 1
