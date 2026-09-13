@@ -11,9 +11,8 @@ outbound network disabled and uploads only:
 It exposes persistent Python execution and validated prediction export. It has
 no tool for reading or uploading arbitrary host files.
 
-Run the regenerated experiment:
+Generate current structural-review configurations:
 
 ```bash
-uv sync --directory mcp-servers/sampo-python
-uv run python scripts/run_sampo_mas_semantic_experiment.py
+uv run python scripts/run_sampo_phase_4_1.py
 ```

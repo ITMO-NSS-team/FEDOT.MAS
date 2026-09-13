@@ -84,11 +84,14 @@ def _invalid_tool_argument_names(response: Any) -> list[str]:
         if hasattr(response, "model_dump")
         else _json_value(response)
     )
-    choices = payload.get("choices", []) if isinstance(payload, Mapping) else []
+    choices = payload.get("choices") if isinstance(payload, Mapping) else None
+    choices = [] if choices is None else choices
     invalid = []
     for choice in choices:
-        message = choice.get("message", {}) if isinstance(choice, Mapping) else {}
-        calls = message.get("tool_calls", []) if isinstance(message, Mapping) else []
+        message = choice.get("message") if isinstance(choice, Mapping) else None
+        message = {} if message is None else message
+        calls = message.get("tool_calls") if isinstance(message, Mapping) else None
+        calls = [] if calls is None else calls
         for call in calls:
             function = call.get("function", {}) if isinstance(call, Mapping) else {}
             arguments = (
@@ -101,6 +104,26 @@ def _invalid_tool_argument_names(response: Any) -> list[str]:
             except (TypeError, json.JSONDecodeError):
                 invalid.append(str(function.get("name", "<unnamed>")))
     return invalid
+
+
+def _response_shape(response: Any) -> tuple[Any, int, int]:
+    """Return finish reason, tool-call count, and text-content length for logging."""
+    payload = (
+        response.model_dump()
+        if hasattr(response, "model_dump")
+        else _json_value(response)
+    )
+    choices = payload.get("choices") if isinstance(payload, Mapping) else None
+    choice = choices[0] if choices else {}
+    message = choice.get("message") if isinstance(choice, Mapping) else None
+    message = {} if message is None else message
+    calls = message.get("tool_calls") if isinstance(message, Mapping) else None
+    content = message.get("content") if isinstance(message, Mapping) else None
+    return (
+        choice.get("finish_reason") if isinstance(choice, Mapping) else None,
+        len(calls) if isinstance(calls, list) else 0,
+        len(content) if isinstance(content, str) else 0,
+    )
 
 
 class _StreamAdapter:
@@ -163,6 +186,13 @@ class _ProxyClient:
         if stream:
             return _StreamAdapter(resp)
         for attempt in range(_MAX_TOOL_ARGUMENT_RETRIES + 1):
+            finish_reason, tool_call_count, content_length = _response_shape(resp)
+            _log.debug(
+                "OpenAI-compatible response | finish_reason={} tool_calls={} content_chars={}",
+                finish_reason,
+                tool_call_count,
+                content_length,
+            )
             invalid = _invalid_tool_argument_names(resp)
             if not invalid:
                 break
