@@ -53,7 +53,13 @@ if PUBLIC_MODE:
     os.environ.pop("OPENAI_API_KEY", None)
 
 DEFAULT_MODEL = os.getenv("GUI_MODEL", "openai/gpt-4.1-mini")
-JUDGE_MODEL = os.getenv("GUI_JUDGE_MODEL", "google/gemini-2.5-pro")
+# Судья обязан считать вызовом песочницы, а gemini-2.5-pro этого не умеет: решив вызвать
+# execute с кодом, она выдаёт испорченный вызов — провайдер отвечает MALFORMED_FUNCTION_CALL,
+# либо ход кончается одними размышлениями без текста. Схема инструмента ни при чём: с одним
+# полем code то же самое, работает только принудительный вызов. Каждый вердикт уходил к
+# запасной модели через две пустые попытки (~40 с). Gemini 3 вызывает песочницу штатно —
+# gemini-3.8-flash проверена на тех же ответах: песочница вызвана, вердикт верный.
+JUDGE_MODEL = os.getenv("GUI_JUDGE_MODEL", "google/gemini-3.8-flash")
 
 MODELS = [
     {"id": "openai/gpt-4.1-mini", "label": "gpt-4.1-mini", "open": False},

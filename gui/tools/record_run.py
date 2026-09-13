@@ -24,7 +24,9 @@ import asyncio
 import json
 import os
 import re
+import sys
 import time
+from pathlib import Path
 from typing import Optional
 
 from google.adk.agents.base_agent import BaseAgent
@@ -38,6 +40,10 @@ os.environ.setdefault("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", "8000")
 
 from fedotmas import MAS, MAW
 from fedotmas.plugins import LoggingPlugin
+
+# Перевод имён агентов MAS общий с сервером стенда: gui/ нужен в пути импорта
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from server.agent_names import AgentNames, latinize_mas
 
 WORKFLOW_PREFIXES = ("seq_", "par_", "loop_")
 
@@ -314,6 +320,14 @@ async def main() -> None:
 
     gen_t0 = time.monotonic()
     config = sanitize(await system.generate_config(task), args.kind)
+    # Мета-агент MAS вписывает координатору исполнителей в «инструменты», а это не MCP-серверы:
+    # сборка падала на Unknown MCP server. Сервер стенда такие ссылки чистит так же.
+    for agent in (list(getattr(config, "agents", None) or [])
+                  or [config.coordinator] + list(config.workers)):
+        unknown = [t for t in (agent.tools or []) if t not in args.tools]
+        if unknown:
+            print(f"У агента {agent.name} убраны неизвестные инструменты: {unknown}")
+            agent.tools = [t for t in agent.tools if t in args.tools]
     if args.max_output_tokens and hasattr(config, "agents"):
         for agent in config.agents:
             agent.max_output_tokens = args.max_output_tokens
@@ -324,9 +338,28 @@ async def main() -> None:
     print(f"Генерация: {gen_elapsed:.1f} с, {gen_tokens} токенов")
 
     agents_all = list(getattr(config, "agents", None) or ([config.coordinator] + list(config.workers)))
+    run_config, names = config, AgentNames()
+    if args.kind == "mas":
+        # Исполнители MAS становятся инструментами координатора, а OpenAI не принимает
+        # кириллицу в имени инструмента: запускаем копию с латинскими именами.
+        run_config = config.model_copy(deep=True)
+        names = latinize_mas(run_config)
+        for worker, run_worker in zip(config.workers, run_config.workers):
+            worker.output_key = run_worker.output_key     # «<имя>_output» по исходному имени
     outputs_by_agent = {a.name: getattr(a, "output_key", None) for a in agents_all}
-    result = await system.build_and_run(config, args.query)
+    result = await system.build_and_run(run_config, args.query)
     state = dict(result if isinstance(result, dict) else getattr(result, "state", {}))
+    if names.shown:
+        # В сценарий — исходные имена; вызов исполнителя MAS для интерфейса — передача хода
+        def call(tool: str) -> str:
+            return "transfer_to_agent" if names.is_agent(tool) else tool
+
+        state = {k: names.text(v) if isinstance(v, str) else v for k, v in state.items()}
+        for step in tracer.steps:
+            step["agent"] = names.name(step["agent"])
+            step["tools"] = [call(t) for t in step["tools"]]
+        tracer._tools = {names.name(a): [call(t) for t in calls] for a, calls in tracer._tools.items()}
+        tracer._tokens = {names.name(a): n for a, n in tracer._tokens.items()}
     last = system.last_result
     totals = {
         "prompt": getattr(last, "total_prompt_tokens", 0),

@@ -28,6 +28,7 @@ from fedotmas.mcp import get_server_descriptions, resolve_mcp_registry
 from fedotmas.plugins import LoggingPlugin, UnknownToolRecoveryPlugin
 
 from . import security
+from .agent_names import AgentNames, latinize_mas
 from .config import (AGENT_MAX_OUTPUT_TOKENS, DEFAULT_MODEL, GENERATE_ATTEMPTS, JUDGE_MODEL, MODELS,
                      PUBLIC_MODE, RU_HINT, SAFE_TOOLS, SCRAPING, SERVER_RUN_ID,
                      SMITHERY_API_KEY, SMITHERY_DETAIL, SMITHERY_SEARCH, STATIC_DIR,
@@ -164,16 +165,20 @@ async def run(body: RunIn) -> StreamingResponse:
     model = body.model or DEFAULT_MODEL
     servers, custom_names = _mcp_registry_for(tools, body.custom_mcp)
     queue: asyncio.Queue = asyncio.Queue()
-    stream = StreamPlugin(queue)
     is_mas = body.kind == "mas"
     cls = MAS if is_mas else MAW
+    config = MASConfig(**body.config) if is_mas else MAWConfig(**body.config)
+    config = sanitize_config(config, body.kind, custom_names)   # может прийти из файла
+    # Исполнители MAS становятся инструментами координатора, а OpenAI не принимает
+    # кириллицу в имени инструмента. Сценарий и экран сохраняют русские имена: под
+    # латинскими идёт только запуск, поток переводит их обратно.
+    names = latinize_mas(config) if is_mas else AgentNames()
+    stream = StreamPlugin(queue, names)
     # Свой список плагинов ЗАМЕНЯЕТ умолчания FEDOT.MAS, а среди них есть
     # UnknownToolRecoveryPlugin: без него выдуманное моделью имя инструмента роняет
     # весь прогон вместе с результатами уже отработавших шагов.
     system = cls(worker_models=[model], mcp_servers=servers,
                  plugins=[LoggingPlugin(), UnknownToolRecoveryPlugin(), stream])
-    config = MASConfig(**body.config) if is_mas else MAWConfig(**body.config)
-    config = sanitize_config(config, body.kind, custom_names)   # может прийти из файла
 
     # У агента в конфигурации своя модель, и она сильнее worker_models: без явной
     # перезаписи выбор модели запуска не влиял бы на сохранённые сценарии.
@@ -196,10 +201,11 @@ async def run(body: RunIn) -> StreamingResponse:
                 "tokens": (getattr(last, "total_prompt_tokens", 0) or 0)
                 + (getattr(last, "total_completion_tokens", 0) or 0),
                 # ответ уходит в сравнение и судье целиком: обрезка искажала бы оценку
-                "state": {k: str(v)[:40000] for k, v in state.items() if k != "user_query"},
+                "state": {k: names.text(str(v)[:40000]) for k, v in state.items()
+                          if k != "user_query"},
             })
         except Exception as exc:
-            queue.put_nowait({"type": "error", "error": f"{type(exc).__name__}: {exc}"})
+            queue.put_nowait({"type": "error", "error": names.text(f"{type(exc).__name__}: {exc}")})
         finally:
             queue.put_nowait(None)
     return sse_stream(queue, execute)

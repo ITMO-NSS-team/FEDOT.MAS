@@ -122,7 +122,8 @@ async def _ask_judge(model: str, prompt: str, content: str = "",
             messages=[{"role": "user", "content": f"{prompt}\n\n{content}"}])
         text = (resp.choices[0].message.content or "").strip()
     if not text:
-        # Рассуждающие модели иногда тратят весь бюджет вывода на размышления и отдают пустоту.
+        # Так выглядит модель, которая не смогла вызвать песочницу: ход кончился одними
+        # размышлениями — без текста и без вызова (gemini-2.5-pro, см. JUDGE_MODEL в config).
         _log.warning("Судья вернул пустой ответ | модель={}", model)
     return text
 

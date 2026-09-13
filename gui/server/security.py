@@ -78,8 +78,12 @@ def install(app: FastAPI) -> None:
         if request.method != "GET":
             raw_host = (request.headers.get("host") or "").strip().lower()
             # У IPv6 адрес в скобках, и разрезать по первому двоеточию нельзя
-            host = (raw_host.rsplit("]", 1)[0] + "]" if raw_host.startswith("[")
-                    else raw_host.split(":")[0])
+            if raw_host.startswith("["):
+                host, _, port_text = raw_host.partition("]")
+                host, port_text = host + "]", port_text.lstrip(":")
+            else:
+                host, _, port_text = raw_host.partition(":")
+            host_port = int(port_text) if port_text.isdigit() else None
             if host and not _host_allowed(host):
                 _log.warning("Запрос с неожиданным Host отклонён | host={}", host)
                 return JSONResponse({"error": "неожиданное имя хоста"}, status_code=403)
@@ -91,11 +95,21 @@ def install(app: FastAPI) -> None:
                 # у него не было имени хоста, пустое имя считалось своим — и заслон
                 # обходился именно тем способом, от которого он и ставился.
                 try:
-                    origin_host = (urlparse(origin).hostname or "").lower()
-                except ValueError:
-                    origin_host = ""
+                    parsed = urlparse(origin)
+                    origin_host, origin_port = (parsed.hostname or "").lower(), parsed.port
+                except ValueError:                  # в том числе порт вне диапазона
+                    origin_host, origin_port = "", None
                 if not origin_host or not _host_allowed(origin_host):
                     _log.warning("Межсайтовый запрос отклонён | origin={}", origin)
+                    return JSONResponse({"error": "запрос пришёл со стороннего сайта"},
+                                        status_code=403)
+                # Имя своё, а порт другой — это другой сайт: страница Jupyter или чужого
+                # dev-сервера на localhost:8888. Проверено запросом: без этой сверки она
+                # запускала агентов, которым в локальном режиме доступны файлы машины.
+                # В публичном режиме такой запрос и так остановит токен доступа.
+                if (not PUBLIC_MODE and origin_host.rstrip(".") in _LOCAL_HOSTS
+                        and origin_port != host_port):
+                    _log.warning("Запрос со страницы на другом порту отклонён | origin={}", origin)
                     return JSONResponse({"error": "запрос пришёл со стороннего сайта"},
                                         status_code=403)
         if PUBLIC_MODE and path not in OPEN_API:
