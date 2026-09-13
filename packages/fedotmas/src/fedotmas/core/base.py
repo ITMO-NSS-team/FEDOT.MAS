@@ -10,9 +10,9 @@ from google.adk.memory import BaseMemoryService
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService
 
-from fedotmas.common.logging import get_logger, setup_logging
 from fedotmas._settings import ModelConfig, resolve_model_config
-from fedotmas.core.runner import PipelineResult, run_pipeline
+from fedotmas.common.logging import get_logger, setup_logging
+from fedotmas.core.runner import PipelineExecutionError, PipelineResult, run_pipeline
 from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
 from fedotmas.meta._result import MetaAgentResult
 from fedotmas.plugins import (
@@ -221,14 +221,18 @@ class BaseMAS(ABC, Generic[ConfigT]):
         """
         app = self.build_app(config)
         _log.info("Running pipeline")
-        self._last_result = await run_pipeline(
-            app,
-            user_query,
-            session_service=self._session_service,
-            memory_service=self._memory_service,
-            initial_state=initial_state,
-            timeout=timeout,
-        )
+        try:
+            self._last_result = await run_pipeline(
+                app,
+                user_query,
+                session_service=self._session_service,
+                memory_service=self._memory_service,
+                initial_state=initial_state,
+                timeout=timeout,
+            )
+        except PipelineExecutionError as error:
+            self._last_result = error.result
+            raise
         return self._last_result.state
 
     def serve(

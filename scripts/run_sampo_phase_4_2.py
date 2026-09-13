@@ -14,19 +14,22 @@ from typing import Any
 
 from fedotmas import MAS
 from fedotmas.mas.models import MASConfig
+from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
+from google.adk.events import Event
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.plugins import BasePlugin
+from google.adk.runners import InvocationContext
 from sampo_evaluation import evaluate_predictions
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (
     ROOT
     / "artifacts/sampo_phase_4_1/structural_review"
-    / "batch_6e3973784dc64305b1fd051a90a00f35/config_01"
+    / "batch_31cf5e22648046bebf71ff3b866cd9c3/config_01"
 )
-OUT = ROOT / "artifacts/sampo_phase_4_2" / "review_1_eab887787bf043e995852c6b9089c3b7"
+OUT = ROOT / "artifacts/sampo_phase_4_3" / "review_1_df19bf24d7ea49d196725e942c0930df"
 
 
 class Telemetry(BasePlugin):
@@ -36,6 +39,14 @@ class Telemetry(BasePlugin):
         super().__init__(name="phase_4_2_telemetry")
         self._starts: dict[str, list[float]] = {}
         self.calls: list[dict[str, Any]] = []
+        self.agents: list[str] = []
+        self.tools: list[dict[str, str]] = []
+
+    async def before_agent_callback(
+        self, *, agent: BaseAgent, callback_context: CallbackContext
+    ) -> None:
+        del callback_context
+        self.agents.append(agent.name)
 
     async def before_model_callback(
         self, *, callback_context: CallbackContext, llm_request: LlmRequest
@@ -51,6 +62,7 @@ class Telemetry(BasePlugin):
         starts = self._starts.get(callback_context.agent_name, [])
         started = starts.pop() if starts else time.perf_counter()
         usage = llm_response.usage_metadata
+        parts = (llm_response.content.parts if llm_response.content else None) or []
         self.calls.append(
             {
                 "call_index": len(self.calls) + 1,
@@ -59,8 +71,21 @@ class Telemetry(BasePlugin):
                 "completion_tokens": (usage.candidates_token_count if usage else 0)
                 or 0,
                 "runtime_seconds": time.perf_counter() - started,
+                "finish_reason": str(llm_response.finish_reason),
+                "tool_call_count": sum(1 for part in parts if part.function_call),
+                "content_chars": sum(len(part.text or "") for part in parts),
             }
         )
+
+    async def on_event_callback(
+        self, *, invocation_context: InvocationContext, event: Event
+    ) -> None:
+        del invocation_context
+        if not event.partial:
+            self.tools.extend(
+                {"agent": event.author or "unknown", "tool": call.name}
+                for call in event.get_function_calls()
+            )
 
 
 def _rows(path: Path) -> list[dict[str, str]]:
@@ -168,6 +193,8 @@ async def main() -> None:
                     "total_completion_tokens": sum(
                         call["completion_tokens"] for call in telemetry.calls
                     ),
+                    "agent_invocations": telemetry.agents,
+                    "tool_calls": telemetry.tools,
                 },
                 indent=2,
             )
