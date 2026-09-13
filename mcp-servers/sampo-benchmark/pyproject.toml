@@ -11,6 +11,6 @@ scripts.mcp-sampo-benchmark = "mcp_sampo_benchmark.server:main"
 
 [tool.fedotmas]
 mcp.name = "sampo-benchmark"
-mcp.description = "Public-only SAMPO benchmark access: allowed labels, bounded input batches, and safe batched TF-IDF predictions. No ground truth or database access."
+mcp.description = "Public-only benchmark access: allowed labels, pilot manifests and bounded input batches, independent candidate-retrieval methods, and shared prediction storage/finalization. Retrieval returns method-local ranks and scores. No ground truth or database access."
 mcp.tags = [ "sampo", "benchmark", "entity-resolution", "public-data", "safe" ]
 mcp.timeout = 180
