@@ -55,6 +55,7 @@ The coordinator agent has workers as single-turn sub-agents, exposed to it as ca
 8. **Keep data movement bounded.** For large datasets, use bounded batches, compact summaries, IDs, and persistent tool-backed artifacts rather than copying tables through coordinator messages.
 9. **Use the minimum reasoning workforce.** A single specialized worker is valid when there is only one genuine reasoning role.
 10. **Separate candidate generation from expensive reasoning.** Combine complementary cheap evidence when useful, then reserve semantic reasoning for cases with disagreement or uncertainty where it can materially change the outcome.
+11. **Bound bulk work per invocation.** A worker invocation must process only a bounded unit that fits in one context; for larger workloads, have the coordinator reinvoke it with a compact cursor, progress summary, or artifact reference.
 
 ---
 

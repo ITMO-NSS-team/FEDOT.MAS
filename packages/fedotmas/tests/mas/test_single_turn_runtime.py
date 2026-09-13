@@ -10,6 +10,7 @@ from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.sessions import InMemorySessionService
+from google.adk.tools.function_tool import FunctionTool
 from google.genai import types
 from pydantic import Field
 
@@ -142,3 +143,65 @@ async def test_single_turn_workers_return_control_and_receive_session_state():
     assert final_session is not None
     assert final_session.state["worker1_output"] == "calculation"
     assert final_session.state["worker2_output"] == "verified"
+
+
+async def test_coordinator_receives_only_compact_single_turn_worker_result():
+    large_result = "x" * 100_000
+
+    def read_large_result() -> dict[str, str]:
+        """Return a deliberately large tool payload."""
+        return {"payload": large_result}
+
+    coordinator_llm = _ScriptedLlm(
+        model="test",
+        responses=[_function_call("worker", "Do the work."), _text("Done.")],
+    )
+    worker_llm = _ScriptedLlm(
+        model="test",
+        responses=[
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part.from_function_call(name="read_large_result", args={})
+                ],
+            ),
+            _text("tiny result"),
+        ],
+    )
+    worker = LlmAgent(
+        name="worker",
+        description="Consumes a large tool result.",
+        instruction="Use the tool and return a compact result.",
+        model=worker_llm,
+        mode="single_turn",
+        tools=[FunctionTool(read_large_result)],
+        output_key="worker_output",
+        disallow_transfer_to_parent=True,
+    )
+    coordinator = LlmAgent(
+        name="coordinator",
+        instruction="Call the worker, then answer.",
+        model=coordinator_llm,
+        sub_agents=[worker],
+        include_contents="none",
+    )
+    sessions = InMemorySessionService()
+    session = await sessions.create_session(
+        app_name="isolation-test", user_id="user", session_id="session"
+    )
+    runner = Runner(
+        app_name="isolation-test", agent=coordinator, session_service=sessions
+    )
+
+    async for _ in runner.run_async(
+        user_id="user",
+        session_id=session.id,
+        new_message=types.Content(
+            role="user", parts=[types.Part.from_text(text="Run.")]
+        ),
+    ):
+        pass
+
+    next_context = coordinator_llm.requests[1].model_dump_json()
+    assert "tiny result" in next_context
+    assert large_result not in next_context
