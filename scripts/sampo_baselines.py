@@ -60,8 +60,18 @@ def _word_tokens(value: str) -> Counter[str]:
     return Counter(re.findall(r"\w+", value.casefold(), flags=re.UNICODE))
 
 
+def _construction_tokens(value: str) -> Counter[str]:
+    """Keep abbreviations and separators while adding plain-token variants."""
+    tokens = re.findall(r"[\w]+(?:[./-][\w]+)*", value.casefold(), flags=re.UNICODE)
+    variants = tokens + [re.sub(r"[./-]", "", token) for token in tokens]
+    return Counter(variant for variant in variants if variant)
+
+
 def _tfidf_ranked(
-    examples: list[str], labels: list[str], term_fn: Callable[[str], Counter[str]], k: int
+    examples: list[str],
+    labels: list[str],
+    term_fn: Callable[[str], Counter[str]],
+    k: int,
 ) -> list[RankedPrediction]:
     """Return deterministic sparse cosine TF-IDF rankings and scores."""
     if k < 1:
@@ -91,14 +101,19 @@ def _tfidf_ranked(
         weights = {
             term: count * idf[term] for term, count in terms.items() if term in idf
         }
-        source_norm = math.sqrt(sum(weight * weight for weight in weights.values())) or 1.0
+        source_norm = (
+            math.sqrt(sum(weight * weight for weight in weights.values())) or 1.0
+        )
         scores: defaultdict[int, float] = defaultdict(float)
         for term, weight in weights.items():
             for index, label_weight in postings[term]:
                 scores[index] += weight * label_weight
         ranked = sorted(
             (
-                (scores.get(index, 0.0) / (source_norm * label_norms[index]), labels[index])
+                (
+                    scores.get(index, 0.0) / (source_norm * label_norms[index]),
+                    labels[index],
+                )
                 for index in range(len(labels))
             ),
             key=lambda item: (-item[0], item[1]),
@@ -119,6 +134,52 @@ def tfidf_word_ranked(
 ) -> list[RankedPrediction]:
     """Rank labels by Unicode word-token TF-IDF cosine similarity."""
     return _tfidf_ranked(examples, labels, _word_tokens, k)
+
+
+def tfidf_construction_token_ranked(
+    examples: list[str], labels: list[str], k: int
+) -> list[RankedPrediction]:
+    """TF-IDF over construction-aware tokens and punctuation-free variants."""
+    return _tfidf_ranked(examples, labels, _construction_tokens, k)
+
+
+def bm25_token_ranked(
+    examples: list[str], labels: list[str], k: int
+) -> list[RankedPrediction]:
+    """BM25 lexical retrieval using public construction-aware token variants."""
+    if k < 1:
+        raise ValueError("k must be at least 1")
+    documents = [_construction_tokens(label) for label in labels]
+    frequency: Counter[str] = Counter()
+    for document in documents:
+        frequency.update(document.keys())
+    total = len(labels)
+    idf = {
+        term: math.log(1 + (total - count + 0.5) / (count + 0.5))
+        for term, count in frequency.items()
+    }
+    lengths = [sum(document.values()) for document in documents]
+    average_length = sum(lengths) / total
+    postings: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for index, document in enumerate(documents):
+        for term, count in document.items():
+            postings[term].append((index, count))
+    results = []
+    for example in examples:
+        scores: defaultdict[int, float] = defaultdict(float)
+        for term, query_count in _construction_tokens(example).items():
+            for index, count in postings.get(term, []):
+                denominator = count + 1.2 * (
+                    1 - 0.75 + 0.75 * lengths[index] / average_length
+                )
+                scores[index] += query_count * idf[term] * count * 2.2 / denominator
+        results.append(
+            sorted(
+                ((labels[index], scores.get(index, 0.0)) for index in range(total)),
+                key=lambda item: (-item[1], item[0]),
+            )[:k]
+        )
+    return results
 
 
 def tfidf_char_word_hybrid_ranked(

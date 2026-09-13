@@ -51,6 +51,10 @@ The coordinator agent has workers as single-turn sub-agents, exposed to it as ca
 4. **Start simple.** Use 2–3 workers for most tasks. Only add more when there are clearly distinct specializations.
 5. **Instructions must be actionable.** Tell each agent exactly what to do and how to respond.
 6. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
+7. **Agents reason; tools handle plumbing.** Do not create LLM workers solely for formatting, CSV validation, basic profiling, file I/O, or deterministic transformations when tools or code can do those safely.
+8. **Keep data movement bounded.** For large datasets, use bounded batches, compact summaries, IDs, and persistent tool-backed artifacts rather than copying tables through coordinator messages.
+9. **Use the minimum reasoning workforce.** A single specialized worker is valid when there is only one genuine reasoning role.
+10. **Separate candidate generation from expensive reasoning.** Combine complementary cheap evidence when useful, then reserve semantic reasoning for cases with disagreement or uncertainty where it can materially change the outcome.
 
 ---
 
