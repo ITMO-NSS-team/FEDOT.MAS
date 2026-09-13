@@ -20,6 +20,12 @@ __all__ = ["make_llm"]
 
 _log = get_logger("fedotmas.llm")
 _ERROR_PAYLOAD_LEN = 2000
+_MAX_TOOL_ARGUMENT_RETRIES = 2
+_DEFAULT_MAX_OUTPUT_TOKENS = 4096
+_INVALID_TOOL_ARGUMENTS_RETRY = (
+    "The previous tool-call arguments were invalid JSON. Return valid, concise "
+    "JSON tool arguments."
+)
 
 
 def _json_value(value: Any) -> Any:
@@ -71,6 +77,32 @@ def _error_payload(response: Any) -> str:
     return payload
 
 
+def _invalid_tool_argument_names(response: Any) -> list[str]:
+    """Return tool names whose OpenAI-compatible arguments are not JSON."""
+    payload = (
+        response.model_dump()
+        if hasattr(response, "model_dump")
+        else _json_value(response)
+    )
+    choices = payload.get("choices", []) if isinstance(payload, Mapping) else []
+    invalid = []
+    for choice in choices:
+        message = choice.get("message", {}) if isinstance(choice, Mapping) else {}
+        calls = message.get("tool_calls", []) if isinstance(message, Mapping) else []
+        for call in calls:
+            function = call.get("function", {}) if isinstance(call, Mapping) else {}
+            arguments = (
+                function.get("arguments") if isinstance(function, Mapping) else None
+            )
+            try:
+                if not isinstance(arguments, str):
+                    raise TypeError("arguments must be a JSON string")
+                json.loads(arguments)
+            except (TypeError, json.JSONDecodeError):
+                invalid.append(str(function.get("name", "<unnamed>")))
+    return invalid
+
+
 class _StreamAdapter:
     """Wraps AsyncOpenAI async stream to yield ``ModelResponseStream`` objects."""
 
@@ -120,6 +152,8 @@ class _ProxyClient:
                 **kw.get("extra_body", {}),
             }
         stream = kw.get("stream", False)
+        if not stream:
+            kw.setdefault("max_tokens", _DEFAULT_MAX_OUTPUT_TOKENS)
         _log.debug(
             "OpenAI-compatible request | model={} tools={}",
             model,
@@ -128,6 +162,25 @@ class _ProxyClient:
         resp = await self._client.chat.completions.create(**kw)
         if stream:
             return _StreamAdapter(resp)
+        for attempt in range(_MAX_TOOL_ARGUMENT_RETRIES + 1):
+            invalid = _invalid_tool_argument_names(resp)
+            if not invalid:
+                break
+            if attempt == _MAX_TOOL_ARGUMENT_RETRIES:
+                raise RuntimeError(
+                    "LLM provider returned malformed JSON tool arguments after "
+                    f"{_MAX_TOOL_ARGUMENT_RETRIES + 1} attempts: {', '.join(invalid)}"
+                )
+            _log.warning(
+                "Retrying OpenAI-compatible response with invalid JSON tool arguments: {}",
+                ", ".join(invalid),
+            )
+            retry_kw = dict(kw)
+            retry_kw["messages"] = [
+                *messages,
+                {"role": "user", "content": _INVALID_TOOL_ARGUMENTS_RETRY},
+            ]
+            resp = await self._client.chat.completions.create(**retry_kw)
         if _finish_reason_is_error(resp):
             payload = _error_payload(resp)
             _log.error("OpenAI-compatible response finished with error: {}", payload)
