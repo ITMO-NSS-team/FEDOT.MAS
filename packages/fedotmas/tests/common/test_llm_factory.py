@@ -10,6 +10,7 @@ from fedotmas.common.llm import (
     _DEFAULT_MAX_OUTPUT_TOKENS,
     _ERROR_PAYLOAD_LEN,
     _ProxyClient,
+    _invalid_tool_argument_names,
     make_llm,
 )
 from fedotmas.mas.builder import build_routing_system
@@ -321,6 +322,31 @@ class TestProxyClientErrors:
 
 
 class TestProxyClientToolArgumentValidation:
+    def test_text_completion_with_no_tool_calls_is_valid(self):
+        assert (
+            _invalid_tool_argument_names(
+                {"choices": [{"message": {"role": "assistant", "tool_calls": None}}]}
+            )
+            == []
+        )
+
+    def test_empty_tool_calls_are_valid(self):
+        assert (
+            _invalid_tool_argument_names(
+                {"choices": [{"message": {"role": "assistant", "tool_calls": []}}]}
+            )
+            == []
+        )
+
+    def test_missing_or_empty_choices_are_valid(self):
+        assert _invalid_tool_argument_names({"choices": None}) == []
+        assert _invalid_tool_argument_names({"choices": []}) == []
+        assert _invalid_tool_argument_names({}) == []
+
+    def test_valid_and_invalid_tool_arguments_are_distinguished(self):
+        assert _invalid_tool_argument_names(_tool_response('{"value": 1}')) == []
+        assert _invalid_tool_argument_names(_tool_response("{")) == ["example_tool"]
+
     async def test_retries_malformed_tool_arguments_then_returns_valid_response(self):
         client = _client_with_response(_tool_response('{"broken":'))
         valid = _tool_response('{"value": 1}')
@@ -363,3 +389,18 @@ class TestProxyClientToolArgumentValidation:
             result.choices[0].message.tool_calls[0].function.arguments == '{"value": 1}'
         )
         assert client._client.chat.completions.create.await_count == 1
+
+    async def test_text_completion_with_no_tool_calls_returns_normally(self):
+        response = _response()
+        response.model_dump.return_value["choices"][0]["message"] = {
+            "role": "assistant",
+            "content": "done",
+            "tool_calls": None,
+        }
+        client = _client_with_response(response)
+
+        result = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert result.choices[0].message.content == "done"
