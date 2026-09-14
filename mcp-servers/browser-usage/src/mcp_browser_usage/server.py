@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 import os
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -18,9 +19,13 @@ _env = dict(os.environ)
 _env.setdefault("BROWSER_USE_HEADLESS", "true")
 _env.setdefault("BROWSER_USE_LLM_MODEL", "openai/gpt-4o-mini")
 
+UPSTREAM = ["uvx", "--from", "browser-use[cli]", "browser-use", "--mcp"]
+
+# Through the guard: otherwise browser-use and its Chrome outlive the proxy
+# (see _guard's docstring).
 transport = StdioTransport(
-    command="uvx",
-    args=["--from", "browser-use[cli]", "browser-use", "--mcp"],
+    command=sys.executable,
+    args=["-m", "mcp_browser_usage._guard", str(os.getpid()), *UPSTREAM],
     env=_env,
 )
 

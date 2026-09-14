@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import os
+import sys
 
 import mcp.types as mt
 from fastmcp.client.transports import StdioTransport
@@ -89,11 +90,14 @@ class TestProxyConfig:
     def test_transport_type(self):
         assert isinstance(transport, StdioTransport)
 
-    def test_transport_command(self):
-        assert transport.command == "uvx"
-
-    def test_transport_args(self):
+    def test_transport_runs_upstream_through_the_guard(self):
+        assert transport.command == sys.executable
         assert transport.args == [
+            "-m",
+            "mcp_browser_usage._guard",
+            # The proxy's own pid: this module runs inside the proxy.
+            str(os.getpid()),
+            "uvx",
             "--from",
             "browser-use[cli]",
             "browser-use",
