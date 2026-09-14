@@ -21,5 +21,8 @@ dev = [ "pytest" ]
 
 [tool.fedotmas]
 mcp.name = "browser-usage"
-mcp.description = "Interactive browser automation: navigate, click, type, screenshot, extract content."
+mcp.description = """\
+  Interactive browser automation: navigate, click, type, screenshot, extract content. Screenshots are saved as image \
+  files; seeing them takes the media server's analyze_image.\
+  """
 mcp.tags = [ "browser", "automation", "interaction", "screenshot" ]

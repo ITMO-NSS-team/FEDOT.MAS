@@ -233,6 +233,37 @@ class TestMaxTokensIsNotFatal:
         assert result.truncated_agents == []
 
 
+class TestEmptyResponseIsNotFatal:
+    """Rule 3b: an empty model turn salvages the run like an exhausted budget."""
+
+    @pytest.mark.asyncio
+    async def test_empty_response_does_not_abort_the_pipeline(
+        self, mock_session_service
+    ):
+        events = [
+            FakeEvent(
+                author="site_navigator",
+                error_code="MODEL_RETURNED_NO_CONTENT",
+                error_message="The model returned no content",
+            ),
+            FakeEvent(
+                author="symbol_researcher",
+                usage_metadata=FakeUsageMetadata(
+                    prompt_token_count=5, candidates_token_count=2
+                ),
+            ),
+        ]
+        async with _patch_runner(events):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        assert result.total_prompt_tokens == 5
+        assert result.truncated_agents == ["site_navigator"]
+
+
 class TestSessionLostAfterRun:
     """Rule 4: get_session returns None → RuntimeError."""
 

@@ -20,6 +20,9 @@ from fedotmas.plugins import WebSearchLimitExceeded, WebSearchLimitPlugin
 
 _log = get_logger("fedotmas.core.runner")
 
+# ADK keeps its own copy private (base_llm_flow._NO_CONTENT_ERROR_CODE).
+_NO_CONTENT_ERROR_CODE = "MODEL_RETURNED_NO_CONTENT"
+
 SEARCH_LIMIT_RECOVERY_PROMPT = (
     "SearchLimitExceeded: web/search exploration budget is exhausted. "
     "Stop exploration immediately. Do not call any more web, browser, or search "
@@ -37,7 +40,8 @@ class PipelineResult:
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
     elapsed: float = 0.0
-    #: Agents that spent their whole token budget without emitting content.
+    #: Agents that finished a step without emitting content: they spent their
+    #: whole token budget, or the model returned an empty response.
     #: The pipeline carries on past them, so callers need this to tell "the
     #: model answered wrongly" from "the model never got to answer".
     truncated_agents: list[str] = field(default_factory=list)
@@ -281,9 +285,18 @@ async def _consume_runner_events(
                         "continuing with an empty result for this step",
                         event.author,
                     )
-                    # The field names which steps came up empty, not how often.
-                    if event.author and event.author not in truncated_agents:
-                        truncated_agents.append(event.author)
+                    _record_empty_step(truncated_agents, event.author)
+                continue
+
+            if event.error_code == _NO_CONTENT_ERROR_CODE:
+                # Same salvage as an exhausted budget: seen after a tool result
+                # the model could not use (a base64 screenshot as text).
+                _log.warning(
+                    "Agent '{}' returned an empty response; "
+                    "continuing with an empty result for this step",
+                    event.author,
+                )
+                _record_empty_step(truncated_agents, event.author)
                 continue
 
             _log.error(
@@ -298,6 +311,12 @@ async def _consume_runner_events(
             )
 
     return total_prompt, total_completion
+
+
+def _record_empty_step(truncated_agents: list[str], author: str | None) -> None:
+    # The field names which steps came up empty, not how often.
+    if author and author not in truncated_agents:
+        truncated_agents.append(author)
 
 
 def _is_search_limit_exceeded(
