@@ -80,6 +80,8 @@ class MAW(BaseMAS[MAWConfig]):
             for entry in existing_agents.agents:
                 validate_model_name(entry.model)
 
+        await self._prepare_mcp_registry()
+
         _log.info(
             "Generating pipeline config for task (two_stage={}, existing={}): {}",
             self._two_stage,

@@ -95,10 +95,10 @@ class TestProbe:
     async def test_a_broken_server_is_reported_not_raised(
         self, monkeypatch, no_prerequisites
     ):
-        def explode(name, registry=None):
+        async def explode(name, registry=None, *, timeout=None):
             raise ConnectionError("Client failed to connect")
 
-        monkeypatch.setattr(doctor, "create_toolset", explode)
+        monkeypatch.setattr(doctor, "list_server_tools", explode)
 
         report = await doctor.check_server("srv")
 
@@ -106,18 +106,12 @@ class TestProbe:
         assert report.detail == "ConnectionError: Client failed to connect"
 
     async def test_a_hanging_server_is_cut_short(self, monkeypatch, no_prerequisites):
-        class Hanging:
-            async def get_tools(self):
-                await asyncio.sleep(3600)
-
-            async def close(self):
-                pass
+        async def hang(name, registry=None, *, timeout=None):
+            await asyncio.wait_for(asyncio.sleep(3600), timeout)
 
         monkeypatch.setattr(doctor, "_PROBE_GRACE_S", 0.05)
         monkeypatch.setattr(doctor, "_server_timeout", lambda name, registry: 0.0)
-        monkeypatch.setattr(
-            doctor, "create_toolset", lambda name, registry=None: Hanging()
-        )
+        monkeypatch.setattr(doctor, "list_server_tools", hang)
 
         report = await doctor.check_server("srv")
 
@@ -129,13 +123,13 @@ class TestProbe:
     ):
         """On a clean machine this is dependency resolution, not a broken server."""
 
-        def explode(name, registry=None):
+        async def explode(name, registry=None, *, timeout=None):
             raise ConnectionError(
                 "Failed to create MCP session: timed out after 180.0s waiting "
                 "for the session to become ready"
             )
 
-        monkeypatch.setattr(doctor, "create_toolset", explode)
+        monkeypatch.setattr(doctor, "list_server_tools", explode)
         monkeypatch.setattr(doctor, "_server_timeout", lambda name, registry: 180)
 
         report = await doctor.check_server("srv")
@@ -164,10 +158,10 @@ class TestProbe:
         assert seen["timeout"] == 999
 
     async def test_a_long_error_is_truncated(self, monkeypatch, no_prerequisites):
-        def explode(name, registry=None):
+        async def explode(name, registry=None, *, timeout=None):
             raise ConnectionError("x" * 500)
 
-        monkeypatch.setattr(doctor, "create_toolset", explode)
+        monkeypatch.setattr(doctor, "list_server_tools", explode)
 
         report = await doctor.check_server("srv")
 

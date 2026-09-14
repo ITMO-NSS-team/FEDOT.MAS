@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import functools
 import os
 
+from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.mcp_tool import (
     McpToolset,
     StdioConnectionParams,
@@ -12,7 +14,12 @@ from mcp import StdioServerParameters
 from mcp.client.stdio import get_default_environment
 
 from fedotmas.common.logging import get_logger
-from fedotmas.mcp._config import HttpMCPServer, MCPServerConfig, StdioMCPServer
+from fedotmas.mcp._config import (
+    DEFAULT_MCP_TIMEOUT_S,
+    HttpMCPServer,
+    MCPServerConfig,
+    StdioMCPServer,
+)
 from fedotmas.mcp.discovery import discover_local_servers
 
 _log = get_logger("fedotmas.mcp.registry")
@@ -68,6 +75,34 @@ def create_toolset(
         connection_params=params,
         tool_name_prefix=cfg.tool_name_prefix,
     )
+
+
+async def list_server_tools(
+    name: str,
+    registry: dict[str, MCPServerConfig] | None = None,
+    *,
+    timeout: float | None = None,
+) -> list[BaseTool]:
+    """Connect to the named server and return the tools it advertises.
+
+    Raises whatever the connection raises, ``TimeoutError`` included; callers
+    decide what an unreachable server means.  *timeout* defaults to the
+    server's own, which is already tight for a URL server and generous for a
+    local one; a caller that has to tolerate a cold venv build adds its own
+    grace on top.
+    """
+    if timeout is None:
+        reg = registry if registry is not None else get_mcp_servers()
+        timeout = getattr(reg.get(name), "timeout", DEFAULT_MCP_TIMEOUT_S)
+
+    toolset = create_toolset(name, registry=registry)
+    try:
+        return list(await asyncio.wait_for(toolset.get_tools(), timeout))
+    finally:
+        try:
+            await toolset.close()
+        except Exception as exc:
+            _log.debug("Closing toolset for '{}' failed: {}", name, exc)
 
 
 def get_server_descriptions(
