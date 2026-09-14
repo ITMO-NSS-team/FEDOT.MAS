@@ -1,0 +1,149 @@
+"""Настройки стенда: пути, ключи окружения, список моделей и инструментов.
+
+Всё, что читается из окружения, собрано здесь — чтобы не искать по всему коду,
+какие переменные влияют на запуск.
+"""
+
+from __future__ import annotations
+
+import os
+import secrets
+import uuid
+from pathlib import Path
+
+from dotenv import load_dotenv
+from fedotmas.common.logging import get_logger
+
+from .infra import ensure_searxng, lightpanda_ready
+
+_log = get_logger("gui.config")
+
+# Корень интерфейса: gui/. Пакет server/ лежит внутри него.
+GUI_DIR = Path(__file__).resolve().parent.parent
+STATIC_DIR = GUI_DIR / "static"
+
+# Идентификатор запуска сервера: интерфейс сравнивает его со своим и очищает список
+# сценариев, если сервер перезапускали. Показ должен начинаться с чистого листа.
+SERVER_RUN_ID = uuid.uuid4().hex
+
+# .env с ключом провайдера ищем в нескольких местах: в корне репозитория (gui/
+# лежит внутри FEDOT.MAS), рядом с интерфейсом и в текущей директории. Так сервер
+# запускается откуда угодно и переживает перенос каталога.
+for _candidate in (Path.cwd() / ".env", GUI_DIR.parent / ".env",
+                   GUI_DIR.parent / "FEDOT.MAS" / ".env", GUI_DIR / ".env"):
+    if _candidate.is_file():
+        load_dotenv(_candidate, override=False)
+        _log.info("Ключи прочитаны из {}", _candidate)
+        break
+
+# --- Доступ и ключ провайдера ------------------------------------------------
+# Публичный режим (GUI_PUBLIC=1) предназначен для случая, когда сервер отдан наружу
+# через туннель или облако. В нём меняются две вещи:
+#   * ключ из .env не используется вовсе — свой ключ вводит сам пользователь,
+#     поэтому чужие запуски тратят чужие деньги, а не деньги владельца стенда;
+#   * каждый запрос к /api/ обязан нести токен доступа, который печатается при
+#     старте и вшивается в ссылку. Без него открытый адрес был бы открытым краном
+#     к песочнице с исполнением кода.
+PUBLIC_MODE = os.getenv("GUI_PUBLIC", "").strip().lower() not in ("", "0", "false", "no", "off")
+ACCESS_TOKEN = os.getenv("GUI_ACCESS_TOKEN") or secrets.token_urlsafe(18)
+
+if PUBLIC_MODE:
+    # Убираем ключ владельца из окружения процесса до того, как его успеет прочитать
+    # FEDOT.MAS: иначе публичная ссылка означала бы публичный доступ к его балансу.
+    os.environ.pop("OPENAI_API_KEY", None)
+
+DEFAULT_MODEL = os.getenv("GUI_MODEL", "openai/gpt-4.1-mini")
+# Судья обязан считать вызовом песочницы, а gemini-2.5-pro этого не умеет: решив вызвать
+# execute с кодом, она выдаёт испорченный вызов — провайдер отвечает MALFORMED_FUNCTION_CALL,
+# либо ход кончается одними размышлениями без текста. Схема инструмента ни при чём: с одним
+# полем code то же самое, работает только принудительный вызов. Каждый вердикт уходил к
+# запасной модели через две пустые попытки (~40 с). Gemini 3 вызывает песочницу штатно —
+# gemini-3.8-flash проверена на тех же ответах: песочница вызвана, вердикт верный.
+JUDGE_MODEL = os.getenv("GUI_JUDGE_MODEL", "google/gemini-3.8-flash")
+
+MODELS = [
+    {"id": "openai/gpt-4.1-mini", "label": "gpt-4.1-mini", "open": False},
+    # Модель посильнее: mini считает в песочнице верно, но при написании итога иногда
+    # пишет другие числа, игнорируя собственный результат инструмента.
+    {"id": "openai/gpt-4.1", "label": "gpt-4.1 (точнее в переносе чисел)", "open": False},
+    {"id": "openai/gpt-oss-120b", "label": "gpt-oss-120b (открытые веса)", "open": True},
+    {"id": "deepseek/deepseek-v4-flash", "label": "DeepSeek V4 Flash (открытые веса)", "open": True},
+    {"id": "qwen/qwen3-235b-a22b-2507", "label": "Qwen3 235B (открытые веса)", "open": True},
+]
+
+# Рассуждающие модели тратят часть лимита на размышления: с запасом по умолчанию
+# агенты не обрываются на середине ответа.
+AGENT_MAX_OUTPUT_TOKENS = int(os.getenv("GUI_AGENT_MAX_OUTPUT_TOKENS", "12000"))
+
+# Мета-агент по умолчанию называет агентов по-английски; на защите просили меньше
+# английского текста на экране.
+RU_HINT = (
+    "\n\nВажно: имена агентов, их инструкции и весь текст в конфигурации — на русском языке. "
+    "Имена агентов пиши строчными буквами через подчёркивание (например, анализатор_телеметрии)."
+)
+# Локальные инструменты без внешних ключей и сервисов — проверены запуском.
+BASE_TOOLS = (
+    ["sandbox-light"]       # быстрые расчёты: только builtins
+    # «sandbox» работает через E2B и без E2B_API_KEY возвращает агенту ошибку вместо расчёта.
+    # Проверено запуском: sandbox-light считает, sandbox падает с 'E2B_API_KEY'. Без ключа
+    # не предлагаем его вовсе — иначе мета-агент выдаёт его расчётному агенту единственным
+    # инструментом, и тот остаётся без работающего калькулятора.
+    + (["sandbox"] if os.getenv("E2B_API_KEY") else [])
+    + [
+        "sequential-thinking",  # пошаговый разбор сложных задач
+        "document",             # чтение PDF, DOCX, XLSX, CSV и архивов
+        "download",             # скачивание файлов по ссылке
+        "media",                # разбор изображений, аудио и видео (через тот же ключ провайдера)
+    ]
+)
+# Тяжёлые или нишевые — включаются переменной GUI_EXTRA_TOOLS
+# (browser-usage поднимает настоящий браузер, youtube-transcript узкоспециальный).
+EXTRA_TOOLS = [t.strip() for t in os.getenv("GUI_EXTRA_TOOLS", "").split(",") if t.strip()]
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:18888")
+
+# Lightpanda ставится в ~/.local/bin, которого может не быть в PATH у процесса сервера
+os.environ["PATH"] = os.environ.get("PATH", "") + os.pathsep + str(Path.home() / ".local" / "bin")
+
+WEB_SEARCH = ensure_searxng(SEARXNG_URL)
+SCRAPING = lightpanda_ready()
+SAFE_TOOLS = (
+    BASE_TOOLS
+    + (["websearch-searxng"] if WEB_SEARCH else [])
+    + (["web-scraping"] if SCRAPING else [])
+    + EXTRA_TOOLS
+)
+# В публичном режиме стенд открыт всем, у кого есть ссылка, а «document» читает
+# любой файл хоста по абсолютному пути и «download» пишет файл в любой каталог.
+# Агент выполняет то, что попросил гость, — значит ссылка означала бы доступ к
+# ~/.ssh и к записи в автозагрузку. Наружу их отдаём только по явному разрешению.
+FS_TOOLS = ("document", "download")
+ALLOW_FS_PUBLIC = os.getenv("GUI_PUBLIC_ALLOW_FS", "").strip().lower() in ("1", "true", "yes", "on")
+if PUBLIC_MODE and not ALLOW_FS_PUBLIC:
+    _dropped = [t for t in SAFE_TOOLS if t in FS_TOOLS]
+    if _dropped:
+        SAFE_TOOLS = [t for t in SAFE_TOOLS if t not in FS_TOOLS]
+        _log.warning("Публичный режим: инструменты файловой системы отключены {} "
+                     "(включить: GUI_PUBLIC_ALLOW_FS=1)", _dropped)
+
+_log.info("Инструменты живого режима: {}", SAFE_TOOLS)
+
+# Узлы пайплайна ADK называются seq_/par_/loop_ — это не агенты, и в ленте
+# выполнения их показывать не нужно.
+WORKFLOW_PREFIXES = ("seq_", "par_", "loop_")
+
+# Пульс SSE: туннели и обратные прокси рвут молчащее соединение.
+SSE_HEARTBEAT = float(os.getenv("GUI_SSE_HEARTBEAT", "10"))
+# Мета-агент временами отдаёт невалидную схему — столько раз пробуем заново.
+GENERATE_ATTEMPTS = int(os.getenv("GUI_GENERATE_ATTEMPTS", "3"))
+
+JUDGE_FALLBACK = os.getenv("GUI_JUDGE_FALLBACK", "openai/gpt-4.1")
+JUDGE_MAX_TOKENS = int(os.getenv("GUI_JUDGE_MAX_TOKENS", "16000"))
+JUDGE_RETRY_TIMEOUT = float(os.getenv("GUI_JUDGE_RETRY_TIMEOUT", "90"))
+
+# Реестр готовых MCP-серверов, в котором ищет и сам FEDOT.MAS.
+# Искать в реестре можно без ключа, а вот подключиться к найденному серверу — нет:
+# все развёрнутые экземпляры отвечают 401 «Missing Authorization header». Проверено
+# запросом. Без ключа серверы из реестра показываем, но помечаем как недоступные.
+SMITHERY_API_KEY = os.getenv("SMITHERY_API_KEY", "").strip()
+SMITHERY_SEARCH = "https://registry.smithery.ai/servers"
+SMITHERY_DETAIL = "https://registry.smithery.ai/servers/{name}"
