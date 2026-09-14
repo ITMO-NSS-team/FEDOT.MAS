@@ -204,7 +204,6 @@ class TestMaxTokensIsNotFatal:
 
         assert result.truncated_agents == ["calculator"]
 
-
     @pytest.mark.asyncio
     async def test_a_truncated_answer_is_not_recorded_as_missing(
         self, mock_session_service
@@ -549,9 +548,7 @@ class TestReasoningOnlyTurnCountsAsEmpty:
     """A turn made only of thoughts writes no output_key, however many parts."""
 
     @pytest.mark.asyncio
-    async def test_thought_parts_do_not_count_as_an_answer(
-        self, mock_session_service
-    ):
+    async def test_thought_parts_do_not_count_as_an_answer(self, mock_session_service):
         from google.genai import types
 
         thought = types.Part(text="Let me think about the cadastral registry")
