@@ -117,7 +117,10 @@ class BrowserFallbackPolicyPlugin(BasePlugin):
         if not self._is_browser_tool(tool):
             return None
 
-        result_text = _stringify_result(result)
+        # Only the first block: a successful render can carry a whole page, and
+        # a page that merely mentions "navigate failed" would otherwise be
+        # thrown away and reported to the agent as a navigation failure.
+        result_text = _stringify_result(_first_block(result))
         if not any(error in result_text for error in NAVIGATION_FALLBACK_ERRORS):
             return None
 
@@ -266,6 +269,19 @@ def _extension_for_target(target: str) -> str:
     parsed = urlparse(target)
     path = parsed.path if parsed.scheme else target
     return Path(path).suffix.lower()
+
+
+def _first_block(result: Any) -> Any:
+    """The part of *result* that carries its status rather than its payload."""
+    if not isinstance(result, dict):
+        return result
+    content = result.get("content")
+    if isinstance(content, list) and content:
+        return {
+            **{k: v for k, v in result.items() if k != "content"},
+            "first": content[0],
+        }
+    return result
 
 
 def _stringify_result(result: Any) -> str:

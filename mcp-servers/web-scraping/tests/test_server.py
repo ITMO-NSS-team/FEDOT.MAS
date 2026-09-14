@@ -9,7 +9,15 @@ from fastmcp.client.transports import StdioTransport
 from fastmcp.server.middleware import MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 
-from mcp_web_scraping.server import ExtractMarkdownFallback, mcp, transport
+from mcp_web_scraping.server import (
+    FALLBACK_MAX_BYTES,
+    RESCUED_META_KEY,
+    ExtractMarkdownFallback,
+    mcp,
+    transport,
+)
+
+LIMITS = {"maxBytes": FALLBACK_MAX_BYTES, "strip": {"clutter": True}}
 
 
 class TestProxyConfig:
@@ -97,8 +105,9 @@ class TestExtractMarkdownFallback:
         )
         out = _run(ExtractMarkdownFallback(), _context("extract", server=server), failure)
 
-        assert server.calls == [("markdown", {}, False)]
+        assert server.calls == [("markdown", LIMITS, False)]
         assert out.is_error
+        assert out.meta[RESCUED_META_KEY] is True
         assert "Cannot read properties of null" in out.content[0].text
         assert out.content[1].text == "# Page"
 
@@ -122,8 +131,8 @@ class TestExtractMarkdownFallback:
         )
 
         assert server.calls == [
-            ("markdown", {}, False),
-            ("markdown", {"url": "https://example.org/a"}, False),
+            ("markdown", LIMITS, False),
+            ("markdown", {**LIMITS, "url": "https://example.org/a"}, False),
         ]
         assert out.content[1].text == "# Page"
 
@@ -141,7 +150,7 @@ class TestExtractMarkdownFallback:
             ToolResult(content=_text("boom"), is_error=True),
         )
 
-        assert server.calls == [("markdown", {}, False)]
+        assert server.calls == [("markdown", LIMITS, False)]
         assert out.is_error
 
     def test_original_error_is_returned_when_markdown_also_fails(self):
@@ -190,5 +199,68 @@ class TestExtractMarkdownFallback:
             ToolResult(content=_text("boom"), is_error=True),
         )
 
-        assert server.calls == [("markdown", {}, False)]
+        assert server.calls == [("markdown", LIMITS, False)]
         assert out.is_error
+
+
+class TestNavigationTracking:
+    """Eleven of lightpanda's tools navigate, not just `goto`."""
+
+    def test_a_url_from_any_tool_is_remembered(self):
+        middleware = ExtractMarkdownFallback()
+        server = _FakeServer(
+            [
+                ToolResult(content=_text("needs a url"), is_error=True),
+                ToolResult(content=_text("# Page B")),
+            ]
+        )
+        _run(
+            middleware,
+            _context("links", {"url": "https://example.org/b"}, server),
+            ToolResult(content=_text("a list of links")),
+        )
+        _run(
+            middleware,
+            _context("extract", server=server),
+            ToolResult(content=_text("boom"), is_error=True),
+        )
+
+        assert server.calls[1][1]["url"] == "https://example.org/b"
+
+    def test_the_latest_navigation_wins(self):
+        middleware = ExtractMarkdownFallback()
+        server = _FakeServer(
+            [
+                ToolResult(content=_text("needs a url"), is_error=True),
+                ToolResult(content=_text("# Page B")),
+            ]
+        )
+        for url in ("https://example.org/a", "https://example.org/b"):
+            _run(
+                middleware,
+                _context("goto", {"url": url}, server),
+                ToolResult(content=_text("Navigated successfully.")),
+            )
+        _run(
+            middleware,
+            _context("extract", server=server),
+            ToolResult(content=_text("boom"), is_error=True),
+        )
+
+        assert server.calls[1][1]["url"] == "https://example.org/b"
+
+
+class TestRescueMarker:
+    def test_an_untouched_error_carries_no_marker(self):
+        server = _FakeServer([RuntimeError("markdown unavailable")])
+        failure = ToolResult(content=_text("boom"), is_error=True)
+        out = _run(ExtractMarkdownFallback(), _context("extract", server=server), failure)
+        assert not (out.meta or {}).get(RESCUED_META_KEY)
+
+    def test_the_marker_joins_the_original_meta(self):
+        server = _FakeServer([ToolResult(content=_text("# Page"))])
+        failure = ToolResult(
+            content=_text("boom"), meta={"upstream": "kept"}, is_error=True
+        )
+        out = _run(ExtractMarkdownFallback(), _context("extract", server=server), failure)
+        assert out.meta == {"upstream": "kept", RESCUED_META_KEY: True}

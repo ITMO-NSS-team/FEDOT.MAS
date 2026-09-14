@@ -7,7 +7,7 @@ import mcp.types as mt
 from fastmcp.client.transports import StdioTransport
 from fastmcp.server import create_proxy
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools import ToolResult
 
 transport = StdioTransport(
     command="lightpanda",
@@ -24,6 +24,18 @@ FALLBACK_NOTE = (
 # Lightpanda reports some navigation failures in the text of a result it does
 # not mark as an error; fedotmas' BrowserFallbackPolicyPlugin matches the same
 # strings, but this server cannot import from that package.
+#: Soft cap on the markdown served as a rescue.  `extract` asks for fields, so
+#: a caller that gets a whole page instead must at least get a bounded one: the
+#: default plugin set carries no result truncation, and an unbounded render of
+#: a long page either overruns the context window or spends the run's budget.
+FALLBACK_MAX_BYTES = 30_000
+
+#: Marks a result this middleware rescued.  It is still an error -- the schema
+#: did not match -- but it carries the page, so a policy counting tool failures
+#: should not hold it against the agent.  fedotmas' tool-error circuit breaker
+#: reads the same key; the string is the contract between the two packages.
+RESCUED_META_KEY = "fedotmas/rescued"
+
 NAVIGATION_FAILURE_MARKERS = (
     "SslConnectError",
     "OperationTimedout",
@@ -63,11 +75,11 @@ class ExtractMarkdownFallback(Middleware):
         arguments = context.message.arguments or {}
         result = await call_next(context)
 
-        if name == "goto":
-            url = arguments.get("url")
-            if isinstance(url, str) and url and _navigation_succeeded(result):
-                self._last_url = url
-            return result
+        # Eleven of lightpanda's tools take a `url` and navigate before acting,
+        # so tracking `goto` alone would point the retry at a stale page.
+        url = arguments.get("url")
+        if isinstance(url, str) and url and _navigation_succeeded(result):
+            self._last_url = url
 
         if name != "extract" or not result.is_error:
             return result
@@ -84,9 +96,13 @@ class ExtractMarkdownFallback(Middleware):
             return failure
         server = fastmcp_context.fastmcp
 
-        attempts: list[dict[str, Any]] = [{}]
+        limits: dict[str, Any] = {
+            "maxBytes": FALLBACK_MAX_BYTES,
+            "strip": {"clutter": True},
+        }
+        attempts: list[dict[str, Any]] = [limits]
         if self._last_url:
-            attempts.append({"url": self._last_url})
+            attempts.append({**limits, "url": self._last_url})
 
         for arguments in attempts:
             try:
@@ -100,8 +116,9 @@ class ExtractMarkdownFallback(Middleware):
             note = mt.TextContent(
                 type="text", text=FALLBACK_NOTE.format(error=_error_text(failure))
             )
+            meta = {**(failure.meta or {}), RESCUED_META_KEY: True}
             return ToolResult(
-                content=[note, *fallback.content], meta=failure.meta, is_error=True
+                content=[note, *fallback.content], meta=meta, is_error=True
             )
 
         return failure

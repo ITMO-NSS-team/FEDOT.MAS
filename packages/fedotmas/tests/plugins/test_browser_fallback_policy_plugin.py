@@ -113,3 +113,44 @@ class TestPrefixedBrowserTools:
         tool.name = "download_file"
 
         assert not plugin._is_browser_tool(tool)
+
+
+class TestPageContentIsNotAStatus:
+    """A rendered page may quote the very strings that mark a failure."""
+
+    @pytest.mark.asyncio
+    async def test_a_page_mentioning_a_marker_is_left_alone(self):
+        plugin = BrowserFallbackPolicyPlugin()
+
+        result = await plugin.after_tool_callback(
+            tool=_tool("markdown"),
+            tool_args={"url": "https://docs.example.com/errors"},
+            tool_context=_tool_context(),
+            result={
+                "content": [
+                    {"type": "text", "text": "# Error reference"},
+                    {"type": "text", "text": "navigate failed err=SslConnectError"},
+                ]
+            },
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_a_real_failure_in_the_first_block_still_fires(self):
+        plugin = BrowserFallbackPolicyPlugin()
+
+        result = await plugin.after_tool_callback(
+            tool=_tool("goto"),
+            tool_args={"url": "https://example.com/image.jpg"},
+            tool_context=_tool_context(),
+            result={
+                "isError": True,
+                "content": [
+                    {"type": "text", "text": "navigate failed err=SslConnectError"}
+                ],
+            },
+        )
+
+        assert result is not None
+        assert result["browser_navigation_failed"] is True
