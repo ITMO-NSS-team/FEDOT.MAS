@@ -21,7 +21,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
 from fedotmas.mcp._config import DEFAULT_MCP_TIMEOUT_S, MCPServerConfig
-from fedotmas.mcp.registry import create_toolset, get_mcp_servers
+from fedotmas.mcp.registry import get_mcp_servers, list_server_tools
 
 OK = "ok"
 DEGRADED = "degraded"
@@ -137,10 +137,10 @@ async def _probe(
     name: str, timeout: float, registry: Registry = None
 ) -> tuple[str, str, str]:
     """Start the server and list its tools; return ``(status, detail, fix)``."""
-    toolset = None
     try:
-        toolset = create_toolset(name, registry=registry)
-        tools = await asyncio.wait_for(toolset.get_tools(), timeout + _PROBE_GRACE_S)
+        tools = await list_server_tools(
+            name, registry, timeout=timeout + _PROBE_GRACE_S
+        )
     except TimeoutError:
         return FAIL, f"hung past {timeout + _PROBE_GRACE_S:.0f}s", ""
     except Exception as exc:
@@ -152,12 +152,6 @@ async def _probe(
             detail = f"timed out after {timeout:.0f}s, venv likely unbuilt"
             return FAIL, detail, _UNBUILT_VENV_FIX
         return FAIL, f"{type(exc).__name__}: {message}", ""
-    finally:
-        if toolset is not None:
-            try:
-                await toolset.close()
-            except Exception:
-                pass
     count = len(tools)
     return OK, f"{count} tool{'s' if count != 1 else ''}", ""
 
