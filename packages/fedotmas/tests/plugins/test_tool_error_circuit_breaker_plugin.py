@@ -125,3 +125,48 @@ class TestToolErrorCircuitBreakerPlugin:
 
         assert result is None
 
+
+
+class TestRescuedResults:
+    """A server that answered a failed call with a usable substitute."""
+
+    @pytest.mark.asyncio
+    async def test_a_rescued_error_does_not_count(self):
+        plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)
+
+        for _ in range(5):
+            result = await plugin.after_tool_callback(
+                tool=_tool("extract"),
+                tool_args={},
+                tool_context=_tool_context(),
+                result={
+                    "isError": True,
+                    "meta": {"fedotmas/rescued": True},
+                    "content": [{"type": "text", "text": "# Page"}],
+                },
+            )
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_an_unrescued_error_still_counts(self):
+        plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)
+
+        with pytest.raises(ToolErrorCircuitOpen):
+            await plugin.after_tool_callback(
+                tool=_tool("extract"),
+                tool_args={},
+                tool_context=_tool_context(),
+                result={"isError": True, "meta": {}, "content": []},
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_falsy_marker_does_not_excuse_the_error(self):
+        plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)
+
+        with pytest.raises(ToolErrorCircuitOpen):
+            await plugin.after_tool_callback(
+                tool=_tool("extract"),
+                tool_args={},
+                tool_context=_tool_context(),
+                result={"isError": True, "meta": {"fedotmas/rescued": False}},
+            )

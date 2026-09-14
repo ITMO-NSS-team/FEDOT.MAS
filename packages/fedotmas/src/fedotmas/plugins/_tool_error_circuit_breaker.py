@@ -11,6 +11,15 @@ from fedotmas.common.logging import get_logger
 
 _log = get_logger("fedotmas.plugins.tool_error_circuit_breaker")
 
+#: Set in a tool result's ``meta`` by a server that answered a failed call with
+#: a usable substitute -- the web-scraping proxy serves page markdown when
+#: lightpanda's ``extract`` rejects a schema.  Such a result is still an error,
+#: since the call did not do what was asked, but the agent got what it needed,
+#: so it must not count towards a breaker meant to stop an agent battering a
+#: tool that gives it nothing.  A bare string because the server that sets it
+#: is a separate package.
+RESCUED_META_KEY = "fedotmas/rescued"
+
 
 class ToolErrorCircuitOpen(RuntimeError):
     """Raised when repeated tool failures trip a circuit breaker."""
@@ -126,6 +135,9 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
 
 def _is_error_result(result: dict) -> bool:
     if not isinstance(result, dict):
+        return False
+    meta = result.get("meta")
+    if isinstance(meta, dict) and meta.get(RESCUED_META_KEY):
         return False
     if result.get("isError") is True:
         return True
