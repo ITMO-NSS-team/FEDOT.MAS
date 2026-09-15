@@ -191,7 +191,7 @@ class TestAutoAddWebSearchLimitPlugin:
     def test_default_has_web_search_limit_plugin(self):
         maw = MAW()
         plugin = next(p for p in maw._plugins if isinstance(p, WebSearchLimitPlugin))
-        assert plugin.max_calls_per_agent == 4
+        assert plugin.max_calls_per_agent == 20
 
     def test_can_disable_default_web_search_limit_plugin(self):
         maw = MAW(web_search_limit=None)

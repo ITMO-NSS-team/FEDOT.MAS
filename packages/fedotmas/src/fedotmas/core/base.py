@@ -23,6 +23,10 @@ from fedotmas.plugins import (
 
 _log = get_logger("fedotmas.core.base")
 
+#: Searches per agent before the budget answers "stop exploring".  Four ran out
+#: on every research task in live runs; the GAIA runner sets its own limits.
+DEFAULT_WEB_SEARCH_LIMIT = 20
+
 ConfigT = TypeVar("ConfigT")
 
 
@@ -56,7 +60,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
         memory_service: BaseMemoryService | None = None,
         plugins: list[BasePlugin] | None = None,
         max_retries: int = 3,
-        web_search_limit: int | None = 4,
+        web_search_limit: int | None = DEFAULT_WEB_SEARCH_LIMIT,
     ) -> None:
         setup_logging()
         self._meta_model = meta_model
@@ -64,6 +68,13 @@ class BaseMAS(ABC, Generic[ConfigT]):
         self._temperature = temperature
         self._mcp_registry = resolve_mcp_registry(mcp_servers)
         self._tool_catalog = dict(tool_catalog) if tool_catalog is not None else None
+        # An explicit [] asks for no tools, and a catalogue brings its own.
+        if mcp_servers is None and tool_catalog is None:
+            _log.warning(
+                "No MCP servers given: generated agents will have no tools and may "
+                "invent what they cannot look up. Pass mcp_servers='all' or a list "
+                "of server names."
+            )
         self._session_service = session_service
         self._memory_service = memory_service
         if plugins is not None:

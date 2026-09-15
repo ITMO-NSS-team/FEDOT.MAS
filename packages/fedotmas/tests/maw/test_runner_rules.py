@@ -204,7 +204,6 @@ class TestMaxTokensIsNotFatal:
 
         assert result.truncated_agents == ["calculator"]
 
-
     @pytest.mark.asyncio
     async def test_a_truncated_answer_is_not_recorded_as_missing(
         self, mock_session_service
@@ -231,6 +230,37 @@ class TestMaxTokensIsNotFatal:
             )
 
         assert result.truncated_agents == []
+
+
+class TestEmptyResponseIsNotFatal:
+    """Rule 3b: an empty model turn salvages the run like an exhausted budget."""
+
+    @pytest.mark.asyncio
+    async def test_empty_response_does_not_abort_the_pipeline(
+        self, mock_session_service
+    ):
+        events = [
+            FakeEvent(
+                author="site_navigator",
+                error_code="MODEL_RETURNED_NO_CONTENT",
+                error_message="The model returned no content",
+            ),
+            FakeEvent(
+                author="symbol_researcher",
+                usage_metadata=FakeUsageMetadata(
+                    prompt_token_count=5, candidates_token_count=2
+                ),
+            ),
+        ]
+        async with _patch_runner(events):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        assert result.total_prompt_tokens == 5
+        assert result.truncated_agents == ["site_navigator"]
 
 
 class TestSessionLostAfterRun:
@@ -518,9 +548,7 @@ class TestReasoningOnlyTurnCountsAsEmpty:
     """A turn made only of thoughts writes no output_key, however many parts."""
 
     @pytest.mark.asyncio
-    async def test_thought_parts_do_not_count_as_an_answer(
-        self, mock_session_service
-    ):
+    async def test_thought_parts_do_not_count_as_an_answer(self, mock_session_service):
         from google.genai import types
 
         thought = types.Part(text="Let me think about the cadastral registry")
