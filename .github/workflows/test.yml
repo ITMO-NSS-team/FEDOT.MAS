@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       fedotmas: ${{ steps.filter.outputs.fedotmas }}
+      web-scraping: ${{ steps.filter.outputs.web-scraping }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -22,6 +23,8 @@ jobs:
           filters: |
             fedotmas:
               - "packages/fedotmas/**"
+            web-scraping:
+              - "mcp-servers/web-scraping/**"
 
   test-fedotmas:
     needs: detect
@@ -33,10 +36,23 @@ jobs:
       - run: uv sync --dev
       - run: uv run pytest packages/fedotmas/tests/
 
+  test-web-scraping:
+    needs: detect
+    if: needs.detect.outputs.web-scraping == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-servers/web-scraping
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --dev
+      - run: uv run pytest tests/
+
   ci:
     runs-on: ubuntu-latest
     if: always()
-    needs: [test-fedotmas]
+    needs: [test-fedotmas, test-web-scraping]
     steps:
       - run: |
           if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then

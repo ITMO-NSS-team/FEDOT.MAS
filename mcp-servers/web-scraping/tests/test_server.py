@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import mcp.types as mt
 from fastmcp.client.transports import StdioTransport
 from fastmcp.server.middleware import MiddlewareContext
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools import ToolResult
 
 from mcp_web_scraping.server import (
     FALLBACK_MAX_BYTES,
