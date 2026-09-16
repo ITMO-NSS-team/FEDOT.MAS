@@ -19,7 +19,7 @@ async def full_auto():
 
 async def two_step():
     """Generate config first, inspect it, then execute."""
-    mas = MAS()
+    mas = MAS(mcp_servers="all")
 
     config = await mas.generate_config("Handle customer support request")
     _log.info("Config: {}", config.model_dump_json(indent=2))
@@ -63,7 +63,7 @@ async def handcrafted():
         ],
     )
 
-    mas = MAS()
+    mas = MAS(mcp_servers=[])
     state = await mas.build_and_run(config, "Why was I charged twice?")
     _log.info(
         "Result: {}", json.dumps(state, indent=2, default=str, ensure_ascii=False)

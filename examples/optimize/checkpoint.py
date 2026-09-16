@@ -47,7 +47,7 @@ async def main() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         checkpoint = str(Path(tmpdir) / "optimizer_state.json")
 
-        maw = MAW()
+        maw = MAW(mcp_servers=[])
 
         # Phase 1: run 3 iterations
         print("--- Phase 1: initial run (3 iterations) ---")
@@ -91,12 +91,12 @@ async def main() -> None:
         )
         print(f"Best score: {result2.best_score:.3f}")
 
-        assert (
-            result2.iterations >= result1.iterations
-        ), "Should have more iterations after resume"
-        assert len(result2.all_candidates) >= len(
-            result1.all_candidates
-        ), "Should have at least as many candidates after resume"
+        assert result2.iterations >= result1.iterations, (
+            "Should have more iterations after resume"
+        )
+        assert len(result2.all_candidates) >= len(result1.all_candidates), (
+            "Should have at least as many candidates after resume"
+        )
         print("\nCheckpoint/resume verified successfully.")
 
 

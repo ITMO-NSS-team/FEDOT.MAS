@@ -17,7 +17,7 @@ CONFIG = MAWConfig(
 
 
 async def main():
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     ctrl = Controller(maw)
     result = await ctrl.run_with_recovery(
         "Верни число 5",

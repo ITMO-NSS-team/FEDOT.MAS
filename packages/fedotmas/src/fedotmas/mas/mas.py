@@ -19,7 +19,7 @@ class MAS(BaseMAS[MASConfig]):
 
     Usage::
 
-        mas = MAS()
+        mas = MAS(mcp_servers="all")
         result = await mas.run("Handle customer support request")
 
         # Two-step with review:

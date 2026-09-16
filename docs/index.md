@@ -35,7 +35,7 @@ import asyncio
 from fedotmas import MAW
 
 async def main():
-    maw = MAW()
+    maw = MAW(mcp_servers="all")
     state = await maw.run("Explain the difference between TCP and UDP")
     print(state)
 
@@ -51,7 +51,7 @@ import asyncio
 from fedotmas import MAW
 
 async def main():
-    maw = MAW()
+    maw = MAW(mcp_servers="all")
 
     config = await maw.generate_config("Compare Python and Rust for CLI tools")
     print(config.model_dump_json(indent=2))  # inspect generated config
@@ -96,7 +96,7 @@ config = MAWConfig(
 )
 
 async def main():
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     state = await maw.build_and_run(config, "What is WebAssembly?")
     print(state["summary"])
 
@@ -231,7 +231,7 @@ config = MASConfig(
 )
 
 async def main():
-    mas = MAS()
+    mas = MAS(mcp_servers=[])
     state = await mas.build_and_run(config, "Why was I charged twice?")
     print(state)
 

@@ -80,7 +80,7 @@ class LoggingCallback(OptimizationCallback):
 
 
 async def main() -> None:
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
 
     logging_cb = LoggingCallback()
     metrics_cb = MetricsCallback()

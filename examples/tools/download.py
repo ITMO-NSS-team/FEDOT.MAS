@@ -15,8 +15,7 @@ async def main():
             MAWAgentConfig(
                 name="fetcher",
                 instruction=(
-                    "{user_query}\n"
-                    "Download the files and report file names and sizes."
+                    "{user_query}\nDownload the files and report file names and sizes."
                 ),
                 model=MODEL,
                 output_key="result",

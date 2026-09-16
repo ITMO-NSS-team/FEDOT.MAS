@@ -5,7 +5,6 @@ and OPENROUTER_API_KEY in .env (or environment).
 """
 
 import asyncio
-import json
 import os
 
 from dotenv import load_dotenv
@@ -16,9 +15,10 @@ load_dotenv()
 os.environ.setdefault("OPENAI_API_KEY", os.environ.get("OPENROUTER_API_KEY", ""))
 os.environ.setdefault("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
 
-from fedotmas import MAW, ModelConfig
-from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-from fedotmas.plugins import LangfusePlugin, LoggingPlugin
+# Imported below the env mapping above: fedotmas reads those variables on import.
+from fedotmas import MAW, ModelConfig  # noqa: E402
+from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig  # noqa: E402
+from fedotmas.plugins import LangfusePlugin, LoggingPlugin  # noqa: E402
 
 WORKER_MODEL = ModelConfig(
     model="google/gemini-2.0-flash-001",
@@ -57,6 +57,7 @@ async def handcrafted():
 
     maw = MAW(
         worker_models=[WORKER_MODEL],
+        mcp_servers=[],
         plugins=[
             LoggingPlugin(),
             LangfusePlugin(trace_name="langfuse_test:handcrafted"),
@@ -77,6 +78,7 @@ async def full_auto():
     maw = MAW(
         meta_model=WORKER_MODEL,
         worker_models=[WORKER_MODEL],
+        mcp_servers=[],
         plugins=[
             LoggingPlugin(),
             LangfusePlugin(trace_name="langfuse_test:full_auto"),
@@ -87,8 +89,12 @@ async def full_auto():
     state = await maw.run("Explain the difference between TCP and UDP in 3 sentences")
 
     print("\nResult keys:", list(state.keys()))
-    print(f"Meta tokens: {maw.meta_prompt_tokens} in / {maw.meta_completion_tokens} out")
-    print(f"Total tokens: {maw.total_prompt_tokens} in / {maw.total_completion_tokens} out")
+    print(
+        f"Meta tokens: {maw.meta_prompt_tokens} in / {maw.meta_completion_tokens} out"
+    )
+    print(
+        f"Total tokens: {maw.total_prompt_tokens} in / {maw.total_completion_tokens} out"
+    )
     print(f"Elapsed: {maw.elapsed:.1f}s")
 
 

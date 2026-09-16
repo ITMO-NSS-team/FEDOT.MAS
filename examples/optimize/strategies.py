@@ -45,7 +45,7 @@ TRAINSET = [
 async def run_with_strategy(
     strategy: Literal["pareto", "best", "epsilon_greedy"],
 ) -> None:
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     opt = Optimizer(
         maw,
         criteria="Technical accuracy, depth of analysis, and balanced perspective",

@@ -30,7 +30,7 @@ SEED_CONFIG = MAWConfig(
 
 
 async def main() -> None:
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
 
     # Define training tasks
     trainset = [

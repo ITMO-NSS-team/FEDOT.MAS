@@ -53,7 +53,7 @@ trainset = [
 ]
 
 async def main():
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     opt = Optimizer(
         maw,
         criteria="Clarity, technical accuracy, and completeness",

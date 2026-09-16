@@ -17,7 +17,7 @@ async def full_auto():
 
 
 async def two_step():
-    maw = MAW()
+    maw = MAW(mcp_servers="all")
 
     config = await maw.generate_config("Compare Python and Rust for CLI tools")
     _log.info("Config: {}", config.model_dump_json(indent=2))
@@ -53,7 +53,7 @@ async def handcrafted():
         ),
     )
 
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     state = await maw.build_and_run(config, "What is WebAssembly?")
     _log.info("Summary: {}", state.get("summary", "(no summary produced)"))
 
@@ -96,7 +96,7 @@ async def parallel_analysis():
         ),
     )
 
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     state = await maw.build_and_run(config, "Microservices architecture")
     _log.info("Verdict: {}", state.get("verdict", "(no verdict produced)"))
 
@@ -132,7 +132,7 @@ async def loop_with_critic():
         ),
     )
 
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     state = await maw.build_and_run(config, "the ocean at sunset")
     _log.info("Draft: {}", state.get("draft", "(no draft produced)"))
 

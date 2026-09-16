@@ -43,7 +43,7 @@ config = MAWConfig(
 
 
 def main() -> None:
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
 
     app = maw.serve(
         config,

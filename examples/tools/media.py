@@ -15,7 +15,7 @@ async def main():
             MAWAgentConfig(
                 name="analyst",
                 instruction=(
-                    "{user_query}\n" "Analyze the media and report your findings."
+                    "{user_query}\nAnalyze the media and report your findings."
                 ),
                 model=MODEL,
                 output_key="result",

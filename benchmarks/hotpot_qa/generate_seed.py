@@ -11,6 +11,7 @@ Usage::
     python benchmarks/hotpot_qa/generate_seed.py --single-stage
     python benchmarks/hotpot_qa/generate_seed.py --output custom_seed.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -62,7 +63,9 @@ def _summarize(config) -> str:
 async def main(settings: HotpotQASettings, *, two_stage: bool, output: Path) -> None:
     _log.info("Passing abstract task description to generator (no concrete example)")
 
-    maw = MAW(worker_models=[settings.solver_model], two_stage=two_stage)
+    maw = MAW(
+        mcp_servers=[], worker_models=[settings.solver_model], two_stage=two_stage
+    )
     config = await maw.generate_config(_TASK_DESCRIPTION)
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +95,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     settings = HotpotQASettings()
-    asyncio.run(
-        main(settings, two_stage=not args.single_stage, output=args.output)
-    )
+    asyncio.run(main(settings, two_stage=not args.single_stage, output=args.output))

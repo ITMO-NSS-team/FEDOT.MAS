@@ -249,7 +249,9 @@ def _setup_state(
             "to enable resume on failure for long runs."
         )
     else:
-        _log.info("Checkpoint path set, will write state to {} after each iteration", cp)
+        _log.info(
+            "Checkpoint path set, will write state to {} after each iteration", cp
+        )
 
     state = OptimizationState()
     seed = state.add_candidate(seed_config, origin="seed")
@@ -286,7 +288,13 @@ async def _run_iteration(
     )
 
     runs = await _evaluate_candidate(
-        ctx.maw, ctx.scorer, parent, batch, state, cfg, ctx.metrics_cb,
+        ctx.maw,
+        ctx.scorer,
+        parent,
+        batch,
+        state,
+        cfg,
+        ctx.metrics_cb,
         split="train",
     )
     eval_runs += runs
@@ -333,7 +341,13 @@ async def _run_iteration(
         new_config, parent_index=parent.index, origin="mutation"
     )
     runs = await _evaluate_candidate(
-        ctx.maw, ctx.scorer, child, batch, state, cfg, ctx.metrics_cb,
+        ctx.maw,
+        ctx.scorer,
+        child,
+        batch,
+        state,
+        cfg,
+        ctx.metrics_cb,
         split="train",
     )
     eval_runs += runs
@@ -353,7 +367,13 @@ async def _run_iteration(
         ctx.dispatcher.on_candidate_accepted(child, parent)
 
         runs = await _evaluate_candidate(
-            ctx.maw, ctx.scorer, child, ctx.valset, state, cfg, ctx.metrics_cb,
+            ctx.maw,
+            ctx.scorer,
+            child,
+            ctx.valset,
+            state,
+            cfg,
+            ctx.metrics_cb,
             split="val",
         )
         eval_runs += runs
@@ -444,7 +464,13 @@ async def _try_merge(ctx: _LoopContext) -> _MergeResult:
         origin="merge",
     )
     runs = await _evaluate_candidate(
-        ctx.maw, ctx.scorer, merged, ctx.valset, state, cfg, ctx.metrics_cb,
+        ctx.maw,
+        ctx.scorer,
+        merged,
+        ctx.valset,
+        state,
+        cfg,
+        ctx.metrics_cb,
         split="val",
     )
     eval_runs += runs
@@ -641,9 +667,7 @@ def _mean_score_on(candidate: Candidate, tasks: set[str]) -> float:
     Used for accept/reject decisions where the minibatch is freshly evaluated
     train tasks, recorded into ``candidate.train_scores``.
     """
-    scores = [
-        candidate.train_scores[t] for t in tasks if t in candidate.train_scores
-    ]
+    scores = [candidate.train_scores[t] for t in tasks if t in candidate.train_scores]
     if not scores:
         return 0.0
     return sum(scores) / len(scores)

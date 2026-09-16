@@ -59,7 +59,7 @@ class MergeTracker(OptimizationCallback):
 
 
 async def main() -> None:
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     tracker = MergeTracker()
 
     opt = Optimizer(

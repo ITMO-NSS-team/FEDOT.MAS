@@ -34,7 +34,7 @@ RESEARCH_CONFIG = MAWConfig(
 
 
 async def interactive_break():
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     ctrl = Controller(maw)
 
     async with ctrl.iter("Сравни Python и Rust для CLI", RESEARCH_CONFIG) as pipeline:
@@ -47,7 +47,7 @@ async def interactive_break():
 
 
 async def interactive_debug():
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     ctrl = Controller(maw)
 
     async with ctrl.iter("Анализ рынка облачных сервисов", RESEARCH_CONFIG) as pipeline:
@@ -58,7 +58,7 @@ async def interactive_debug():
 
 async def auto_generated():
     """Config is generated automatically by MAW from the task description."""
-    maw = MAW()
+    maw = MAW(mcp_servers="all")
     ctrl = Controller(maw)
 
     async with ctrl.iter("Сравни Python и Rust для CLI") as pipeline:
