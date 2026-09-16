@@ -35,13 +35,18 @@ WEB_SEARCH_HINTS = (
 )
 
 
+#: Searches per agent before the budget answers "stop exploring".  Four ran out
+#: on every research task in live runs; the GAIA runner sets its own limits.
+DEFAULT_WEB_SEARCH_LIMIT = 20
+
+
 class WebSearchLimitPlugin(BasePlugin):
     """Limit web-search tool calls per agent within one ADK run."""
 
     def __init__(
         self,
         *,
-        max_calls_per_agent: int = 4,
+        max_calls_per_agent: int = DEFAULT_WEB_SEARCH_LIMIT,
         tool_names: set[str] | None = None,
         count_unique_urls: bool = False,
         same_url_exempt_tool_names: set[str] | None = None,
