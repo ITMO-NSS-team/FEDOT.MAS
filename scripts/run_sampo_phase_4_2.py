@@ -117,8 +117,7 @@ def _evaluate(predictions: Path) -> dict[str, Any]:
 
 
 async def main() -> None:
-    if OUT.exists():
-        raise RuntimeError(f"Refusing to overwrite existing run directory: {OUT}")
+    resumed = OUT.exists()
     config_path = SOURCE / "config.json"
     task_path = SOURCE / "task.txt"
     metadata_path = SOURCE / "metadata.json"
@@ -135,18 +134,29 @@ async def main() -> None:
             f"Refusing to mix with an existing prediction artifact: {prediction_path}"
         )
 
-    OUT.mkdir(parents=True)
-    shutil.copy2(config_path, OUT / "config.json")
-    shutil.copy2(task_path, OUT / "task.txt")
-    shutil.copy2(metadata_path, OUT / "generation_metadata.json")
-    shutil.copy2(generation_runtime_path, OUT / "generation_runtime_config.json")
-    (OUT / "execution_metadata.json").write_text(
+    OUT.mkdir(parents=True, exist_ok=True)
+    if not resumed:
+        shutil.copy2(config_path, OUT / "config.json")
+        shutil.copy2(task_path, OUT / "task.txt")
+        shutil.copy2(metadata_path, OUT / "generation_metadata.json")
+        shutil.copy2(generation_runtime_path, OUT / "generation_runtime_config.json")
+    metadata_file = OUT / "execution_metadata.json"
+    attempts = []
+    if metadata_file.exists():
+        attempts = json.loads(metadata_file.read_text(encoding="utf-8")).get("attempts", [])
+    attempts.append(
+        {
+            "execution_commit_sha": _commit_sha(),
+            "source_config": str(SOURCE.relative_to(ROOT)),
+            "run_id": run_id,
+            "resumed": resumed,
+            "timeout_seconds": None,
+        }
+    )
+    metadata_file.write_text(
         json.dumps(
             {
-                "execution_commit_sha": _commit_sha(),
-                "source_config": str(SOURCE.relative_to(ROOT)),
-                "run_id": run_id,
-                "executed_once": True,
+                "attempts": attempts,
             },
             indent=2,
         )
@@ -158,7 +168,7 @@ async def main() -> None:
     mas = MAS(mcp_servers=["sampo-benchmark", "sandbox-light"], plugins=[telemetry])
     started = time.perf_counter()
     try:
-        final_state = await mas.build_and_run(config, task, timeout=1800)
+        final_state = await mas.build_and_run(config, task, timeout=None)
         elapsed = time.perf_counter() - started
         (OUT / "final_state.json").write_text(
             json.dumps(final_state, default=str, ensure_ascii=False, indent=2) + "\n",
@@ -183,7 +193,8 @@ async def main() -> None:
         }
         raise
     finally:
-        (OUT / "telemetry.json").write_text(
+        telemetry_name = f"telemetry_attempt_{len(attempts)}.json"
+        (OUT / telemetry_name).write_text(
             json.dumps(
                 {
                     "llm_calls": telemetry.calls,
@@ -201,7 +212,7 @@ async def main() -> None:
             + "\n",
             encoding="utf-8",
         )
-        (OUT / "execution_log.json").write_text(
+        (OUT / f"execution_log_attempt_{len(attempts)}.json").write_text(
             json.dumps(outcome, indent=2) + "\n", encoding="utf-8"
         )
 
