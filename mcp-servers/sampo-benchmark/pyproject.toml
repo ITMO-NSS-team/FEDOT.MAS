@@ -11,6 +11,6 @@ scripts.mcp-sampo-benchmark = "mcp_sampo_benchmark.server:main"
 
 [tool.fedotmas]
 mcp.name = "sampo-benchmark"
-mcp.description = "Public-only benchmark access: allowed labels, pilot manifests and bounded input batches, independent candidate-retrieval methods, and shared prediction storage/finalization. Retrieval returns method-local ranks and scores. No ground truth or database access."
+mcp.description = "Public-only SAMPO artifact-backed retrieval. Full retrieval artifacts remain server-side; agents choose methods and rank fusion, reasoning only over compact summaries or bounded evidence. Pass candidate and prediction work between roles with artifact IDs and example IDs. No end-to-end prediction policy, ground truth, or database access is provided."
 mcp.tags = [ "sampo", "benchmark", "entity-resolution", "public-data", "safe" ]
 mcp.timeout = 180
