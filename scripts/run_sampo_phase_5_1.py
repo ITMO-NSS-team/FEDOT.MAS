@@ -7,7 +7,7 @@ from fedotmas._settings import get_meta_model
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'artifacts/sampo_phase_5/structural_review'
-TASK='''Map a bounded batch of public historical construction work names to the allowed labels. Use public artifact-backed candidate retrieval and safe prediction storage. Combine cheap retrieval evidence where useful and use semantic reasoning selectively for uncertain cases. Produce valid ranked predictions for every example in the supplied batch while minimizing unnecessary LLM reasoning.'''
+TASK='''Map a bounded batch of public historical construction work names to the allowed labels. Use public artifact-backed candidate retrieval and safe prediction storage. Combine cheap retrieval evidence where useful and use semantic reasoning selectively for uncertain cases. Produce valid ranked predictions for every example in the supplied batch while minimizing unnecessary LLM reasoning. Once a delegated unit is durably complete, do not repeat it. Verify completion from tool-backed state, route only unresolved work, and terminate when the assigned unit is fully covered.'''
 FILES=[ROOT/'mcp-servers/sampo-benchmark/src/mcp_sampo_benchmark/server.py',ROOT/'scripts/sampo_baselines.py',ROOT/'packages/fedotmas/src/fedotmas/meta/mas_prompts.py']
 CATALOGUE=['list_methods','prepare_candidate_batch','get_candidate_evidence','save_candidate_predictions','save_review_decisions','get_run_status','finalize_predictions','get_pilot_manifest']
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
