@@ -29,7 +29,7 @@ SOURCE = (
     / "artifacts/sampo_phase_4_1/structural_review"
     / "batch_31cf5e22648046bebf71ff3b866cd9c3/config_01"
 )
-OUT = ROOT / "artifacts/sampo_phase_4_3" / "review_1_df19bf24d7ea49d196725e942c0930df"
+OUT = ROOT / "artifacts/sampo_phase_4_4" / "review_1_df19bf24d7ea49d196725e942c0930df"
 
 
 class Telemetry(BasePlugin):
