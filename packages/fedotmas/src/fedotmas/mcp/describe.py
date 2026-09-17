@@ -30,8 +30,8 @@ _log = get_logger("fedotmas.mcp.describe")
 MAX_DESCRIPTION_CHARS = 400
 
 #: Per-tool description budget.  Server authors write paragraphs (lightpanda's
-#: `extract` runs to 1600 characters); the first sentence is what distinguishes
-#: one tool from another.
+#: `extract` runs to 1600 characters); keep a short excerpt without splitting
+#: sentences at abbreviations.
 MAX_TOOL_DESCRIPTION_CHARS = 120
 
 
@@ -46,19 +46,29 @@ class UnreachableServer:
 def build_description(name: str, tools: list[BaseTool]) -> str:
     """Render *tools* as a one-line description of the server."""
     if not tools:
+        name = _truncate(
+            name,
+            MAX_DESCRIPTION_CHARS - len("MCP server '', which advertises no tools."),
+        )
         return f"MCP server '{name}', which advertises no tools."
 
     parts: list[str] = []
     used = len("Tools: .")
-    for tool in tools:
-        summary = _first_sentence(tool.description or "")
+    for index, tool in enumerate(tools):
+        summary = _truncate(tool.description or "", MAX_TOOL_DESCRIPTION_CHARS).rstrip(
+            "."
+        )
         part = f"{tool.name} ({summary})" if summary else tool.name
-        # Always list the first tool: a server whose one tool has a long
-        # description would otherwise be described as nothing but a count.
-        if parts and used + len(part) + 2 > MAX_DESCRIPTION_CHARS:
+        remainder = len(tools) - index - 1
+        tail = f", and {remainder} more" if remainder else ""
+        separator = 2 if parts else 0
+        available = MAX_DESCRIPTION_CHARS - used - separator - len(tail)
+        if parts and len(part) > available:
             break
+        # Keep the first tool visible even when its name alone exceeds the budget.
+        part = _truncate(part, available)
         parts.append(part)
-        used += len(part) + 2
+        used += len(part) + separator
 
     remainder = len(tools) - len(parts)
     tail = f", and {remainder} more" if remainder else ""
@@ -100,12 +110,14 @@ async def describe_servers(
     return described, unreachable
 
 
-def _first_sentence(text: str) -> str:
+def _truncate(text: str, limit: int) -> str:
     text = " ".join(text.split())
-    head = text.split(". ")[0].rstrip(".")
-    if len(head) > MAX_TOOL_DESCRIPTION_CHARS:
-        head = head[: MAX_TOOL_DESCRIPTION_CHARS - 1].rstrip() + "…"
-    return head
+    if len(text) <= limit:
+        return text
+    head = text[: limit - 1]
+    if not text[limit - 1].isspace() and " " in head:
+        head = head.rsplit(" ", 1)[0]
+    return head.rstrip() + "…"
 
 
 def _reason(error: BaseException) -> str:

@@ -21,7 +21,7 @@ class FakeTool:
 
 
 class TestBuildDescription:
-    def test_tools_are_named_with_their_first_sentence(self):
+    def test_tools_are_named_with_short_descriptions(self):
         rendered = build_description(
             "srv",
             [
@@ -30,7 +30,7 @@ class TestBuildDescription:
             ],
         )
         assert rendered == (
-            "Tools: goto (Navigate to a URL), "
+            "Tools: goto (Navigate to a URL. Waits for load), "
             "markdown (Extract page content as markdown)."
         )
 
@@ -46,7 +46,7 @@ class TestBuildDescription:
         tools = [FakeTool(f"tool_number_{i:02d}", "does a thing") for i in range(40)]
         rendered = build_description("srv", tools)
 
-        assert len(rendered) <= MAX_DESCRIPTION_CHARS + len(", and 40 more.")
+        assert len(rendered) <= MAX_DESCRIPTION_CHARS
         assert "tool_number_00" in rendered
         assert "more." in rendered
 
@@ -151,11 +151,38 @@ class TestDescribeServers:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("One. Two.", "One"),
-        ("Trailing period.", "Trailing period"),
+        ("One. Two.", "One. Two."),
+        (
+            "Search resources, e.g. scientific papers",
+            "Search resources, e.g. scientific papers",
+        ),
+        ("Convert, i.e. change format", "Convert, i.e. change format"),
+        ("Compare A vs. B", "Compare A vs. B"),
         ("  collapses   whitespace  ", "collapses whitespace"),
         ("", ""),
     ],
 )
-def test_first_sentence(text, expected):
-    assert mod._first_sentence(text) == expected
+def test_short_description_preserves_text(text, expected):
+    assert mod._truncate(text, MAX_TOOL_DESCRIPTION_CHARS) == expected
+
+
+@pytest.mark.parametrize("count", [1, 2, 11, 101])
+def test_long_tool_names_respect_total_budget(count):
+    tools = [FakeTool("x" * 1000, "Useful description")] * count
+    rendered = build_description("srv", tools)
+    assert len(rendered) <= MAX_DESCRIPTION_CHARS
+    assert rendered.startswith("Tools: xxx")
+    assert "…" in rendered
+    if count > 1:
+        assert rendered.endswith(f", and {count - 1} more.")
+
+
+def test_long_server_name_with_no_tools_respects_budget():
+    rendered = build_description("x" * 1000, [])
+    assert len(rendered) <= MAX_DESCRIPTION_CHARS
+    assert rendered.endswith("which advertises no tools.")
+
+
+def test_description_truncates_at_word_boundary():
+    assert mod._truncate("Search scientific papers", 15) == "Search…"
+    assert mod._truncate("Search scientific papers", 18) == "Search scientific…"
