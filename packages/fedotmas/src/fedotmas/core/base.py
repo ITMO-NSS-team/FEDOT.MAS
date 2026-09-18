@@ -13,7 +13,7 @@ from google.adk.sessions import BaseSessionService
 from fedotmas.common.logging import get_logger, setup_logging
 from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.core.runner import PipelineResult, run_pipeline
-from fedotmas.mcp import MCPServerConfig, resolve_mcp_registry
+from fedotmas.mcp import MCPServerConfig, describe_servers, resolve_mcp_registry
 from fedotmas.meta._result import MetaAgentResult
 from fedotmas.plugins import (
     LoggingPlugin,
@@ -63,6 +63,11 @@ class BaseMAS(ABC, Generic[ConfigT]):
         self._worker_models = worker_models
         self._temperature = temperature
         self._mcp_registry = resolve_mcp_registry(mcp_servers)
+        # A caller who built the configs itself named addresses of its own; one
+        # that does not answer is a mistake in the request, not in the machine,
+        # so it is reported rather than skipped.
+        self._mcp_supplied = isinstance(mcp_servers, dict)
+        self._mcp_prepared = False
         self._tool_catalog = dict(tool_catalog) if tool_catalog is not None else None
         self._session_service = session_service
         self._memory_service = memory_service
@@ -98,6 +103,47 @@ class BaseMAS(ABC, Generic[ConfigT]):
     def mcp_registry(self) -> dict[str, MCPServerConfig]:
         """Registry of MCP servers available to this instance."""
         return self._mcp_registry
+
+    async def _prepare_mcp_registry(self) -> None:
+        """Describe the servers that carry no description of their own.
+
+        A server handed in by URL is advertised to the meta-agent as ``"MCP
+        server: <name>"`` until it is asked for its own tool list, which names
+        it without saying what it does; and an address that answers nothing
+        should surface before generation is paid for.  Only such servers are
+        contacted: one that declares a description keeps it, and its
+        reachability is left to ``just doctor`` rather than checked on every
+        run.  Skipped entirely when a ``tool_catalog`` is set, which replaces
+        the registry for generation anyway.
+
+        Runs once per instance.  The flag is set only after a successful pass,
+        so a caller that starts the server and retries is described then; two
+        concurrent calls both describe, which costs a duplicate connection and
+        converges on the same registry.
+        """
+        if self._mcp_prepared or self._tool_catalog is not None:
+            return
+        if not self._mcp_registry:
+            self._mcp_prepared = True
+            return
+
+        described, unreachable = await describe_servers(self._mcp_registry)
+        if unreachable:
+            listed = ", ".join(f"{u.name} ({u.reason})" for u in unreachable)
+            if self._mcp_supplied:
+                raise ValueError(
+                    f"These MCP servers did not answer: {listed}. Check the "
+                    "address, whether the server is running, and any headers "
+                    "it needs."
+                )
+            _log.warning(
+                "Generating without undescribed MCP servers that did not answer: {}",
+                listed,
+            )
+            for dead in unreachable:
+                described.pop(dead.name, None)
+        self._mcp_registry = described
+        self._mcp_prepared = True
 
     def _reject_external_build(self) -> None:
         """Fail a build on an instance that generates for another runtime.

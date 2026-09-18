@@ -32,6 +32,7 @@ class MAS(BaseMAS[MASConfig]):
 
         Returns an ``MASConfig`` with a coordinator and workers.
         """
+        await self._prepare_mcp_registry()
         _log.info("Generating routing config for task: {}", task)
 
         meta_result = await generate_routing_config(
