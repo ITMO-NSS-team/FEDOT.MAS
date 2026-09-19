@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import os
+import stat
 import sys
 
 import mcp.types as mt
@@ -46,6 +47,16 @@ class TestScreenshotToFile:
         assert path.endswith(".png")
         with open(path, "rb") as f:
             assert f.read() == PNG
+
+    def test_screenshot_is_private(self, tmp_path):
+        directory = tmp_path / "screenshots"
+        text = json.dumps({"screenshot": base64.b64encode(PNG).decode()})
+        path = _payload(_run(ScreenshotToFile(directory), "browser_screenshot", text))[
+            "screenshot_path"
+        ]
+
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
     def test_get_state_keeps_the_page_fields(self, tmp_path):
         text = json.dumps(

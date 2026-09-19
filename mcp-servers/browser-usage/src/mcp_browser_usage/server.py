@@ -90,9 +90,11 @@ class ScreenshotToFile(Middleware):
 
     def _save(self, data: bytes) -> Path:
         suffix = ".jpg" if data.startswith(b"\xff\xd8") else ".png"
-        self._directory.mkdir(parents=True, exist_ok=True)
+        self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = self._directory / f"screenshot-{uuid.uuid4().hex}{suffix}"
-        path.write_bytes(data)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
         return path
 
 
