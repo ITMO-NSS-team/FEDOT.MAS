@@ -69,7 +69,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 
 ## DESIGN PRINCIPLES
 
-1. **Start simple.** Use 1–2 agents for straightforward tasks.
+1. **Start simple when evidence is not needed.** Use 1–2 agents for straightforward tasks, but add a separate fact-checking step when the answer depends on externally verifiable facts or calculations and relevant tools are available. A fact checker may be the last agent in a sequential pipeline; it need not be a critic in a loop.
 2. **Use parallel** only when subtasks are truly independent.
 3. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer).
 4. **Every agent** must have a unique `name` and a unique `output_key`.
@@ -78,6 +78,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 7. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
 8. **Never end with parallel.** A `parallel` node MUST be followed by a synthesizer agent that reads the `output_key` of every parallel sub-agent from state and produces a combined answer. Wrap the parallel node and the synthesizer in a `sequential` node.
 9. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
+10. **Collect evidence before calculating or verifying.** Tell research agents to search by topic and identifiers, not by a desired numeric answer; open relevant source pages and extract values from the page, not just search snippets. Tell agents with calculation tools to compute results independently from sourced inputs. Give fact-checking agents the relevant source or calculation tools and instruct them to check claims against the sources or recompute values, reporting what cannot be verified.
 
 ---
 
@@ -238,7 +239,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 
 ## DESIGN PRINCIPLES
 
-1. **Start simple.** Use 1–2 agents for straightforward tasks.
+1. **Start simple when evidence is not needed.** Use 1–2 agents for straightforward tasks, but include a distinct fact-checking responsibility when the answer depends on externally verifiable facts or calculations and relevant tools are available. A fact checker is different from a critic that edits wording.
 2. **Each agent = one clear responsibility.** Avoid agents that do too many things.
 3. **Add agents only when needed:**
    - Task requires clearly different specialized tools.
@@ -248,6 +249,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 5. **Instructions must be specific and actionable** — tell the agent exactly what to do.
 6. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 7. **Do NOT include output_key, state references, or curly-brace placeholders** — focus on WHAT each agent does, not how data flows between them. Data wiring is handled in a separate stage.
+8. **Assign tools for the work.** A research agent with web tools should search by topic and identifiers, open source pages, and extract values from those pages rather than search snippets or queries containing the desired numeric answer. An agent with a calculation tool should recompute values from source inputs instead of accepting a supplied result. Give a fact checker the relevant source or calculation tools so it can verify claims independently and report unsupported ones.
 
 ---
 
@@ -394,7 +396,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 
 ## DESIGN PRINCIPLES
 
-1. **Start simple.** Use sequential for straightforward multi-step tasks.
+1. **Start simple when evidence is not needed.** Use sequential for straightforward multi-step tasks. When the pool includes a fact checker for externally verifiable claims or calculations, place it after the agents whose results it checks; it may be the final agent without a loop.
 2. **Use parallel** only when subtasks are truly independent.
 3. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer).
 4. **Every agent** must have a unique `name` and a unique `output_key`.
@@ -402,6 +404,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 6. **Instructions must include state references** using curly braces around the state key name, so agents can read upstream outputs.
 7. **Never end with parallel.** A `parallel` node MUST be followed by a synthesizer agent that reads the `output_key` of every parallel sub-agent from state and produces a combined answer. Wrap the parallel node and the synthesizer in a `sequential` node.
 8. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
+9. **Wire evidence into verification.** Pass the source URLs, extracted values, and calculation inputs to downstream agents through state references. Preserve relevant source or calculation tools on fact-checking agents so they can inspect the evidence or recompute the result, and require them to flag claims they cannot verify.
 
 ---
 
