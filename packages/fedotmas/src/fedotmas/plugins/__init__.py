@@ -10,12 +10,14 @@ from fedotmas.plugins._tool_error_circuit_breaker import (
 from fedotmas.plugins._tool_result_truncation import ToolResultTruncationPlugin
 from fedotmas.plugins._unknown_tool_recovery import UnknownToolRecoveryPlugin
 from fedotmas.plugins._web_search_limit import (
+    DEFAULT_WEB_SEARCH_LIMIT,
     WebSearchLimitExceeded,
     WebSearchLimitPlugin,
 )
 
 __all__ = [
     "CheckFn",
+    "DEFAULT_WEB_SEARCH_LIMIT",
     "BrowserFallbackPolicyPlugin",
     "Checkpoint",
     "CheckpointPlugin",

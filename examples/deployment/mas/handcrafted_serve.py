@@ -46,7 +46,7 @@ config = MASConfig(
 
 
 def main() -> None:
-    mas = MAS()
+    mas = MAS(mcp_servers=[])
 
     app = mas.serve(
         config,

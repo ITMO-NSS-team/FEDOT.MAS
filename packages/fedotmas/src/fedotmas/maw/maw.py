@@ -31,7 +31,7 @@ class MAW(BaseMAS[MAWConfig]):
 
     Usage::
 
-        maw = MAW()
+        maw = MAW(mcp_servers="all")
         result = await maw.run("Research quantum computing trends")
 
         # Two-step with review:

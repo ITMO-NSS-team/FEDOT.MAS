@@ -53,9 +53,7 @@ class HotpotQAScorer:
         if not raw:
             return ScoringResult(
                 score=0.0,
-                feedback=(
-                    f"No answer produced. The correct answer is {expected!r}."
-                ),
+                feedback=(f"No answer produced. The correct answer is {expected!r}."),
                 reasoning="Empty output",
             )
 

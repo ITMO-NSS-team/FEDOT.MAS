@@ -15,8 +15,7 @@ async def main():
             MAWAgentConfig(
                 name="coder",
                 instruction=(
-                    "Solve the task using Python code: {user_query}\n"
-                    "Return the result."
+                    "Solve the task using Python code: {user_query}\nReturn the result."
                 ),
                 model=MODEL,
                 output_key="result",

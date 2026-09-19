@@ -53,6 +53,7 @@ def _load_seed_config(settings: HotpotQASettings) -> MAWConfig:
 
 def _final_output_key(config: MAWConfig) -> str:
     """Walk the pipeline tree to find the output_key of the last-executing agent."""
+
     def _last_agent_name(node: MAWStepConfig) -> str | None:
         if node.type == "agent":
             return node.agent_name
@@ -114,10 +115,14 @@ async def _solve_one(
         _log.info(
             "[{}] Task {}/{} {} | f1={:.2f} expected={!r} | "
             "running em={:.0f}/{:.0f} ({:.1%}) f1={:.2f}",
-            stage, i + 1, total,
+            stage,
+            i + 1,
+            total,
             "✓" if is_em else "✗",
-            score, task.expected,
-            progress["em"], progress["done"],
+            score,
+            task.expected,
+            progress["em"],
+            progress["done"],
             progress["em"] / progress["done"],
             progress["f1_sum"] / progress["done"],
         )
@@ -144,9 +149,7 @@ async def evaluate_on(
     sem = asyncio.Semaphore(max(1, concurrency))
     progress = {"done": 0.0, "em": 0.0, "f1_sum": 0.0}
     answer_key = _final_output_key(config)
-    _log.info(
-        "[{}] Evaluating {} tasks with concurrency={}", stage, total, concurrency
-    )
+    _log.info("[{}] Evaluating {} tasks with concurrency={}", stage, total, concurrency)
     coros = [
         _solve_one(i, t, config, answer_key, maw, scorer, sem, stage, total, progress)
         for i, t in enumerate(tasks)
@@ -165,7 +168,9 @@ def report(result: BenchmarkResult) -> None:
     _log.info("Optimized F1:        {:.3f}", m.get("optimized_f1", 0))
     if "train_accuracy" in m:
         _log.info("Train EM:            {:.1%}", m["train_accuracy"])
-        _log.info("Val F1:              {:.3f} (best on full valset)", m.get("val_f1", 0))
+        _log.info(
+            "Val F1:              {:.3f} (best on full valset)", m.get("val_f1", 0)
+        )
     if result.cost:
         _log.info("Total tokens:        {:,}", result.cost.total_tokens)
 
@@ -201,7 +206,7 @@ async def main(settings: HotpotQASettings) -> BenchmarkResult:
         checkpoint_path=settings.checkpoint_path,
     )
 
-    maw = MAW(worker_models=[settings.solver_model])
+    maw = MAW(mcp_servers=[], worker_models=[settings.solver_model])
     # Scorer is created once from seed_config's output_key and reused across all
     # candidates. Safe while InstructionMutator only edits instructions; if a
     # future mutator changes pipeline topology / agent names / output_keys, the
@@ -212,11 +217,17 @@ async def main(settings: HotpotQASettings) -> BenchmarkResult:
     train_eval_tasks: list[TaskResult] = []
 
     if settings.max_iterations == 0:
-        _log.info("max_iterations=0 — skipping optimizer, evaluating seed on testset only")
+        _log.info(
+            "max_iterations=0 — skipping optimizer, evaluating seed on testset only"
+        )
         opt_result = None
         baseline_tasks = await evaluate_on(
-            seed_config, testset, maw, scorer,
-            stage="baseline", concurrency=settings.concurrency,
+            seed_config,
+            testset,
+            maw,
+            scorer,
+            stage="baseline",
+            concurrency=settings.concurrency,
         )
         optimized_tasks = baseline_tasks
     else:
@@ -231,25 +242,42 @@ async def main(settings: HotpotQASettings) -> BenchmarkResult:
         else:
             _log.info("Evaluating baseline on testset ({} tasks)", len(testset))
             baseline_tasks = await evaluate_on(
-                seed_config, testset, maw, scorer,
-                stage="baseline", concurrency=settings.concurrency,
+                seed_config,
+                testset,
+                maw,
+                scorer,
+                stage="baseline",
+                concurrency=settings.concurrency,
             )
 
-        if opt_result.best_config is seed_config or opt_result.best_config == seed_config:
-            _log.info("Best config == seed — reusing baseline results for optimized eval")
+        if (
+            opt_result.best_config is seed_config
+            or opt_result.best_config == seed_config
+        ):
+            _log.info(
+                "Best config == seed — reusing baseline results for optimized eval"
+            )
             optimized_tasks = baseline_tasks
         else:
             _log.info("Evaluating optimized on testset ({} tasks)", len(testset))
             optimized_tasks = await evaluate_on(
-                opt_result.best_config, testset, maw, scorer,
-                stage="optimized", concurrency=settings.concurrency,
+                opt_result.best_config,
+                testset,
+                maw,
+                scorer,
+                stage="optimized",
+                concurrency=settings.concurrency,
             )
 
         if settings.eval_best_on_train:
             _log.info("Evaluating best on full trainset ({} tasks)", len(trainset))
             train_eval_tasks = await evaluate_on(
-                opt_result.best_config, trainset, maw, scorer,
-                stage="train-final", concurrency=settings.concurrency,
+                opt_result.best_config,
+                trainset,
+                maw,
+                scorer,
+                stage="train-final",
+                concurrency=settings.concurrency,
             )
 
     if baseline_tasks:
@@ -267,16 +295,20 @@ async def main(settings: HotpotQASettings) -> BenchmarkResult:
 
     if opt_result is not None:
         m = opt_result.metrics
-        optimizer_metrics = {
-            "accepted": m.accepted,
-            "rejected": m.rejected,
-            "merge_attempts": m.merge_attempts,
-            "cache_hits": m.cache_hits,
-            "cache_misses": m.cache_misses,
-            "acceptance_rate": m.acceptance_rate,
-            "cache_hit_rate": m.cache_hit_rate,
-            "best_score_history": list(m.best_score_history),
-        } if m is not None else None
+        optimizer_metrics = (
+            {
+                "accepted": m.accepted,
+                "rejected": m.rejected,
+                "merge_attempts": m.merge_attempts,
+                "cache_hits": m.cache_hits,
+                "cache_misses": m.cache_misses,
+                "acceptance_rate": m.acceptance_rate,
+                "cache_hit_rate": m.cache_hit_rate,
+                "best_score_history": list(m.best_score_history),
+            }
+            if m is not None
+            else None
+        )
 
         candidates_dump = [
             {
@@ -284,7 +316,8 @@ async def main(settings: HotpotQASettings) -> BenchmarkResult:
                 "origin": c.origin,
                 "parent_index": c.parent_index,
                 "merge_parent_indices": list(c.merge_parent_indices)
-                    if c.merge_parent_indices else None,
+                if c.merge_parent_indices
+                else None,
                 "on_pareto_front": c.on_pareto_front,
                 "mean_score": c.mean_score,
                 "min_score": c.min_score,
@@ -332,9 +365,7 @@ async def main(settings: HotpotQASettings) -> BenchmarkResult:
         ),
         per_task=optimized_tasks,
         seed_config=seed_config.model_dump(),
-        optimized_config=(
-            opt_result.best_config.model_dump() if opt_result else None
-        ),
+        optimized_config=(opt_result.best_config.model_dump() if opt_result else None),
         optimizer_metrics=optimizer_metrics,
         candidates=candidates_dump,
     )

@@ -16,12 +16,20 @@ from fedotmas.core.runner import PipelineResult, run_pipeline
 from fedotmas.mcp import MCPServerConfig, describe_servers, resolve_mcp_registry
 from fedotmas.meta._result import MetaAgentResult
 from fedotmas.plugins import (
+    DEFAULT_WEB_SEARCH_LIMIT,
     LoggingPlugin,
     UnknownToolRecoveryPlugin,
     WebSearchLimitPlugin,
 )
 
 _log = get_logger("fedotmas.core.base")
+
+
+class _Unset:
+    """Tells "left at its default" apart from an explicit value, ``None`` included."""
+
+
+_UNSET = _Unset()
 
 ConfigT = TypeVar("ConfigT")
 
@@ -56,7 +64,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
         memory_service: BaseMemoryService | None = None,
         plugins: list[BasePlugin] | None = None,
         max_retries: int = 3,
-        web_search_limit: int | None = 4,
+        web_search_limit: int | None | _Unset = _UNSET,
     ) -> None:
         setup_logging()
         self._meta_model = meta_model
@@ -69,16 +77,34 @@ class BaseMAS(ABC, Generic[ConfigT]):
         self._mcp_supplied = isinstance(mcp_servers, dict)
         self._mcp_prepared = False
         self._tool_catalog = dict(tool_catalog) if tool_catalog is not None else None
+        # An explicit [] asks for no tools, and a catalogue brings its own; the
+        # rest is worth reporting, "all" over an empty catalogue included.
+        asked_for_none = mcp_servers is not None and not mcp_servers
+        if not self._mcp_registry and tool_catalog is None and not asked_for_none:
+            _log.warning(
+                "No MCP servers given: agents will have no tools and may invent "
+                "what they cannot look up. Pass mcp_servers='all' or a list of "
+                "server names."
+            )
         self._session_service = session_service
         self._memory_service = memory_service
         if plugins is not None:
+            if not isinstance(web_search_limit, _Unset):
+                raise ValueError(
+                    "web_search_limit configures the default plugin set, and a "
+                    "plugins= list replaces that set; put a WebSearchLimitPlugin "
+                    "in the list instead."
+                )
             self._plugins: list[BasePlugin] = list(plugins)
         else:
+            limit = (
+                DEFAULT_WEB_SEARCH_LIMIT
+                if isinstance(web_search_limit, _Unset)
+                else web_search_limit
+            )
             self._plugins = [LoggingPlugin(), UnknownToolRecoveryPlugin()]
-            if web_search_limit is not None:
-                self._plugins.append(
-                    WebSearchLimitPlugin(max_calls_per_agent=web_search_limit)
-                )
+            if limit is not None:
+                self._plugins.append(WebSearchLimitPlugin(max_calls_per_agent=limit))
         self._max_retries = max_retries
         self._last_result: PipelineResult | None = None
         self._last_meta_result: MetaAgentResult | None = None

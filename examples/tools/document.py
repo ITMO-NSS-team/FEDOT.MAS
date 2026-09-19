@@ -18,7 +18,7 @@ async def main():
             MAWAgentConfig(
                 name="reader",
                 instruction=(
-                    "{user_query}\n" "Read the document and summarize key findings."
+                    "{user_query}\nRead the document and summarize key findings."
                 ),
                 model=MODEL,
                 output_key="result",

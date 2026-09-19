@@ -38,7 +38,7 @@ TRAINSET = [
 async def run_with_patience() -> None:
     """Stop after N iterations without improvement."""
     print("--- patience=2 (NoImprovement) ---")
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     opt = Optimizer(
         maw,
         criteria="Technical accuracy and clarity",
@@ -59,7 +59,7 @@ async def run_with_patience() -> None:
 async def run_with_score_threshold() -> None:
     """Stop when score reaches a threshold."""
     print("\n--- score_threshold=0.85 ---")
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     opt = Optimizer(
         maw,
         criteria="Technical accuracy and clarity",
@@ -81,7 +81,7 @@ async def run_with_score_threshold() -> None:
 async def run_with_max_evaluations() -> None:
     """Stop after a fixed evaluation budget."""
     print("\n--- max_evaluations=15 ---")
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     opt = Optimizer(
         maw,
         criteria="Technical accuracy and clarity",
@@ -109,7 +109,7 @@ async def run_with_graceful_shutdown() -> None:
     graceful completion of the current iteration.
     """
     print("\n--- graceful_shutdown=True ---")
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     opt = Optimizer(
         maw,
         criteria="Technical accuracy and clarity",

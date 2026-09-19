@@ -106,7 +106,7 @@ PRESENTATION_CONFIG = MAWConfig(
 
 
 async def replace_agent():
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     ctrl = Controller(maw)
 
     run = await ctrl.run("Проанализируй продажи за Q1", config=SALES_CONFIG)
@@ -126,7 +126,7 @@ async def replace_agent():
 
 
 async def replace_with_parallel():
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     ctrl = Controller(maw)
 
     run = await ctrl.run("Проанализируй продажи за Q1", config=SALES_CONFIG)
@@ -160,7 +160,7 @@ async def replace_with_parallel():
 
 
 async def replace_with_loop():
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     ctrl = Controller(maw)
 
     run = await ctrl.run(
@@ -197,7 +197,7 @@ async def replace_with_loop():
 
 
 async def insert_agent():
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     ctrl = Controller(maw)
 
     run = await ctrl.run("Анализ конкурентов", config=COMPETITORS_CONFIG)
@@ -216,7 +216,7 @@ async def insert_agent():
 
 
 async def remove_agent():
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     ctrl = Controller(maw)
 
     run = await ctrl.run("Подготовь презентацию", config=PRESENTATION_CONFIG)
@@ -227,7 +227,7 @@ async def remove_agent():
 
 
 async def explicit_strategy():
-    maw = MAW()
+    maw = MAW(mcp_servers=[])
     ctrl = Controller(maw)
 
     run = await ctrl.run(
