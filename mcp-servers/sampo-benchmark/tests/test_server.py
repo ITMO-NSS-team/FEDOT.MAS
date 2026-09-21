@@ -28,6 +28,13 @@ def test_public_method_aliases_are_canonical():
     assert server.METHOD_ALIASES["lexical"] == "bm25_token"
     assert server.METHOD_ALIASES["tfidf_char_ngrams"] == "char_tfidf"
 
+def test_evidence_response_budget_preserves_artifact(data):
+    data[0]["raw_work_name"] = "x" * (server.MAX_EVIDENCE_RESPONSE_BYTES + 1)
+    artifact = server.prepare_candidate_batch(0, 1, ["one"], 5, "rrf")["artifact_id"]
+    with pytest.raises(ValueError, match="48 KiB"):
+        server.get_candidate_evidence(artifact, ["1"])
+    assert (server.ARTIFACTS / f"{artifact}.json").exists()
+
 def test_save_by_ids_review_indices_status_and_finalization(data):
     artifact=server.prepare_candidate_batch(0,100,["one","two"],5,"borda")["artifact_id"]
     assert server.save_candidate_predictions("run",artifact,["1"])["saved"] == 1

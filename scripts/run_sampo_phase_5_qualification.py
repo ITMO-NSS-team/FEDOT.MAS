@@ -37,10 +37,10 @@ def _completion_guard(run: str, assigned: list[str], sentinel: Path) -> None:
    os._exit(0)
   time.sleep(0.1)
 async def one(i,assigned,offset=0):
- d=B/f'config_{i:02d}'; meta=json.loads((d/'metadata.json').read_text()); run=meta['run_id']; trace=Trace(Path(os.environ['PHASE5_TRACE_PATH']) if os.environ.get('PHASE5_TRACE_PATH') else None); before=stored(run); start=time.perf_counter(); reason='normal'
+ d=B/f'config_{i:02d}'; meta=json.loads((d/'metadata.json').read_text()); run=os.environ.get('PHASE5_RUN_ID',meta['run_id']); trace=Trace(Path(os.environ['PHASE5_TRACE_PATH']) if os.environ.get('PHASE5_TRACE_PATH') else None); before=stored(run); start=time.perf_counter(); reason='normal'
  if os.environ.get('PHASE5_ENFORCE_COMPLETE'):
   sentinel=Path(os.environ['PHASE5_COMPLETION_SENTINEL']); threading.Thread(target=_completion_guard,args=(run,assigned,sentinel),daemon=True).start()
- task=(d/'task.txt').read_text()+f'\nHARNESS ASSIGNMENT: process exactly offset {offset} and IDs {assigned}. Do not process any other IDs; do not finalize the pilot.'
+ task=(d/'task.txt').read_text()+f'\nHARNESS RUN-ID OVERRIDE: use durable prediction run_id {run}; this supersedes any run_id in the saved task. HARNESS ASSIGNMENT: process exactly offset {offset} and IDs {assigned}. Do not process any other IDs; do not finalize the pilot.'
  try: await MAS(mcp_servers=['sampo-benchmark','sandbox-light'],plugins=[trace]).build_and_run(MASConfig.model_validate_json((d/'config.json').read_text()),task,timeout=300)
  except Exception as e: reason=f'{type(e).__name__}: {e}'
  elapsed=time.perf_counter()-start; after=stored(run); added=after-before; failed=list(trace.fail); outside=added-set(assigned)
@@ -51,8 +51,9 @@ async def one(i,assigned,offset=0):
   ids=set(t['ids'] or [])
   if ids & seen: failed.append('duplicate_persistence_attempt')
   seen.update(ids)
- preps=[t for t in trace.tools if t['tool']=='prepare_candidate_batch']
- if len(preps)>1: failed.append('repeated_completed_unit')
+ # Multiple retrieval calls are allowed before persistence (for complementary
+ # signals or bounded evidence). Repeated work is detected only when the same
+ # ID is included in overlapping durable persistence calls above.
  if elapsed>=299.5: reason='wall_clock_timeout'; failed.append('runtime_limit')
  if reason!='normal': failed.append('non_normal_termination')
  static=json.loads((B/'structural_review.json').read_text())['configs'][f'config_{i:02d}']['pass']

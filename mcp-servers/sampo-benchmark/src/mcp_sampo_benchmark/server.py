@@ -15,6 +15,7 @@ from sampo_baselines import bm25_token_ranked, tfidf_char_ngrams_ranked, tfidf_c
 mcp = FastMCP("sampo-benchmark")
 RETRIEVERS = {"bm25_token": bm25_token_ranked, "char_tfidf": tfidf_char_ngrams_ranked, "char_word_fusion": tfidf_char_word_hybrid_ranked, "construction_token_tfidf": tfidf_construction_token_ranked, "word_tfidf": tfidf_word_ranked}
 FUSIONS = {"rrf", "borda"}
+MAX_EVIDENCE_RESPONSE_BYTES = 48 * 1024
 METHOD_ALIASES = {
     "bm25": "bm25_token", "bm25_token_ranked": "bm25_token", "lexical": "bm25_token", "lexical_bm25": "bm25_token",
     "tfidf_char": "char_tfidf", "tfidf_char_ngrams": "char_tfidf", "char_ngram_tfidf": "char_tfidf",
@@ -97,7 +98,10 @@ def get_candidate_evidence(artifact_id: str, example_ids: list[str]) -> dict[str
     if not 1 <= len(example_ids) <= 20 or len(set(example_ids)) != len(example_ids): raise ValueError("Provide 1-20 unique example IDs")
     data=_artifact(artifact_id); known={e["example_id"]:e for e in data["examples"]}
     if any(i not in known for i in example_ids): raise ValueError("IDs must belong to artifact")
-    return {"artifact_id":artifact_id,"examples":[{"example_id":known[i]["example_id"],"raw_work_name":known[i]["raw_work_name"],"fused_candidates":known[i]["fused_candidates"],"method_candidates":known[i]["method_candidates"]} for i in example_ids]}
+    response={"artifact_id":artifact_id,"examples":[{"example_id":known[i]["example_id"],"raw_work_name":known[i]["raw_work_name"],"fused_candidates":known[i]["fused_candidates"],"method_candidates":known[i]["method_candidates"]} for i in example_ids]}
+    if len(json.dumps(response,ensure_ascii=False,separators=(",", ":")).encode()) > MAX_EVIDENCE_RESPONSE_BYTES:
+        raise ValueError("Requested evidence exceeds the 48 KiB response budget; request a smaller subset of example IDs")
+    return response
 
 @mcp.tool
 def stage_candidate_predictions(run_id: str, artifact_id: str, example_ids: list[str]) -> dict[str,int]:
