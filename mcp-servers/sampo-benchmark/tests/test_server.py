@@ -45,6 +45,14 @@ def test_save_by_ids_review_indices_status_and_finalization(data):
     server.save_candidate_predictions("run",artifact,[str(i) for i in range(2,101)])
     assert server.finalize_predictions("run")["examples"] == 100
 
+def test_review_decision_schema_requires_concrete_indices(data):
+    schema = server.ReviewDecision.model_json_schema()
+    assert set(schema["required"]) == {"example_id", "candidate_indices"}
+    indices = schema["properties"]["candidate_indices"]
+    assert indices["minItems"] == indices["maxItems"] == 3
+    with pytest.raises(Exception):
+        server.ReviewDecision(example_id="1", candidate_indices=[0, 1])
+
 def test_prediction_status_is_bounded_batch_only(data):
     artifact=server.prepare_candidate_batch(0,3,["one"],5,"rrf")["artifact_id"]
     assert server.get_prediction_status("run",["1","2"])=={"requested_count":2,"stored_ids":[],"missing_ids":["1","2"],"complete":False}

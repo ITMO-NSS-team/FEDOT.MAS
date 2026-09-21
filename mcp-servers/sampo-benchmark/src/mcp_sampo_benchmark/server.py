@@ -4,6 +4,7 @@ import csv, fcntl, hashlib, json, re, sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
+from pydantic import BaseModel, Field
 from fastmcp import FastMCP
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -23,6 +24,17 @@ METHOD_ALIASES = {
     "tfidf_construction_token": "construction_token_tfidf", "construction_tfidf": "construction_token_tfidf",
     "tfidf_word": "word_tfidf", "tfidf_word_ngrams": "word_tfidf",
 }
+
+
+class ReviewDecision(BaseModel):
+    """One final, artifact-local review decision."""
+
+    example_id: str = Field(description="Artifact example ID to persist")
+    candidate_indices: list[int] = Field(
+        min_length=3,
+        max_length=3,
+        description="Exactly three distinct artifact-local candidate_index values, in final rank order",
+    )
 
 def _inputs(filename="benchmark_inputs.csv"):
     if filename not in {"benchmark_inputs.csv", "pilot_inputs.csv"}: raise ValueError("Only public benchmark or pilot inputs are available")
@@ -118,18 +130,19 @@ def stage_candidate_predictions(run_id: str, artifact_id: str, example_ids: list
 
 @mcp.tool
 def save_candidate_predictions(run_id: str, artifact_id: str, example_ids: list[str]) -> dict[str,int]:
-    """Persist final fused top-three using only artifact and example IDs."""
+    """Persist final fused top-three for unreviewed IDs only; never include IDs already saved by review."""
     data=_artifact(artifact_id); known={e["example_id"]:e for e in data["examples"]}
     if not example_ids or len(set(example_ids)) != len(example_ids) or any(i not in known or len(known[i]["fused_candidates"])<3 for i in example_ids): raise ValueError("IDs must be unique artifact IDs with three candidates")
     return _store(run_id,[{"example_id":i,**{f"top_{n}":known[i]["fused_candidates"][n-1]["label"] for n in range(1,4)}} for i in example_ids],False)
 
 @mcp.tool
-def save_review_decisions(run_id: str, artifact_id: str, decisions: list[dict[str,Any]]) -> dict[str,int]:
-    """Replace selected predictions by artifact-local candidate indices, never label strings."""
+def save_review_decisions(run_id: str, artifact_id: str, decisions: list[ReviewDecision]) -> dict[str,int]:
+    """Durably persist reviewed IDs by required artifact-local indices; never later save candidates for those same IDs."""
     data=_artifact(artifact_id); known={e["example_id"]:e for e in data["examples"]}
-    if not decisions or len({d.get("example_id") for d in decisions}) != len(decisions): raise ValueError("Decisions must have unique example IDs")
+    normalized=[d.model_dump() if isinstance(d, ReviewDecision) else d for d in decisions]
+    if not normalized or len({d.get("example_id") for d in normalized}) != len(normalized): raise ValueError("Decisions must have unique example IDs")
     rows=[]
-    for d in decisions:
+    for d in normalized:
         eid, inds=d.get("example_id"),d.get("candidate_indices")
         if eid not in known or not isinstance(inds,list) or len(inds)!=3 or len(set(inds))!=3 or any(not isinstance(x,int) for x in inds): raise ValueError("Each decision needs three distinct candidate indices")
         labels={x["candidate_index"]:x["label"] for x in known[eid]["fused_candidates"]}

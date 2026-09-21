@@ -125,7 +125,7 @@ def main() -> None:
         sentinel = OUT / f"batch_{offset:04d}_complete.json"
         result_path = OUT / f"batch_{offset:04d}_result.json"
         env = dict(
-            os.environ, PHASE5_BATCH=str(BATCH), PHASE5_CONFIG="1", PHASE5_RUN_ID=RUN_ID,
+            os.environ, PHASE5_BATCH=str(BATCH), PHASE5_CONFIG=CONFIG.name.removeprefix("config_"), PHASE5_RUN_ID=RUN_ID,
             PHASE5_ASSIGNED_IDS=json.dumps(assigned), PHASE5_OFFSET=str(offset),
             PHASE5_ENFORCE_COMPLETE="1", PHASE5_COMPLETION_SENTINEL=str(sentinel),
             PHASE5_TRACE_PATH=str(trace_path), PHASE5_RESULT_PATH=str(result_path),
