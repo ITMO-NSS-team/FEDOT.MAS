@@ -15,13 +15,18 @@ def data(monkeypatch, tmp_path):
     monkeypatch.setattr(server,"RETRIEVERS",{"one":rank,"two":rank})
     return rows
 
-def test_artifacts_deterministic_compact_and_complete(data):
-    one=server.prepare_candidate_batch(0,100,["one","two"],5,"rrf"); two=server.prepare_candidate_batch(0,100,["two","one"],5,"rrf"); three=server.prepare_candidate_batch(0,100,["one","two"],4,"rrf")
-    assert one["artifact_id"] == two["artifact_id"] != three["artifact_id"]
+def test_artifacts_deterministic_compact_and_complete(data, monkeypatch):
+    monkeypatch.setattr(server, "METHOD_ALIASES", {"alias_one": "one"})
+    one=server.prepare_candidate_batch(0,100,["one","two"],5,"rrf"); two=server.prepare_candidate_batch(0,100,["two","one"],5,"rrf"); duplicate=server.prepare_candidate_batch(0,100,["one","two","one"],5,"rrf"); alias=server.prepare_candidate_batch(0,100,["alias-one","two"],5,"rrf"); three=server.prepare_candidate_batch(0,100,["one","two"],4,"rrf")
+    assert one["artifact_id"] == two["artifact_id"] == duplicate["artifact_id"] == alias["artifact_id"] != three["artifact_id"]
     assert len(json.dumps(one).encode()) < 64 * 1024 and "method_candidates" not in json.dumps(one)
     evidence=server.get_candidate_evidence(one["artifact_id"],["1"])["examples"][0]
     assert evidence["method_candidates"] and len(evidence["fused_candidates"]) == 5
     assert {x["label"] for x in evidence["fused_candidates"]} <= set(server._labels())
+
+def test_public_method_aliases_are_canonical():
+    assert server.METHOD_ALIASES["lexical"] == "bm25_token"
+    assert server.METHOD_ALIASES["tfidf_char_ngrams"] == "char_tfidf"
 
 def test_save_by_ids_review_indices_status_and_finalization(data):
     artifact=server.prepare_candidate_batch(0,100,["one","two"],5,"borda")["artifact_id"]
@@ -32,6 +37,20 @@ def test_save_by_ids_review_indices_status_and_finalization(data):
     status=server.get_run_status("run",3); assert status["missing_count"] == 99 and len(status["next_missing_ids"]) == 3
     server.save_candidate_predictions("run",artifact,[str(i) for i in range(2,101)])
     assert server.finalize_predictions("run")["examples"] == 100
+
+def test_prediction_status_is_bounded_batch_only(data):
+    artifact=server.prepare_candidate_batch(0,3,["one"],5,"rrf")["artifact_id"]
+    assert server.get_prediction_status("run",["1","2"])=={"requested_count":2,"stored_ids":[],"missing_ids":["1","2"],"complete":False}
+    server.save_candidate_predictions("run",artifact,["1","2"])
+    assert server.get_prediction_status("run",["1","2"])=={"requested_count":2,"stored_ids":["1","2"],"missing_ids":[],"complete":True}
+    with pytest.raises(ValueError): server.get_prediction_status("run",["101"])
+    with pytest.raises(ValueError): server.get_prediction_status("run",[str(i) for i in range(101)])
+
+def test_staging_is_not_final_prediction_state(data):
+    artifact=server.prepare_candidate_batch(0,2,["one"],5,"rrf")["artifact_id"]
+    assert server.stage_candidate_predictions("run",artifact,["1","2"])["staged"] == 2
+    assert not server.get_prediction_status("run",["1","2"])["complete"]
+    with pytest.raises(ValueError): server.stage_candidate_predictions("run",artifact,["1"])
 
 def test_old_bulk_api_not_exposed_or_private():
     for name in ("retrieve_candidates","get_allowed_labels","get_input_batch","get_pilot_input_batch","save_prediction_batch","replace_prediction_batch","import_prediction_file"): assert not hasattr(server,name)

@@ -15,6 +15,13 @@ from sampo_baselines import bm25_token_ranked, tfidf_char_ngrams_ranked, tfidf_c
 mcp = FastMCP("sampo-benchmark")
 RETRIEVERS = {"bm25_token": bm25_token_ranked, "char_tfidf": tfidf_char_ngrams_ranked, "char_word_fusion": tfidf_char_word_hybrid_ranked, "construction_token_tfidf": tfidf_construction_token_ranked, "word_tfidf": tfidf_word_ranked}
 FUSIONS = {"rrf", "borda"}
+METHOD_ALIASES = {
+    "bm25": "bm25_token", "bm25_token_ranked": "bm25_token", "lexical": "bm25_token", "lexical_bm25": "bm25_token",
+    "tfidf_char": "char_tfidf", "tfidf_char_ngrams": "char_tfidf", "char_ngram_tfidf": "char_tfidf",
+    "tfidf_char_word_hybrid": "char_word_fusion", "char_word_hybrid": "char_word_fusion",
+    "tfidf_construction_token": "construction_token_tfidf", "construction_tfidf": "construction_token_tfidf",
+    "tfidf_word": "word_tfidf", "tfidf_word_ngrams": "word_tfidf",
+}
 
 def _inputs(filename="benchmark_inputs.csv"):
     if filename not in {"benchmark_inputs.csv", "pilot_inputs.csv"}: raise ValueError("Only public benchmark or pilot inputs are available")
@@ -32,6 +39,7 @@ def _artifact(artifact_id):
 def _run_path(run_id):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", run_id): raise ValueError("Invalid run_id")
     return PUBLIC / "mas_runs" / f"{run_id}.jsonl"
+def _stage_path(run_id): return _run_path(run_id).with_suffix('.staged.jsonl')
 def _valid(rows):
     expected, labels = {r["example_id"] for r in _inputs("pilot_inputs.csv")}, set(_labels())
     if len({r.get("example_id") for r in rows}) != len(rows): raise ValueError("Batch contains duplicate IDs")
@@ -52,13 +60,15 @@ def _store(run_id, rows, replace):
 @mcp.tool
 def list_methods() -> dict[str, Any]:
     """List retrieval methods and deterministic rank-only fusion strategies."""
-    return {"methods": sorted(RETRIEVERS), "fusion_strategies": sorted(FUSIONS), "max_batch_size": 100, "max_k": 50}
+    return {"methods": sorted(RETRIEVERS), "method_aliases": dict(sorted(METHOD_ALIASES.items())), "fusion_strategies": sorted(FUSIONS), "max_batch_size": 100, "max_k": 50}
 
 @mcp.tool
 def prepare_candidate_batch(offset: int, limit: int, methods: list[str], k: int, fusion: str) -> dict[str, Any]:
-    """Keep full retrieval server-side; return compact summaries for agent review decisions."""
+    """Keep full retrieval server-side; canonicalize duplicate method names and return compact summaries."""
     if offset < 0 or not 1 <= limit <= 100 or not 1 <= k <= 50: raise ValueError("offset >= 0, limit <= 100, k <= 50")
-    if not methods or len(set(methods)) != len(methods) or any(m not in RETRIEVERS for m in methods): raise ValueError("methods must be unique supported methods")
+    methods = [METHOD_ALIASES.get(re.sub(r"[-\s]+", "_", method.casefold()), re.sub(r"[-\s]+", "_", method.casefold())) if isinstance(method, str) else method for method in methods]
+    methods = list(dict.fromkeys(methods))
+    if not methods or any(m not in RETRIEVERS for m in methods): raise ValueError("methods must be supported methods")
     if fusion not in FUSIONS: raise ValueError("Unknown fusion strategy")
     selected, methods = _inputs("pilot_inputs.csv")[offset:offset+limit], sorted(methods)
     identity = {"pilot": selected, "offset": offset, "limit": limit, "methods": methods, "k": k, "fusion": fusion}
@@ -90,8 +100,21 @@ def get_candidate_evidence(artifact_id: str, example_ids: list[str]) -> dict[str
     return {"artifact_id":artifact_id,"examples":[{"example_id":known[i]["example_id"],"raw_work_name":known[i]["raw_work_name"],"fused_candidates":known[i]["fused_candidates"],"method_candidates":known[i]["method_candidates"]} for i in example_ids]}
 
 @mcp.tool
+def stage_candidate_predictions(run_id: str, artifact_id: str, example_ids: list[str]) -> dict[str,int]:
+    """Durably stage fused candidates for review; staged rows are not final predictions."""
+    data=_artifact(artifact_id); known={e["example_id"]:e for e in data["examples"]}
+    if not example_ids or len(set(example_ids)) != len(example_ids) or any(i not in known for i in example_ids): raise ValueError("IDs must be unique artifact IDs")
+    path=_stage_path(run_id); path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open('a+',encoding='utf-8') as file:
+        fcntl.flock(file,fcntl.LOCK_EX); file.seek(0)
+        staged={json.loads(line)['example_id'] for line in file if line.strip()}
+        if staged & set(example_ids): raise ValueError('Run already contains a staged candidate ID')
+        file.seek(0,2); file.writelines(json.dumps({'example_id':i,'artifact_id':artifact_id},ensure_ascii=False)+'\n' for i in example_ids); fcntl.flock(file,fcntl.LOCK_UN)
+    return {'staged':len(example_ids),'total_staged':len(staged)+len(example_ids)}
+
+@mcp.tool
 def save_candidate_predictions(run_id: str, artifact_id: str, example_ids: list[str]) -> dict[str,int]:
-    """Persist fused top-three using only artifact and example IDs."""
+    """Persist final fused top-three using only artifact and example IDs."""
     data=_artifact(artifact_id); known={e["example_id"]:e for e in data["examples"]}
     if not example_ids or len(set(example_ids)) != len(example_ids) or any(i not in known or len(known[i]["fused_candidates"])<3 for i in example_ids): raise ValueError("IDs must be unique artifact IDs with three candidates")
     return _store(run_id,[{"example_id":i,**{f"top_{n}":known[i]["fused_candidates"][n-1]["label"] for n in range(1,4)}} for i in example_ids],False)
@@ -117,6 +140,18 @@ def get_run_status(run_id: str, limit: int=50) -> dict[str,Any]:
     expected=[r["example_id"] for r in _inputs("pilot_inputs.csv")]; path=_run_path(run_id)
     stored={json.loads(line)["example_id"] for line in path.read_text(encoding="utf-8").splitlines() if line} if path.exists() else set(); missing=[i for i in expected if i not in stored]
     return {"pilot_total":len(expected),"stored_count":len(stored),"missing_count":len(missing),"next_missing_ids":missing[:limit],"finalized":path.with_suffix(".csv").exists()}
+
+@mcp.tool
+def get_prediction_status(run_id: str, example_ids: list[str]) -> dict[str,Any]:
+    """Verify completion of one assigned pilot unit; use this, not whole-run status, per batch."""
+    if not 1 <= len(example_ids) <= 100 or len(set(example_ids)) != len(example_ids):
+        raise ValueError("Provide 1-100 unique pilot IDs")
+    pilot={row["example_id"] for row in _inputs("pilot_inputs.csv")}
+    if any(item not in pilot for item in example_ids): raise ValueError("IDs must belong to the pilot")
+    path=_run_path(run_id)
+    stored={json.loads(line)["example_id"] for line in path.read_text(encoding="utf-8").splitlines() if line} if path.exists() else set()
+    found=[item for item in example_ids if item in stored]; missing=[item for item in example_ids if item not in stored]
+    return {"requested_count":len(example_ids),"stored_ids":found,"missing_ids":missing,"complete":not missing}
 
 @mcp.tool
 def finalize_predictions(run_id: str) -> dict[str,Any]:
