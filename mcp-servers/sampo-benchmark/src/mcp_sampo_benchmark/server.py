@@ -17,7 +17,7 @@ mcp = FastMCP("sampo-benchmark")
 RETRIEVERS = {"bm25_token": bm25_token_ranked, "char_tfidf": tfidf_char_ngrams_ranked, "char_word_fusion": tfidf_char_word_hybrid_ranked, "construction_token_tfidf": tfidf_construction_token_ranked, "word_tfidf": tfidf_word_ranked}
 FUSIONS = {"rrf", "borda"}
 MAX_EVIDENCE_RESPONSE_BYTES = 48 * 1024
-MAX_EVIDENCE_CANDIDATES = 20
+MAX_EVIDENCE_CANDIDATES = 30
 EVIDENCE_SELECTIONS = {"fused", "diverse_round_robin"}
 METHOD_ALIASES = {
     "bm25": "bm25_token", "bm25_token_ranked": "bm25_token", "lexical": "bm25_token", "lexical_bm25": "bm25_token",
@@ -132,7 +132,7 @@ def _evidence_candidates(example: dict[str, Any], selection: str, candidate_limi
 
 @mcp.tool
 def get_candidate_evidence(artifact_id: str, example_ids: list[str], candidate_limit: int | None = None, selection: str = "fused") -> dict[str, Any]:
-    """Return bounded evidence; diverse_round_robin needs an explicit 1--20 candidate limit and preserves artifact-local indices."""
+    """Return bounded evidence; diverse_round_robin needs an explicit 1--30 candidate limit and preserves artifact-local indices."""
     if not 1 <= len(example_ids) <= 20 or len(set(example_ids)) != len(example_ids): raise ValueError("Provide 1-20 unique example IDs")
     if selection not in EVIDENCE_SELECTIONS: raise ValueError("Unknown evidence selection")
     if candidate_limit is not None and not 1 <= candidate_limit <= MAX_EVIDENCE_CANDIDATES: raise ValueError(f"candidate_limit must be 1--{MAX_EVIDENCE_CANDIDATES}")
@@ -142,6 +142,8 @@ def get_candidate_evidence(artifact_id: str, example_ids: list[str], candidate_l
     for example_id in example_ids:
         example=known[example_id]
         candidates=_evidence_candidates(example, selection, candidate_limit)
+        if candidate_limit is not None:
+            candidates=[{"candidate_index":candidate["candidate_index"],"label":candidate["label"]} for candidate in candidates]
         labels={candidate["label"] for candidate in candidates}
         examples.append({"example_id":example["example_id"],"raw_work_name":example["raw_work_name"],"fused_candidates":candidates,"method_candidates":({label:entries for label,entries in example["method_candidates"].items() if label in labels} if selection == "fused" else {})})
     response={"artifact_id":artifact_id,"candidate_selection":selection,"candidate_limit":candidate_limit,"examples":examples}

@@ -84,7 +84,7 @@ def malformed_tool_call(raw: dict, allowed_ids: set[str]) -> bool:
                     return True
         if call.get("tool") == "get_candidate_evidence":
             evidence = call.get("evidence") or {}
-            if len(call.get("ids") or []) > 6 or evidence.get("selection") != "diverse_round_robin" or not 1 <= evidence.get("candidate_limit", 0) <= 20:
+            if len(call.get("ids") or []) > 4 or evidence.get("selection") != "diverse_round_robin" or not 1 <= evidence.get("candidate_limit", 0) <= 30:
                 return True
     return False
 
