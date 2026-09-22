@@ -5,13 +5,13 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
-from pydantic import BaseModel
-
 from fedotmas._settings import ModelConfig, resolve_model_config
+from fedotmas.common.codex_cli import CodexCliLlm
 from fedotmas.common.llm import _ERROR_PAYLOAD_LEN, _ProxyClient, make_llm
 from fedotmas.mas.builder import build_routing_system
 from fedotmas.mas.models import MASConfig
+from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
+from pydantic import BaseModel
 
 
 class _ErrorResponse(BaseModel):
@@ -54,6 +54,11 @@ def _response(finish_reason: str = "stop"):
 
 
 class TestMakeLlm:
+    def test_creates_codex_cli_llm_for_host_model(self):
+        llm = make_llm(ModelConfig(model="host/gpt-5.6-terra"))
+        assert isinstance(llm, CodexCliLlm)
+        assert llm.model == "host/gpt-5.6-terra"
+
     def test_creates_litellm_with_model(self):
         cfg = ModelConfig(model="openrouter/meta-llama/llama-3-70b")
         llm = make_llm(cfg)
