@@ -35,6 +35,32 @@ def test_evidence_response_budget_preserves_artifact(data):
         server.get_candidate_evidence(artifact, ["1"])
     assert (server.ARTIFACTS / f"{artifact}.json").exists()
 
+def test_diverse_evidence_is_bounded_deterministic_and_uses_artifact_indices(data, monkeypatch):
+    def one(examples, labels, k):
+        return [[("alpha", .9), ("beta", .8), ("gamma", .7), ("delta", .6), ("epsilon", .5)][:k] for _ in examples]
+    def two(examples, labels, k):
+        return [[("delta", .9), ("gamma", .8), ("beta", .7), ("alpha", .6), ("epsilon", .5)][:k] for _ in examples]
+    monkeypatch.setattr(server, "RETRIEVERS", {"one": one, "two": two})
+    artifact = server.prepare_candidate_batch(0, 1, ["one", "two"], 5, "rrf")["artifact_id"]
+    full = server.get_candidate_evidence(artifact, ["1"])["examples"][0]
+    diverse = server.get_candidate_evidence(artifact, ["1"], candidate_limit=4, selection="diverse_round_robin")
+    again = server.get_candidate_evidence(artifact, ["1"], candidate_limit=4, selection="diverse_round_robin")
+    candidates = diverse["examples"][0]["fused_candidates"]
+    assert diverse == again
+    assert diverse["candidate_selection"] == "diverse_round_robin"
+    assert [item["label"] for item in candidates] == ["alpha", "delta", "beta", "gamma"]
+    assert diverse["examples"][0]["method_candidates"] == {}
+    assert {item["candidate_index"] for item in candidates} <= {item["candidate_index"] for item in full["fused_candidates"]}
+    assert len(candidates) == 4
+    indices = [item["candidate_index"] for item in (candidates[1], candidates[0], candidates[2])]
+    server.save_review_decisions("diverse", artifact, [{"example_id": "1", "candidate_indices": indices}])
+    saved = json.loads(server._run_path("diverse").read_text())
+    assert [saved[f"top_{rank}"] for rank in range(1, 4)] == ["delta", "alpha", "beta"]
+    with pytest.raises(ValueError, match="requires candidate_limit"):
+        server.get_candidate_evidence(artifact, ["1"], selection="diverse_round_robin")
+    with pytest.raises(ValueError, match="candidate_limit"):
+        server.get_candidate_evidence(artifact, ["1"], candidate_limit=21)
+
 def test_save_by_ids_review_indices_status_and_finalization(data):
     artifact=server.prepare_candidate_batch(0,100,["one","two"],5,"borda")["artifact_id"]
     assert server.save_candidate_predictions("run",artifact,["1"])["saved"] == 1

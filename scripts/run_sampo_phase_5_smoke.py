@@ -34,6 +34,7 @@ def malformed_tool_call(raw, allowed_ids):
   if call.get('tool')=='prepare_candidate_batch' and any(method not in accepted for method in (call.get('retrieval') or {}).get('methods') or []): return True
   if call.get('tool')=='save_candidate_predictions' and not set(call.get('ids') or []) <= allowed_ids: return True
   if call.get('tool')=='save_review_decisions' and any(not isinstance(decision.get('candidate_indices'),list) or len(decision['candidate_indices'])!=3 or len(set(decision['candidate_indices']))!=3 for decision in call.get('decisions') or []): return True
+  if call.get('tool')=='get_candidate_evidence' and (len(call.get('ids') or [])>6 or (call.get('evidence') or {}).get('selection')!='diverse_round_robin' or not 1 <= (call.get('evidence') or {}).get('candidate_limit',0) <= 20): return True
  return False
 def main():
  if OUT.exists(): raise RuntimeError(f'Refusing to overwrite {OUT}')

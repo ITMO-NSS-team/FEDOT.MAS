@@ -17,6 +17,8 @@ mcp = FastMCP("sampo-benchmark")
 RETRIEVERS = {"bm25_token": bm25_token_ranked, "char_tfidf": tfidf_char_ngrams_ranked, "char_word_fusion": tfidf_char_word_hybrid_ranked, "construction_token_tfidf": tfidf_construction_token_ranked, "word_tfidf": tfidf_word_ranked}
 FUSIONS = {"rrf", "borda"}
 MAX_EVIDENCE_RESPONSE_BYTES = 48 * 1024
+MAX_EVIDENCE_CANDIDATES = 20
+EVIDENCE_SELECTIONS = {"fused", "diverse_round_robin"}
 METHOD_ALIASES = {
     "bm25": "bm25_token", "bm25_token_ranked": "bm25_token", "lexical": "bm25_token", "lexical_bm25": "bm25_token",
     "tfidf_char": "char_tfidf", "tfidf_char_ngrams": "char_tfidf", "char_ngram_tfidf": "char_tfidf",
@@ -73,7 +75,7 @@ def _store(run_id, rows, replace):
 @mcp.tool
 def list_methods() -> dict[str, Any]:
     """List retrieval methods and deterministic rank-only fusion strategies."""
-    return {"methods": sorted(RETRIEVERS), "method_aliases": dict(sorted(METHOD_ALIASES.items())), "fusion_strategies": sorted(FUSIONS), "max_batch_size": 100, "max_k": 50}
+    return {"methods": sorted(RETRIEVERS), "method_aliases": dict(sorted(METHOD_ALIASES.items())), "fusion_strategies": sorted(FUSIONS), "evidence_selections": sorted(EVIDENCE_SELECTIONS), "max_batch_size": 100, "max_k": 50, "max_evidence_candidates": MAX_EVIDENCE_CANDIDATES}
 
 @mcp.tool
 def prepare_candidate_batch(offset: int, limit: int, methods: list[str], k: int, fusion: str) -> dict[str, Any]:
@@ -104,13 +106,45 @@ def prepare_candidate_batch(offset: int, limit: int, methods: list[str], k: int,
         summaries.append({"example_id":e["example_id"],"fused_top_3":[x["label"] for x in fused[:3]],"method_count":len(methods),"top_1_vote_count":max(method_top1.count(x) for x in set(method_top1)),"distinct_top1_labels":len(set(method_top1)),"top1_top2_margin":fused[0]["fusion_score"]-(fused[1]["fusion_score"] if len(fused)>1 else 0),"exact_title_match":bool(fused and _norm(e["raw_work_name"])==_norm(fused[0]["label"]))})
     return {"artifact_id":artifact_id,"offset":offset,"total_pilot_examples":len(_inputs("pilot_inputs.csv")),"examples":summaries}
 
+def _evidence_candidates(example: dict[str, Any], selection: str, candidate_limit: int | None) -> list[dict[str, Any]]:
+    fused = example["fused_candidates"]
+    if selection == "fused":
+        return fused if candidate_limit is None else fused[:candidate_limit]
+    if candidate_limit is None:
+        raise ValueError("diverse_round_robin requires candidate_limit")
+    by_method_rank: dict[tuple[str, int], dict[str, Any]] = {}
+    by_label = {candidate["label"]: candidate for candidate in fused}
+    for label, entries in example["method_candidates"].items():
+        for entry in entries:
+            by_method_rank[(entry["method"], entry["rank"])] = by_label[label]
+    selected, seen = [], set()
+    methods = sorted({method for method, _ in by_method_rank})
+    for rank in range(1, max((rank for _, rank in by_method_rank), default=0) + 1):
+        for method in methods:
+            candidate = by_method_rank.get((method, rank))
+            if candidate and candidate["candidate_index"] not in seen:
+                selected.append(candidate)
+                seen.add(candidate["candidate_index"])
+                if len(selected) == candidate_limit:
+                    return selected
+    return selected
+
+
 @mcp.tool
-def get_candidate_evidence(artifact_id: str, example_ids: list[str]) -> dict[str, Any]:
-    """Return raw work names and bounded artifact evidence for at most 20 requested IDs."""
+def get_candidate_evidence(artifact_id: str, example_ids: list[str], candidate_limit: int | None = None, selection: str = "fused") -> dict[str, Any]:
+    """Return bounded evidence; diverse_round_robin needs an explicit 1--20 candidate limit and preserves artifact-local indices."""
     if not 1 <= len(example_ids) <= 20 or len(set(example_ids)) != len(example_ids): raise ValueError("Provide 1-20 unique example IDs")
+    if selection not in EVIDENCE_SELECTIONS: raise ValueError("Unknown evidence selection")
+    if candidate_limit is not None and not 1 <= candidate_limit <= MAX_EVIDENCE_CANDIDATES: raise ValueError(f"candidate_limit must be 1--{MAX_EVIDENCE_CANDIDATES}")
     data=_artifact(artifact_id); known={e["example_id"]:e for e in data["examples"]}
     if any(i not in known for i in example_ids): raise ValueError("IDs must belong to artifact")
-    response={"artifact_id":artifact_id,"examples":[{"example_id":known[i]["example_id"],"raw_work_name":known[i]["raw_work_name"],"fused_candidates":known[i]["fused_candidates"],"method_candidates":known[i]["method_candidates"]} for i in example_ids]}
+    examples=[]
+    for example_id in example_ids:
+        example=known[example_id]
+        candidates=_evidence_candidates(example, selection, candidate_limit)
+        labels={candidate["label"] for candidate in candidates}
+        examples.append({"example_id":example["example_id"],"raw_work_name":example["raw_work_name"],"fused_candidates":candidates,"method_candidates":({label:entries for label,entries in example["method_candidates"].items() if label in labels} if selection == "fused" else {})})
+    response={"artifact_id":artifact_id,"candidate_selection":selection,"candidate_limit":candidate_limit,"examples":examples}
     if len(json.dumps(response,ensure_ascii=False,separators=(",", ":")).encode()) > MAX_EVIDENCE_RESPONSE_BYTES:
         raise ValueError("Requested evidence exceeds the 48 KiB response budget; request a smaller subset of example IDs")
     return response

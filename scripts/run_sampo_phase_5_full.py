@@ -32,7 +32,14 @@ def prediction_path() -> Path:
 
 def stored_ids() -> set[str]:
     path = prediction_path()
-    return {json.loads(line)["example_id"] for line in path.open() if line.strip()} if path.exists() else set()
+    if not path.exists():
+        return set()
+    for _ in range(20):
+        try:
+            return {json.loads(line)["example_id"] for line in path.open() if line.strip()}
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            time.sleep(0.05)
+    raise RuntimeError(f"Prediction file remained unreadable during status check: {path}")
 
 
 def duplicate_persistence(raw: dict, allowed_ids: set[str]) -> bool:
@@ -75,6 +82,10 @@ def malformed_tool_call(raw: dict, allowed_ids: set[str]) -> bool:
                 indices = decision.get("candidate_indices")
                 if not isinstance(indices, list) or len(indices) != 3 or len(set(indices)) != 3:
                     return True
+        if call.get("tool") == "get_candidate_evidence":
+            evidence = call.get("evidence") or {}
+            if len(call.get("ids") or []) > 6 or evidence.get("selection") != "diverse_round_robin" or not 1 <= evidence.get("candidate_limit", 0) <= 20:
+                return True
     return False
 
 
@@ -105,21 +116,29 @@ def finalize() -> dict:
 
 
 def main() -> None:
-    if OUT.exists():
+    resume = os.environ.get("PHASE5_RESUME") == "1"
+    if OUT.exists() and not resume:
         raise RuntimeError(f"Refusing to overwrite {OUT}")
-    if prediction_path().exists() or prediction_path().with_suffix(".staged.jsonl").exists():
+    if prediction_path().exists() and not resume or prediction_path().with_suffix(".staged.jsonl").exists() and not resume:
         raise RuntimeError(f"Run ID {RUN_ID} is not clean")
-    OUT.mkdir(parents=True)
+    OUT.mkdir(parents=True, exist_ok=True)
     rows = pilot_rows()
     if len(rows) != 1000:
         raise RuntimeError("Expected fixed 1,000-example pilot")
-    report = {
-        "config": str(CONFIG.relative_to(ROOT)), "run_id": RUN_ID,
-        "private_ground_truth_used": False, "fresh_sessions": True,
-        "batch_size": 20, "batches": [], "status": "running",
-    }
+    if resume:
+        report = json.loads((OUT / "report.json").read_text())
+        report["status"] = "resumed"
+        report["resumed"] = True
+    else:
+        report = {
+            "config": str(CONFIG.relative_to(ROOT)), "run_id": RUN_ID,
+            "private_ground_truth_used": False, "fresh_sessions": True,
+            "batch_size": 20, "batches": [], "status": "running",
+        }
     for offset in range(0, len(rows), 20):
         assigned = [row["example_id"] for row in rows[offset:offset + 20]]
+        if resume and set(assigned) <= stored_ids():
+            continue
         before = stored_ids()
         trace_path = OUT / f"batch_{offset:04d}_trace.json"
         sentinel = OUT / f"batch_{offset:04d}_complete.json"
@@ -129,6 +148,7 @@ def main() -> None:
             PHASE5_ASSIGNED_IDS=json.dumps(assigned), PHASE5_OFFSET=str(offset),
             PHASE5_ENFORCE_COMPLETE="1", PHASE5_COMPLETION_SENTINEL=str(sentinel),
             PHASE5_TRACE_PATH=str(trace_path), PHASE5_RESULT_PATH=str(result_path),
+            PHASE5_POLICY_SUFFIX=" Use only fusion=rrf; the only supported fusion strategy for this run is exactly the literal string rrf. Never invent or substitute another fusion value.",
         )
         started = time.monotonic()
         process = subprocess.Popen(

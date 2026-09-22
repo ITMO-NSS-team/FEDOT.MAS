@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import re
 from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RUN = "phase5_full_c14f4c3f1f4343ec90c4662a845439c7_config01_schema"
-RUN_DIR = ROOT / "artifacts/sampo_phase_5/full_phase5_full_c14f4c3f1f4343ec90c4662a845439c7_config01_schema"
+RUN = os.environ.get("SAMPO_PHASE5_RUN_ID", "phase5_full_c14f4c3f1f4343ec90c4662a845439c7_config01_schema")
+RUN_DIR = ROOT / "artifacts/sampo_phase_5" / f"full_{RUN}"
 ARTIFACTS = ROOT / "artifacts/sampo_benchmark/candidate_artifacts"
 OUT = RUN_DIR / "recall_decomposition.json"
 

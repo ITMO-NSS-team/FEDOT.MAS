@@ -24,12 +24,16 @@ class Trace(BasePlugin):
  async def on_event_callback(self,*,invocation_context:InvocationContext,event:Event):
   if not event.partial:
    for x in event.get_function_calls():
-    args=x.args or {}; self.tools.append({'agent':event.author,'tool':x.name,'ids':args.get('example_ids') or [d.get('example_id') for d in args.get('decisions',[])], 'decisions':[{'example_id':d.get('example_id'),'candidate_indices':d.get('candidate_indices')} for d in args.get('decisions',[])], 'artifact_id':args.get('artifact_id'), 'retrieval':({'offset':args.get('offset'),'limit':args.get('limit'),'methods':args.get('methods'),'k':args.get('k'),'fusion':args.get('fusion')} if x.name=='prepare_candidate_batch' else None)})
+    args=x.args or {}; self.tools.append({'agent':event.author,'tool':x.name,'ids':args.get('example_ids') or [d.get('example_id') for d in args.get('decisions',[])], 'decisions':[{'example_id':d.get('example_id'),'candidate_indices':d.get('candidate_indices')} for d in args.get('decisions',[])], 'artifact_id':args.get('artifact_id'), 'retrieval':({'offset':args.get('offset'),'limit':args.get('limit'),'methods':args.get('methods'),'k':args.get('k'),'fusion':args.get('fusion')} if x.name=='prepare_candidate_batch' else None), 'evidence':({'candidate_limit':args.get('candidate_limit'),'selection':args.get('selection')} if x.name=='get_candidate_evidence' else None)})
     self.flush()
     if len(self.tools)>60:self.fail.append('tool_call_limit'); self.flush(); raise RuntimeError('tool_call_limit')
 def stored(run):
  p=ROOT/f'artifacts/sampo_benchmark/mas_runs/{run}.jsonl'
- return {json.loads(x)['example_id'] for x in p.open() if x.strip()} if p.exists() else set()
+ if not p.exists(): return set()
+ for _ in range(20):
+  try: return {json.loads(x)['example_id'] for x in p.open() if x.strip()}
+  except (UnicodeDecodeError,json.JSONDecodeError): time.sleep(0.05)
+ raise RuntimeError(f'Prediction file remained unreadable during status check: {p}')
 def _completion_guard(run: str, assigned: list[str], sentinel: Path) -> None:
  while True:
   if set(assigned) <= stored(run):
@@ -40,7 +44,7 @@ async def one(i,assigned,offset=0):
  d=B/f'config_{i:02d}'; meta=json.loads((d/'metadata.json').read_text()); run=os.environ.get('PHASE5_RUN_ID',meta['run_id']); trace=Trace(Path(os.environ['PHASE5_TRACE_PATH']) if os.environ.get('PHASE5_TRACE_PATH') else None); before=stored(run); start=time.perf_counter(); reason='normal'
  if os.environ.get('PHASE5_ENFORCE_COMPLETE'):
   sentinel=Path(os.environ['PHASE5_COMPLETION_SENTINEL']); threading.Thread(target=_completion_guard,args=(run,assigned,sentinel),daemon=True).start()
- task=(d/'task.txt').read_text()+f'\nHARNESS RUN-ID OVERRIDE: use durable prediction run_id {run}; this supersedes any run_id in the saved task. HARNESS ASSIGNMENT: process exactly offset {offset} and IDs {assigned}. Do not process any other IDs; do not finalize the pilot.'
+ task=(d/'task.txt').read_text()+f'\nHARNESS RUN-ID OVERRIDE: use durable prediction run_id {run}; this supersedes any run_id in the saved task. HARNESS ASSIGNMENT: process exactly offset {offset} and IDs {assigned}. Do not process any other IDs; do not finalize the pilot.'+os.environ.get('PHASE5_POLICY_SUFFIX','')
  try: await MAS(mcp_servers=['sampo-benchmark','sandbox-light'],plugins=[trace]).build_and_run(MASConfig.model_validate_json((d/'config.json').read_text()),task,timeout=300)
  except Exception as e: reason=f'{type(e).__name__}: {e}'
  elapsed=time.perf_counter()-start; after=stored(run); added=after-before; failed=list(trace.fail); outside=added-set(assigned)
