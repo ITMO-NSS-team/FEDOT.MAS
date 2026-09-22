@@ -10,6 +10,7 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.events import Event
 from google.adk.runners import InvocationContext
+from sampo_phase_5_policy import evaluate_policy_conformance
 ROOT=Path(__file__).resolve().parents[1]; B=Path(os.environ['PHASE5_BATCH']).resolve() if os.environ.get('PHASE5_BATCH') else ROOT/'artifacts/sampo_phase_5/structural_review/batch_7aea72723bfd461585a8d6cd67857954'; OUT=ROOT/'artifacts/sampo_phase_5/behavioral_qualification'/B.name
 class Trace(BasePlugin):
  def __init__(self, path: Path | None = None): super().__init__(name='phase5_behavior_trace'); self.calls=[]; self.tools=[]; self.agents=[]; self.fail=[]; self.path=path
@@ -55,16 +56,20 @@ async def one(i,assigned,offset=0):
   ids=set(t['ids'] or [])
   if ids & seen: failed.append('duplicate_persistence_attempt')
   seen.update(ids)
+ if any(t['tool']=='stage_candidate_predictions' for t in trace.tools): failed.append('staging_not_allowed')
  # Multiple retrieval calls are allowed before persistence (for complementary
  # signals or bounded evidence). Repeated work is detected only when the same
  # ID is included in overlapping durable persistence calls above.
  if elapsed>=299.5: reason='wall_clock_timeout'; failed.append('runtime_limit')
+ policy=evaluate_policy_conformance({'tool_calls':trace.tools}, assigned)
+ if not policy['pass']: failed.extend('policy_conformance:'+reason for reason in policy['reasons'])
  if reason!='normal': failed.append('non_normal_termination')
  static=json.loads((B/'structural_review.json').read_text())['configs'][f'config_{i:02d}']['pass']
- return {'config':str(d.relative_to(ROOT)),'static_sanity':static,'behavioral_pass':static and not failed,'failed_criteria':sorted(set(failed)),'trace':{'agents':trace.agents,'model_calls':trace.calls,'tool_calls':trace.tools,'max_prompt_tokens':max([x['prompt_tokens'] for x in trace.calls],default=0),'artifact_ids':sorted({x['artifact_id'] for x in trace.tools if x['artifact_id']}),'final_stored_ids':sorted(after),'runtime_seconds':elapsed,'termination_reason':reason}}
+ return {'config':str(d.relative_to(ROOT)),'static_sanity':static,'behavioral_pass':static and not failed,'failed_criteria':sorted(set(failed)),'policy_conformance':policy,'trace':{'agents':trace.agents,'model_calls':trace.calls,'tool_calls':trace.tools,'max_prompt_tokens':max([x['prompt_tokens'] for x in trace.calls],default=0),'artifact_ids':sorted({x['artifact_id'] for x in trace.tools if x['artifact_id']}),'final_stored_ids':sorted(after),'runtime_seconds':elapsed,'termination_reason':reason}}
 async def main():
  OUT.mkdir(parents=True,exist_ok=True)
- with (ROOT/'artifacts/sampo_benchmark/pilot_inputs.csv').open(encoding='utf-8',newline='') as f: default_ids=[r['example_id'] for r in list(csv.DictReader(f))[:5]]
+ with (ROOT/'artifacts/sampo_benchmark/pilot_inputs.csv').open(encoding='utf-8',newline='') as f: first_batch=list(csv.DictReader(f))[:20]
+ default_ids=[r['example_id'] for r in first_batch[:10]]
  ids=json.loads(os.environ['PHASE5_ASSIGNED_IDS']) if os.environ.get('PHASE5_ASSIGNED_IDS') else default_ids
  offset=int(os.environ.get('PHASE5_OFFSET','0'))
  indexes=[int(os.environ['PHASE5_CONFIG'])] if os.environ.get('PHASE5_CONFIG') else range(1,6)

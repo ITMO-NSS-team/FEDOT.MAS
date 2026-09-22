@@ -50,6 +50,7 @@ def test_diverse_evidence_is_bounded_deterministic_and_uses_artifact_indices(dat
     assert diverse["candidate_selection"] == "diverse_round_robin"
     assert [item["label"] for item in candidates] == ["alpha", "delta", "beta", "gamma"]
     assert diverse["examples"][0]["method_candidates"] == {}
+    assert set(diverse["examples"][0]["fused_candidates"][0]) == {"candidate_index", "label", "support_count", "best_rank", "methods"}
     assert {item["candidate_index"] for item in candidates} <= {item["candidate_index"] for item in full["fused_candidates"]}
     assert len(candidates) == 4
     indices = [item["candidate_index"] for item in (candidates[1], candidates[0], candidates[2])]
@@ -59,7 +60,19 @@ def test_diverse_evidence_is_bounded_deterministic_and_uses_artifact_indices(dat
     with pytest.raises(ValueError, match="requires candidate_limit"):
         server.get_candidate_evidence(artifact, ["1"], selection="diverse_round_robin")
     with pytest.raises(ValueError, match="candidate_limit"):
-        server.get_candidate_evidence(artifact, ["1"], candidate_limit=21)
+        server.get_candidate_evidence(artifact, ["1"], candidate_limit=31)
+
+def test_partition_candidate_batch_is_deterministic(data, monkeypatch):
+    def one(examples, labels, k):
+        return [[("alpha", .9), ("beta", .8), ("gamma", .7)][:k] for _ in examples]
+    def two(examples, labels, k):
+        return [[("beta", .9), ("alpha", .8), ("gamma", .7)][:k] for _ in examples]
+    monkeypatch.setattr(server, "RETRIEVERS", {"one": one, "two": two})
+    artifact = server.prepare_candidate_batch(0, 2, ["one", "two"], 3, "rrf")["artifact_id"]
+    partition = server.partition_candidate_batch(artifact, ["1", "2"])
+    assert partition["review_ids"] == ["1", "2"]
+    assert partition["fallback_ids"] == []
+    assert partition["review_count"] + partition["fallback_count"] == 2
 
 def test_save_by_ids_review_indices_status_and_finalization(data):
     artifact=server.prepare_candidate_batch(0,100,["one","two"],5,"borda")["artifact_id"]

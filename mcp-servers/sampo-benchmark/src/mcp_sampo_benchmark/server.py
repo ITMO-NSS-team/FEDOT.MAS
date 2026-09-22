@@ -131,6 +131,31 @@ def _evidence_candidates(example: dict[str, Any], selection: str, candidate_limi
 
 
 @mcp.tool
+def partition_candidate_batch(artifact_id: str, example_ids: list[str]) -> dict[str, Any]:
+    """Apply the deterministic disagreement gate to an artifact batch."""
+    if not 1 <= len(example_ids) <= 100 or len(set(example_ids)) != len(example_ids):
+        raise ValueError("Provide 1-100 unique example IDs")
+    data = _artifact(artifact_id)
+    known = {example["example_id"]: example for example in data["examples"]}
+    if any(example_id not in known for example_id in example_ids):
+        raise ValueError("IDs must belong to artifact")
+    review_ids, fallback_ids = [], []
+    for example_id in example_ids:
+        example = known[example_id]
+        top1_labels = {
+            label
+            for label, entries in example["method_candidates"].items()
+            if any(entry["rank"] == 1 for entry in entries)
+        }
+        (review_ids if len(top1_labels) > 1 else fallback_ids).append(example_id)
+    return {
+        "review_ids": review_ids,
+        "fallback_ids": fallback_ids,
+        "review_count": len(review_ids),
+        "fallback_count": len(fallback_ids),
+    }
+
+@mcp.tool
 def get_candidate_evidence(artifact_id: str, example_ids: list[str], candidate_limit: int | None = None, selection: str = "fused") -> dict[str, Any]:
     """Return bounded evidence; diverse_round_robin needs an explicit 1--30 candidate limit and preserves artifact-local indices."""
     if not 1 <= len(example_ids) <= 20 or len(set(example_ids)) != len(example_ids): raise ValueError("Provide 1-20 unique example IDs")
@@ -143,7 +168,17 @@ def get_candidate_evidence(artifact_id: str, example_ids: list[str], candidate_l
         example=known[example_id]
         candidates=_evidence_candidates(example, selection, candidate_limit)
         if candidate_limit is not None:
-            candidates=[{"candidate_index":candidate["candidate_index"],"label":candidate["label"]} for candidate in candidates]
+            compact=[]
+            for candidate in candidates:
+                entries=example["method_candidates"].get(candidate["label"], [])
+                compact.append({
+                    "candidate_index":candidate["candidate_index"],
+                    "label":candidate["label"],
+                    "support_count":len({entry["method"] for entry in entries}),
+                    "best_rank":min((entry["rank"] for entry in entries), default=None),
+                    "methods":sorted({entry["method"] for entry in entries}),
+                })
+            candidates=compact
         labels={candidate["label"] for candidate in candidates}
         examples.append({"example_id":example["example_id"],"raw_work_name":example["raw_work_name"],"fused_candidates":candidates,"method_candidates":({label:entries for label,entries in example["method_candidates"].items() if label in labels} if selection == "fused" else {})})
     response={"artifact_id":artifact_id,"candidate_selection":selection,"candidate_limit":candidate_limit,"examples":examples}

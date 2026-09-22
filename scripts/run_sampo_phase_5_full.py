@@ -10,8 +10,9 @@ import sys
 import time
 import uuid
 from pathlib import Path
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from sampo_phase_5_policy import evaluate_policy_conformance
 BATCH = Path(os.environ["PHASE5_BATCH"]).resolve() if os.environ.get("PHASE5_BATCH") else (
     ROOT / "artifacts/sampo_phase_5/structural_review/batch_1e6819ad6b0a40dda61ab7c86cc18edf"
 )
@@ -84,7 +85,7 @@ def malformed_tool_call(raw: dict, allowed_ids: set[str]) -> bool:
                     return True
         if call.get("tool") == "get_candidate_evidence":
             evidence = call.get("evidence") or {}
-            if len(call.get("ids") or []) > 4 or evidence.get("selection") != "diverse_round_robin" or not 1 <= evidence.get("candidate_limit", 0) <= 30:
+            if len(call.get("ids") or []) > 4 or evidence.get("selection") != "diverse_round_robin" or not 5 <= evidence.get("candidate_limit", 0) <= 10:
                 return True
     return False
 
@@ -133,10 +134,10 @@ def main() -> None:
         report = {
             "config": str(CONFIG.relative_to(ROOT)), "run_id": RUN_ID,
             "private_ground_truth_used": False, "fresh_sessions": True,
-            "batch_size": 20, "batches": [], "status": "running",
+            "batch_size": 10, "batches": [], "status": "running",
         }
-    for offset in range(0, len(rows), 20):
-        assigned = [row["example_id"] for row in rows[offset:offset + 20]]
+    for offset in range(0, len(rows), 10):
+        assigned = [row["example_id"] for row in rows[offset:offset + 10]]
         if resume and set(assigned) <= stored_ids():
             continue
         before = stored_ids()
@@ -148,7 +149,7 @@ def main() -> None:
             PHASE5_ASSIGNED_IDS=json.dumps(assigned), PHASE5_OFFSET=str(offset),
             PHASE5_ENFORCE_COMPLETE="1", PHASE5_COMPLETION_SENTINEL=str(sentinel),
             PHASE5_TRACE_PATH=str(trace_path), PHASE5_RESULT_PATH=str(result_path),
-            PHASE5_POLICY_SUFFIX=" Use only fusion=rrf; the only supported fusion strategy for this run is exactly the literal string rrf. Never invent or substitute another fusion value.",
+            PHASE5_POLICY_SUFFIX=os.environ.get("PHASE5_POLICY_SUFFIX", " Use only fusion=rrf; the only supported fusion strategy for this run is exactly the literal string rrf. Never invent or substitute another fusion value."),
         )
         started = time.monotonic()
         process = subprocess.Popen(
@@ -172,6 +173,7 @@ def main() -> None:
         process.wait()
         after = stored_ids()
         raw = json.loads(trace_path.read_text()) if trace_path.exists() else {"model_calls": [], "tool_calls": [], "failures": []}
+        policy = evaluate_policy_conformance(raw, assigned)
         item = {
             "offset": offset, "assigned_ids": assigned, "runtime_seconds": time.monotonic() - started,
             "stored_ids": sorted(after & set(assigned)), "outside_ids": sorted((after - before) - set(assigned)),
@@ -179,13 +181,14 @@ def main() -> None:
             "model_calls": len(raw["model_calls"]), "tool_calls": len(raw["tool_calls"]),
             "duplicate_persistence": duplicate_persistence(raw, set(assigned)), "prepare_after_write": prepare_after_write(raw),
             "malformed_tool_call": malformed_tool_call(raw, set(assigned)), "complete": set(assigned) <= after,
+            "policy_conformance": policy,
             "sentinel": sentinel.exists(), "failures": raw["failures"],
         }
         report["batches"].append(item)
         write_report(report)
         if (
             not item["complete"] or item["outside_ids"] or item["duplicate_persistence"]
-            or item["prepare_after_write"] or item["malformed_tool_call"]
+            or item["prepare_after_write"] or item["malformed_tool_call"] or not policy["pass"]
             or item["max_prompt_tokens"] > 64000 or item["model_calls"] > 30
             or item["tool_calls"] > 60 or item["failures"]
         ):
