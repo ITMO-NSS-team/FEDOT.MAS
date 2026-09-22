@@ -12,19 +12,20 @@ def _trace() -> dict:
                 "retrieval": {
                     "offset": 0,
                     "limit": 2,
-                    "methods": ["char_tfidf", "construction_token_tfidf", "word_tfidf"],
-                    "k": 50,
+                    "methods": ["bm25_token", "char_tfidf", "char_word_fusion", "construction_token_tfidf", "word_tfidf"],
+                    "k": 5,
                     "fusion": "rrf",
                 },
             },
-            {"tool": "partition_candidate_batch", "ids": ["1", "2"]},
+            {"tool": "partition_candidate_batch", "ids": ["1", "2"], "artifact_id": "a" * 64},
             {
                 "tool": "get_candidate_evidence",
                 "ids": ["1"],
-                "evidence": {"selection": "diverse_round_robin", "candidate_limit": 10},
+                "artifact_id": "a" * 64,
+                "evidence": {"selection": "fused", "candidate_limit": 10},
             },
-            {"tool": "save_review_decisions", "ids": ["1"]},
-            {"tool": "save_candidate_predictions", "ids": ["2"]},
+            {"tool": "save_review_decisions", "ids": ["1"], "artifact_id": "a" * 64},
+            {"tool": "save_candidate_predictions", "ids": ["2"], "artifact_id": "a" * 64},
         ]
     }
 
@@ -84,3 +85,20 @@ def test_policy_conformance_rejects_fallback_all_ids(monkeypatch):
     trace["tool_calls"] = [trace["tool_calls"][0], trace["tool_calls"][1], {"tool": "save_candidate_predictions", "ids": ["1", "2"]}]
     result = evaluate_policy_conformance(trace, ["1", "2"])
     assert result["pass"] is False
+
+
+def test_policy_conformance_rejects_mixed_artifacts(monkeypatch):
+    monkeypatch.setattr(
+        "sampo_phase_5_policy._artifact",
+        lambda _: {
+            "examples": [
+                {"example_id": "1", "method_candidates": {"alpha": [{"method": "char_tfidf", "rank": 1}]}},
+                {"example_id": "2", "method_candidates": {"alpha": [{"method": "char_tfidf", "rank": 1}]}},
+            ]
+        },
+    )
+    trace = _trace()
+    trace["tool_calls"][2]["artifact_id"] = "b" * 64
+    result = evaluate_policy_conformance(trace, ["1", "2"])
+    assert result["pass"] is False
+    assert any("prepare artifact_id" in reason for reason in result["reasons"])

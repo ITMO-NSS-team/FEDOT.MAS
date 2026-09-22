@@ -9,7 +9,13 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts" / "sampo_benchmark" / "candidate_artifacts"
-RETRIEVERS = {"char_tfidf", "construction_token_tfidf", "word_tfidf"}
+RETRIEVERS = {
+    "bm25_token",
+    "char_tfidf",
+    "char_word_fusion",
+    "construction_token_tfidf",
+    "word_tfidf",
+}
 
 
 def _artifact(artifact_id: str) -> dict[str, Any]:
@@ -66,7 +72,7 @@ def evaluate_policy_conformance(
     valid_prepares = [
         call for call in prepares
         if set((call.get("retrieval") or {}).get("methods") or []) == RETRIEVERS
-        and (call.get("retrieval") or {}).get("k") == 50
+        and (call.get("retrieval") or {}).get("k") == 5
         and (call.get("retrieval") or {}).get("fusion") == "rrf"
     ]
     review_ids: set[str] = set()
@@ -80,7 +86,7 @@ def evaluate_policy_conformance(
     gate_fallback: set[str] = set()
     reasons: list[str] = []
 
-    if len(valid_prepares) != 1:
+    if len(prepares) != 1 or len(valid_prepares) != 1:
         reasons.append("expected exactly one complementary prepare_candidate_batch")
     prepare_positions = [i for i, call in enumerate(calls) if call.get("tool") == "prepare_candidate_batch"]
     evidence_positions = [i for i, call in enumerate(calls) if call.get("tool") == "get_candidate_evidence"]
@@ -104,8 +110,10 @@ def evaluate_policy_conformance(
             reasons.append("staging occurred after durable persistence")
         if any(call.get("tool") in {"prepare_candidate_batch", "get_candidate_evidence", "stage_candidate_predictions", "save_review_decisions", "save_candidate_predictions"} for call in calls[last_write + 1:]):
             reasons.append("MCP work continued after durable persistence")
+    expected_artifact_id = None
     if valid_prepares:
         artifact_id = valid_prepares[0].get("artifact_id") or _artifact_id_from_prepare(valid_prepares[0])
+        expected_artifact_id = artifact_id
         if not artifact_id:
             reasons.append("prepare_candidate_batch did not expose an artifact_id")
         else:
@@ -124,12 +132,15 @@ def evaluate_policy_conformance(
     for call in calls:
         tool = call.get("tool")
         ids = set(call.get("ids") or [])
+        if tool in {"partition_candidate_batch", "get_candidate_evidence", "save_review_decisions", "save_candidate_predictions"}:
+            if expected_artifact_id is None or call.get("artifact_id") != expected_artifact_id:
+                reasons.append(f"{tool} did not use the prepare artifact_id")
         if tool == "get_candidate_evidence":
             evidence = call.get("evidence") or {}
-            if evidence.get("selection") != "diverse_round_robin":
-                reasons.append("review evidence did not use diverse_round_robin")
-            if not 5 <= evidence.get("candidate_limit", 0) <= 10:
-                reasons.append("review evidence candidate_limit was not 5--10")
+            if evidence.get("selection") != "fused":
+                reasons.append("review evidence did not use fused manual shortlist")
+            if evidence.get("candidate_limit") != 10:
+                reasons.append("review evidence candidate_limit was not 10")
             evidence_ids.update(ids)
         elif tool == "save_review_decisions":
             if durable_seen & ids:

@@ -85,7 +85,7 @@ def malformed_tool_call(raw: dict, allowed_ids: set[str]) -> bool:
                     return True
         if call.get("tool") == "get_candidate_evidence":
             evidence = call.get("evidence") or {}
-            if len(call.get("ids") or []) > 4 or evidence.get("selection") != "diverse_round_robin" or not 5 <= evidence.get("candidate_limit", 0) <= 10:
+            if len(call.get("ids") or []) > 4 or evidence.get("selection") != "fused" or evidence.get("candidate_limit") != 10:
                 return True
     return False
 
@@ -134,10 +134,10 @@ def main() -> None:
         report = {
             "config": str(CONFIG.relative_to(ROOT)), "run_id": RUN_ID,
             "private_ground_truth_used": False, "fresh_sessions": True,
-            "batch_size": 10, "batches": [], "status": "running",
+            "batch_size": 20, "batches": [], "status": "running",
         }
-    for offset in range(0, len(rows), 10):
-        assigned = [row["example_id"] for row in rows[offset:offset + 10]]
+    for offset in range(0, len(rows), 20):
+        assigned = [row["example_id"] for row in rows[offset:offset + 20]]
         if resume and set(assigned) <= stored_ids():
             continue
         before = stored_ids()
