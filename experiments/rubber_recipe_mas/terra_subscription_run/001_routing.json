@@ -1,0 +1,34 @@
+{
+  "model": "host/gpt-5.6-terra",
+  "tool_call": {
+    "server": "rubber-recipe-predictor",
+    "name": "predict_rubber_recipe",
+    "arguments": {
+      "thermal_conductivity_min_w_mk": 0.45,
+      "oil_swelling_max_pct_1006h": 20.0,
+      "water_swelling_max_pct_1006h": 28.0,
+      "specific_gravity_max": 1.23,
+      "nr_min_phr": 25,
+      "nr_max_phr": 75,
+      "n220_min_phr": 20,
+      "n220_max_phr": 80,
+      "search_step_phr": 1,
+      "center_nr_phr": 50
+    }
+  },
+  "calls": [
+    {
+      "agent_name": "formulation_specialist",
+      "request_template": "Используй только результат численного инструмента: {tool_result}. Оформи рецепт со всеми ингредиентами в phr, проверь NR+SBR=100 phr, границы NR/N220 и положение кандидата в открытом домене; не меняй числа предиктора."
+    },
+    {
+      "agent_name": "rubber_chemistry_reviewer",
+      "request_template": "Проверь химико-технологическую осмысленность кандидата по результату инструмента: {tool_result}. Опиши роли компонентов, стадии смешения и лабораторной вулканизации, а также ограничения применимости; не подменяй прогноз экспертной догадкой."
+    },
+    {
+      "agent_name": "prediction_auditor",
+      "request_template": "Проведи независимый аудит численного результата: {tool_result}. Сопоставь прогнозы, ограничения и LOOCV RMSE, различи точечное и робастное выполнение, отметь риски оцифровки, малой выборки и отсутствия внешней валидации."
+    }
+  ],
+  "routing_rationale": "Вход содержит только ТЗ, поэтому сначала необходим воспроизводимый predict_rubber_recipe с заданными ограничениями и диапазонами. Его JSON передаётся последовательно специалисту по рецептуре, химику-рецензенту и аудитору прогнозов для независимой интерпретации без самостоятельного расчёта."
+}

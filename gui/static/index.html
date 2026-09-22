@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-store">
 <title>FEDOT.MAS — генерация мультиагентных систем</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -23,6 +24,7 @@
     </div>
   </div>
   <div class="topbar-right">
+    <span class="chip hidden" id="codex-status" title="Состояние Codex CLI"></span>
     <button class="chip chip-icon" id="btn-theme" title="Светлая / тёмная тема">
       <svg viewBox="0 0 24 24" class="ic"><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg>
     </button>
@@ -244,8 +246,8 @@
       </label>
       <label>Тип системы
         <span class="radio-row">
-          <label class="radio"><input type="radio" name="new-kind" value="maw" checked> MAW — пайплайн агентов</label>
-          <label class="radio"><input type="radio" name="new-kind" value="mas"> MAS — маршрутизация</label>
+          <label class="radio"><input type="radio" name="new-kind" value="maw"> MAW — пайплайн агентов</label>
+          <label class="radio"><input type="radio" name="new-kind" value="mas" checked> MAS — мастер-оркестратор</label>
         </span>
       </label>
       <label>Задача
@@ -307,6 +309,8 @@
 </div>
 
 <script src="presets.js"></script>
+<script src="technology_card_preset.js?v=2"></script>
+<script src="rubber_preset.js?v=4"></script>
 <script src="app.js"></script>
 </body>
 </html>

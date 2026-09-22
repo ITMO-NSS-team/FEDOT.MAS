@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fedotmas.common.codex_cli import is_codex_model
 from fedotmas.common.logging import get_logger
 
 from .config import ACCESS_TOKEN, DEFAULT_MODEL, PUBLIC_MODE
@@ -121,7 +123,14 @@ def install(app: FastAPI) -> None:
                 return JSONResponse({"error": "экспорт пресетов доступен только локально"},
                                     status_code=403)
         if path in NEEDS_KEY and not os.getenv("OPENAI_API_KEY"):
-            return JSONResponse({"error": "не задан ключ провайдера"}, status_code=428)
+            selected_model = DEFAULT_MODEL
+            try:
+                payload = json.loads((await request.body()) or b"{}")
+                selected_model = payload.get("model") or DEFAULT_MODEL
+            except (json.JSONDecodeError, AttributeError, UnicodeDecodeError):
+                pass
+            if not is_codex_model(selected_model):
+                return JSONResponse({"error": "не задан ключ провайдера"}, status_code=428)
         return await call_next(request)
 
     @app.middleware("http")

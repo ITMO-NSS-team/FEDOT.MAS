@@ -23,6 +23,7 @@ from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fedotmas import MAS, MAW, MASConfig, MAWConfig
+from fedotmas.common.codex_cli import codex_login_status, find_codex_cli
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp import get_server_descriptions, resolve_mcp_registry
 from fedotmas.plugins import LoggingPlugin, UnknownToolRecoveryPlugin
@@ -34,12 +35,12 @@ from .config import (AGENT_MAX_OUTPUT_TOKENS, DEFAULT_MODEL, GENERATE_ATTEMPTS, 
                      SMITHERY_API_KEY, SMITHERY_DETAIL, SMITHERY_SEARCH, STATIC_DIR,
                      WEB_SEARCH)
 from .judge import _judge_impl
-from .llm import client as _client
+from .llm import complete
 from .normalize import (_ensure_calculator, _ensure_data_tools, _ensure_dependent_after_parallel,
                         _ensure_lookup_tools, _ensure_web_tool, _mcp_registry_for,
                         _tools_hint, _with_data_source, sanitize_config)
-from .prompts import (BREAKDOWN_PROMPT, EFFORT_PROMPT, PREPARE_PROMPT, RETRY_HINT,
-                      TOOL_DESCRIPTIONS)
+from .prompts import (BREAKDOWN_PROMPT, EFFORT_PROMPT, MAW_TEAM_SIZE_PROMPT,
+                      PREPARE_PROMPT, RETRY_HINT, TOOL_DESCRIPTIONS)
 from .schemas import (BaselineIn, EffortIn, ExportIn, GenerateIn, JudgeIn,
                       PrepareIn, RunIn)
 from .streaming import StreamPlugin, sse_stream
@@ -70,6 +71,7 @@ app.post("/api/key")(security.set_key)
 @app.get("/api/status")
 async def status() -> dict:
     registry = resolve_mcp_registry("all") or {}
+    codex_authenticated, codex_note = await codex_login_status()
     return {
         "live": True,
         "model": DEFAULT_MODEL,
@@ -84,6 +86,9 @@ async def status() -> dict:
         "mcp_servers": sorted(registry),
         "run_id": SERVER_RUN_ID,
         "has_key": bool(os.getenv("OPENAI_API_KEY")),
+        "codex_cli": bool(find_codex_cli()),
+        "codex_authenticated": codex_authenticated,
+        "codex_status": codex_note,
         "base_url": os.getenv("OPENAI_BASE_URL", ""),
         "public": PUBLIC_MODE,
         "user_key": security.user_key_set(),
@@ -102,7 +107,10 @@ async def _generate_impl(body: GenerateIn, queue: asyncio.Queue) -> dict:
                  mcp_servers=servers,
                  plugins=[LoggingPlugin(), UnknownToolRecoveryPlugin(), stream])
 
-    task = body.task + (RU_HINT if body.russian else "")
+    # Это дополнение получает непосредственно meta-agent FEDOT.MAS. Оно действует
+    # и для вызовов /api/generate, которые обходят предварительный /api/prepare.
+    team_size = MAW_TEAM_SIZE_PROMPT if body.kind == "maw" else ""
+    task = body.task + team_size + (RU_HINT if body.russian else "")
     t0 = time.monotonic()
     config = None
     last_error: Exception | None = None
@@ -214,18 +222,23 @@ async def run(body: RunIn) -> StreamingResponse:
 @app.post("/api/prepare")
 async def prepare(body: PrepareIn) -> dict:
     """Делит свободный текст пользователя на постановку для мета-агента и запрос для запуска."""
-    client, model = _client(body.model or DEFAULT_MODEL)
+    model = body.model or DEFAULT_MODEL
     hint = ("пайплайн агентов с параллельными ветками и циклами"
             if body.kind == "maw" else "координатор, маршрутизирующий задачи специалистам")
     try:
-        resp = await client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            messages=[{"role": "user", "content": PREPARE_PROMPT.format(
+        resp = await complete(
+            model,
+            [{"role": "user", "content": PREPARE_PROMPT.format(
                 text=body.text, kind=body.kind, kind_hint=hint,
                 tools_hint=_tools_hint(body.web, body.tools))}],
+            json_schema={
+                "type": "object",
+                "properties": {"task": {"type": "string"}, "query": {"type": "string"}},
+                "required": ["task", "query"],
+                "additionalProperties": False,
+            },
         )
-        data = json.loads(resp.choices[0].message.content or "{}")
+        data = json.loads(resp.text or "{}")
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -239,24 +252,23 @@ async def prepare(body: PrepareIn) -> dict:
 @app.post("/api/baseline")
 async def baseline(body: BaselineIn) -> dict:
     """Тот же запрос, но решает одна модель без мультиагентной системы."""
-    client, model = _client(body.model or DEFAULT_MODEL)
+    model = body.model or DEFAULT_MODEL
     t0 = time.monotonic()
     try:
-        resp = await client.chat.completions.create(
-            model=model,
-            messages=[
+        resp = await complete(
+            model,
+            [
                 {"role": "system", "content": "Ты эксперт-аналитик. Отвечай по-русски, по существу и структурировано."},
                 {"role": "user", "content": body.query},
             ],
         )
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    usage = resp.usage
     return {
         "ok": True,
-        "answer": resp.choices[0].message.content or "",
+        "answer": resp.text,
         "model": model,
-        "tokens": (getattr(usage, "prompt_tokens", 0) or 0) + (getattr(usage, "completion_tokens", 0) or 0),
+        "tokens": resp.prompt_tokens + resp.completion_tokens,
         "seconds": round(time.monotonic() - t0, 1),
     }
 
@@ -264,7 +276,7 @@ async def baseline(body: BaselineIn) -> dict:
 @app.post("/api/effort")
 async def effort(body: EffortIn) -> dict:
     """Оценка трудоёмкости ручной разработки такой же системы — считает LLM по составу конфигурации."""
-    client, model = _client(body.model or DEFAULT_MODEL)
+    model = body.model or DEFAULT_MODEL
     agents = []
     for agent in (body.config or {}).get("agents") or []:
         agents.append(f"- {agent.get('name')}: инструменты {', '.join(agent.get('tools') or []) or 'нет'}")
@@ -277,13 +289,18 @@ async def effort(body: EffortIn) -> dict:
     summary = "\n".join(agents) + ("\n\nПайплайн: " + pipeline if pipeline != "null" else "")
 
     try:
-        resp = await client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            messages=[{"role": "user", "content": EFFORT_PROMPT.format(
+        resp = await complete(
+            model,
+            [{"role": "user", "content": EFFORT_PROMPT.format(
                 task=body.task[:4000], config=summary or "состав неизвестен")}],
+            json_schema={
+                "type": "object",
+                "properties": {"estimate": {"type": "string"}, "detail": {"type": "string"}},
+                "required": ["estimate", "detail"],
+                "additionalProperties": False,
+            },
         )
-        data = json.loads(resp.choices[0].message.content or "{}")
+        data = json.loads(resp.text or "{}")
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -319,20 +336,39 @@ async def effort_breakdown(body: EffortIn) -> dict:
     Общая оценка «≈ N чел.-дней» ничего не объясняет; разбор показывает, из чего
     складывается ручная трудоёмкость и что именно берёт на себя система.
     """
-    client, model = _client(body.model or DEFAULT_MODEL)
+    model = body.model or DEFAULT_MODEL
     agents = []
     for agent in (body.config or {}).get("agents") or []:
         agents.append(f"- {agent.get('name')}: {', '.join(agent.get('tools') or []) or 'без инструментов'}")
     summary = "\n".join(agents) or "состав неизвестен"
 
     try:
-        resp = await client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            messages=[{"role": "user", "content": BREAKDOWN_PROMPT.format(
+        resp = await complete(
+            model,
+            [{"role": "user", "content": BREAKDOWN_PROMPT.format(
                 task=body.task[:6000], config=summary)}],
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "subtasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "hours": {"type": "number"},
+                                "note": {"type": "string"},
+                            },
+                            "required": ["name", "hours", "note"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["subtasks"],
+                "additionalProperties": False,
+            },
         )
-        data = json.loads(resp.choices[0].message.content or "{}")
+        data = json.loads(resp.text or "{}")
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 

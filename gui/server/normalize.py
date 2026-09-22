@@ -8,9 +8,10 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from fedotmas.common.logging import get_logger
-from fedotmas.mcp import HttpMCPServer, resolve_mcp_registry
+from fedotmas.mcp import HttpMCPServer, StdioMCPServer, resolve_mcp_registry
 
 from .config import SAFE_TOOLS, SMITHERY_API_KEY, WEB_SEARCH
 from .prompts import DATA_SOURCE_HINT, TOOL_DESCRIPTIONS
@@ -71,9 +72,23 @@ def _mcp_registry_for(tools: list[str], custom: list | None) -> tuple:
     sanitize_config вычищает у агентов всё, чего нет в SAFE_TOOLS, и без этого
     списка подключённый сервер до агента не доходил — он оставался в пуле без дела.
     """
-    if not custom:
-        return tools, []
     registry = dict(resolve_mcp_registry(tools) or {})
+    rubber = registry.get("rubber-recipe-predictor")
+    if isinstance(rubber, StdioMCPServer) and "--directory" in rubber.args:
+        directory = rubber.args[rubber.args.index("--directory") + 1]
+        registry["rubber-recipe-predictor"] = replace(
+            rubber,
+            args=(
+                "run",
+                "--directory",
+                directory,
+                "python",
+                "-m",
+                "mcp_rubber_recipe_predictor.server",
+            ),
+        )
+    if not custom:
+        return registry, []
     added: list[str] = []
     for item in custom:
         name = _valid_name(item.name)

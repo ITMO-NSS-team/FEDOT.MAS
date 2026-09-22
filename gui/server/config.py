@@ -52,23 +52,13 @@ if PUBLIC_MODE:
     # FEDOT.MAS: иначе публичная ссылка означала бы публичный доступ к его балансу.
     os.environ.pop("OPENAI_API_KEY", None)
 
-DEFAULT_MODEL = os.getenv("GUI_MODEL", "openai/gpt-4.1-mini")
-# Судья обязан считать вызовом песочницы, а gemini-2.5-pro этого не умеет: решив вызвать
-# execute с кодом, она выдаёт испорченный вызов — провайдер отвечает MALFORMED_FUNCTION_CALL,
-# либо ход кончается одними размышлениями без текста. Схема инструмента ни при чём: с одним
-# полем code то же самое, работает только принудительный вызов. Каждый вердикт уходил к
-# запасной модели через две пустые попытки (~40 с). Gemini 3 вызывает песочницу штатно —
-# gemini-3.8-flash проверена на тех же ответах: песочница вызвана, вердикт верный.
-JUDGE_MODEL = os.getenv("GUI_JUDGE_MODEL", "google/gemini-3.8-flash")
+DEFAULT_MODEL = os.getenv("GUI_MODEL", "host/gpt-5.6-terra")
+JUDGE_MODEL = os.getenv("GUI_JUDGE_MODEL", "host/gpt-5.6-terra")
 
 MODELS = [
-    {"id": "openai/gpt-4.1-mini", "label": "gpt-4.1-mini", "open": False},
-    # Модель посильнее: mini считает в песочнице верно, но при написании итога иногда
-    # пишет другие числа, игнорируя собственный результат инструмента.
-    {"id": "openai/gpt-4.1", "label": "gpt-4.1 (точнее в переносе чисел)", "open": False},
-    {"id": "openai/gpt-oss-120b", "label": "gpt-oss-120b (открытые веса)", "open": True},
-    {"id": "deepseek/deepseek-v4-flash", "label": "DeepSeek V4 Flash (открытые веса)", "open": True},
-    {"id": "qwen/qwen3-235b-a22b-2507", "label": "Qwen3 235B (открытые веса)", "open": True},
+    {"id": "host/gpt-5.6-terra", "label": "GPT-5.6 Terra · подписка Codex", "open": False},
+    {"id": "host/gpt-5.6-sol", "label": "GPT-5.6 Sol · подписка Codex", "open": False},
+    {"id": "host/gpt-5.6-luna", "label": "GPT-5.6 Luna · подписка Codex", "open": False},
 ]
 
 # Рассуждающие модели тратят часть лимита на размышления: с запасом по умолчанию
@@ -96,9 +86,16 @@ BASE_TOOLS = (
         "media",                # разбор изображений, аудио и видео (через тот же ключ провайдера)
     ]
 )
-# Тяжёлые или нишевые — включаются переменной GUI_EXTRA_TOOLS
-# (browser-usage поднимает настоящий браузер, youtube-transcript узкоспециальный).
-EXTRA_TOOLS = [t.strip() for t in os.getenv("GUI_EXTRA_TOOLS", "").split(",") if t.strip()]
+# Два прикладных демо доступны сразу. Остальные тяжёлые или нишевые
+# инструменты по-прежнему добавляются через GUI_EXTRA_TOOLS.
+EXTRA_TOOLS = [
+    t.strip()
+    for t in os.getenv(
+        "GUI_EXTRA_TOOLS",
+        "rubber-recipe-predictor,technology-card-audit",
+    ).split(",")
+    if t.strip()
+]
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:18888")
 
 # Lightpanda ставится в ~/.local/bin, которого может не быть в PATH у процесса сервера
@@ -136,7 +133,7 @@ SSE_HEARTBEAT = float(os.getenv("GUI_SSE_HEARTBEAT", "10"))
 # Мета-агент временами отдаёт невалидную схему — столько раз пробуем заново.
 GENERATE_ATTEMPTS = int(os.getenv("GUI_GENERATE_ATTEMPTS", "3"))
 
-JUDGE_FALLBACK = os.getenv("GUI_JUDGE_FALLBACK", "openai/gpt-4.1")
+JUDGE_FALLBACK = os.getenv("GUI_JUDGE_FALLBACK", "host/gpt-5.6-terra")
 JUDGE_MAX_TOKENS = int(os.getenv("GUI_JUDGE_MAX_TOKENS", "16000"))
 JUDGE_RETRY_TIMEOUT = float(os.getenv("GUI_JUDGE_RETRY_TIMEOUT", "90"))
 

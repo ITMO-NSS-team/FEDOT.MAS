@@ -16,7 +16,7 @@ from fedotmas.plugins import LoggingPlugin, UnknownToolRecoveryPlugin
 
 from .config import (JUDGE_FALLBACK, JUDGE_MAX_TOKENS, JUDGE_MODEL,
                      JUDGE_RETRY_TIMEOUT, SAFE_TOOLS)
-from .llm import client as _client
+from .llm import complete
 from .prompts import JUDGE_CONTENT, JUDGE_PROMPT
 from .schemas import JudgeIn
 from .streaming import StreamPlugin
@@ -28,11 +28,12 @@ async def _ask_judge_direct(model: str, prompt: str, content: str) -> str:
     """Прямой вызов без ADK-агента — последний рубеж, когда агентный путь падает
     (наблюдалось: три APITimeoutError подряд на ровном месте). Без песочницы судья
     слабее в арифметике, но вердикт с оговоркой лучше отсутствия вердикта."""
-    client, resolved = _client(model)
-    resp = await client.chat.completions.create(
-        model=resolved, max_tokens=JUDGE_MAX_TOKENS,
-        messages=[{"role": "user", "content": f"{prompt}\n\n{content}"}])
-    return (resp.choices[0].message.content or "").strip()
+    response = await complete(
+        model,
+        [{"role": "user", "content": f"{prompt}\n\n{content}"}],
+        max_tokens=JUDGE_MAX_TOKENS,
+    )
+    return response.text.strip()
 
 
 async def _ask_judge(model: str, prompt: str, content: str = "",
@@ -116,11 +117,12 @@ async def _ask_judge(model: str, prompt: str, content: str = "",
                 _log.info("Строгий повтор ничего не дал | вердикт={} вызовов={}",
                           bool(text2), calls2)
     else:
-        client, resolved = _client(model)
-        resp = await client.chat.completions.create(
-            model=resolved, max_tokens=JUDGE_MAX_TOKENS,
-            messages=[{"role": "user", "content": f"{prompt}\n\n{content}"}])
-        text = (resp.choices[0].message.content or "").strip()
+        response = await complete(
+            model,
+            [{"role": "user", "content": f"{prompt}\n\n{content}"}],
+            max_tokens=JUDGE_MAX_TOKENS,
+        )
+        text = response.text.strip()
     if not text:
         # Так выглядит модель, которая не смогла вызвать песочницу: ход кончился одними
         # размышлениями — без текста и без вызова (gemini-2.5-pro, см. JUDGE_MODEL в config).

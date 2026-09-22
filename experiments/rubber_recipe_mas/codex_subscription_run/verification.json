@@ -1,0 +1,17 @@
+{
+  "status": "pass",
+  "checks": {
+    "routing_model_is_exact": true,
+    "configured_models_are_exact": true,
+    "routing_uses_each_configured_worker_once": true,
+    "state_keys_match_config": true,
+    "all_outputs_nonempty": true,
+    "final_report_covers_required_topics": true,
+    "final_report_has_no_monthly_plan": true,
+    "call_budget_respected": true
+  },
+  "notes": [
+    "Structural and lexical checks do not replace review by a rubber technologist.",
+    "Subscription-host execution is not a LiteLLM/API execution."
+  ]
+}
