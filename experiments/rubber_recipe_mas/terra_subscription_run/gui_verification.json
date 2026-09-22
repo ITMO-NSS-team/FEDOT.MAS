@@ -1,0 +1,20 @@
+{
+  "status": "pass",
+  "session_id": "terra_tool_recipe_result",
+  "event_count": 13,
+  "state_keys": [
+    "chemistry_review",
+    "formulation_output",
+    "prediction_audit",
+    "recipe_prediction"
+  ],
+  "checks": {
+    "event_count_is_13": true,
+    "state_keys_match": true,
+    "task_utf8_preserved": true,
+    "numerical_tool_was_called": true,
+    "numerical_tool_returned_recipe": true,
+    "workers_received_tool_result": true,
+    "result_is_recipe_prediction": true
+  }
+}

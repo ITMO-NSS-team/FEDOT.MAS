@@ -1,0 +1,23 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-technology-card-audit"
+version = "0.1.0"
+description = "Deterministic demo tool for extracting TTK norms and auditing historical productivity"
+requires-python = ">=3.12"
+dependencies = [ "fastmcp>=2.14.5" ]
+
+scripts.mcp-technology-card-audit = "mcp_technology_card_audit.server:main"
+
+[dependency-groups]
+dev = [ "pytest", "pytest-asyncio" ]
+
+[tool.pytest]
+ini_options.asyncio_mode = "auto"
+
+[tool.fedotmas]
+mcp.name = "technology-card-audit"
+mcp.description = "Read a labeled demo technological card and deterministically compare its productivity norm with a synthetic historical execution slice."
+mcp.tags = [ "technology-card", "ttk", "construction", "productivity", "audit" ]

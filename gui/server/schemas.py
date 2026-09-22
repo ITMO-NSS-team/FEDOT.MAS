@@ -32,7 +32,7 @@ class GenerateIn(BaseModel):
     task: str
     custom_mcp: list[CustomMCP] | None = None
     query: str | None = None    # нужен, чтобы увидеть ссылки на файлы с данными
-    kind: str = "maw"
+    kind: str = "mas"
     model: str | None = None
     tools: list[str] | None = None
     russian: bool = True
@@ -42,7 +42,7 @@ class GenerateIn(BaseModel):
 class RunIn(BaseModel):
     config: dict
     query: str
-    kind: str = "maw"
+    kind: str = "mas"
     tools: list[str] | None = None
     model: str | None = None
     custom_mcp: list[CustomMCP] | None = None
@@ -50,7 +50,7 @@ class RunIn(BaseModel):
 
 class PrepareIn(BaseModel):
     text: str
-    kind: str = "maw"
+    kind: str = "mas"
     model: str | None = None
     web: bool = True
     tools: list[str] | None = None
@@ -64,7 +64,7 @@ class BaselineIn(BaseModel):
 class EffortIn(BaseModel):
     task: str
     config: dict | None = None
-    kind: str = "maw"
+    kind: str = "mas"
     model: str | None = None
 
 

@@ -1,0 +1,23 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-rubber-recipe-predictor"
+version = "0.1.0"
+description = "Open-data property prediction tool for the rubber-recipe MAS experiment"
+requires-python = ">=3.12"
+dependencies = [ "fastmcp>=2.14.5" ]
+
+scripts.mcp-rubber-recipe-predictor = "mcp_rubber_recipe_predictor.server:main"
+
+[dependency-groups]
+dev = [ "pytest", "pytest-asyncio" ]
+
+[tool.pytest]
+ini_options.asyncio_mode = "auto"
+
+[tool.fedotmas]
+mcp.name = "rubber-recipe-predictor"
+mcp.description = "Predict four measured properties for a supplied SBR/NR/N220 recipe inside the open experimental domain; never changes or generates a recipe."
+mcp.tags = [ "rubber", "recipe", "prediction", "open-data" ]

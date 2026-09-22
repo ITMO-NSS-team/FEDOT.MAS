@@ -1129,6 +1129,7 @@ function loadPreset(p) {
   renderEffort(p);
   resetRun();
   showRecordedRun(p);
+  renderMode();
 }
 
 
@@ -1251,6 +1252,7 @@ async function probeBackend() {
     fillModelSelect("model-run", "run", S.backend.models, S.models.run);
     fillModelSelect("model-single", "single", S.backend.models, S.models.single);
     fillModelSelect("model-judge", "judge", judgeChoices(), S.models.judge);
+    renderCodexStatus();
     renderKeyChip();
     restoreKey();
   } catch {
@@ -1276,6 +1278,21 @@ function fillModelSelect(id, key, models, selected) {
   sel.addEventListener("change", () => { S.models[key] = sel.value; });
 }
 
+function codexOnly() {
+  const models = S.backend?.models || [];
+  return models.length > 0 && models.every((m) => String(m.id || "").startsWith("host/"));
+}
+
+function renderCodexStatus() {
+  const chip = $("codex-status");
+  if (!chip) return;
+  chip.classList.toggle("hidden", !codexOnly());
+  const ready = !!S.backend?.codex_authenticated;
+  chip.classList.toggle("key-ok", ready);
+  chip.textContent = ready ? "Codex · подписка активна" : "Codex · выполните codex login";
+  chip.title = S.backend?.codex_status || "Состояние Codex CLI";
+}
+
 /* ──────────────────────── Ключ провайдера ────────────────────────
  * В публичном режиме сервер запускается без ключа: пока пользователь не введёт
  * свой, все обращения к моделям отвечают 428, и интерфейс открывает эту форму.
@@ -1293,7 +1310,7 @@ function renderKeyChip() {
   const chip = $("btn-key");
   if (!chip) return;
   const pub = !!S.backend?.public;
-  chip.classList.toggle("hidden", !pub);
+  chip.classList.toggle("hidden", !pub || codexOnly());
   const ok = !!S.backend?.user_key;
   chip.classList.toggle("key-ok", ok);
   $("btn-key-label").textContent = ok ? "Ключ принят" : "Ввести ключ";
@@ -1344,7 +1361,7 @@ async function sendKey(key, remember) {
 /* Ключ мог остаться в браузере с прошлого раза, а сервер тем временем
  * перезапустили — тогда отдаём его молча, без формы. */
 async function restoreKey() {
-  if (!S.backend?.public || S.backend.user_key) return;
+  if (codexOnly() || !S.backend?.public || S.backend.user_key) return;
   const saved = savedKey();
   if (accessToken() && saved && await sendKey(saved, true)) return;
   keyModal(true);
@@ -1386,14 +1403,20 @@ function noteKeyNeeded(status) {
 
 function renderMode() {
   const online = !!S.backend;
+  const modelReady = !codexOnly() || !!S.backend?.codex_authenticated;
   // Отдельной плашки режима нет — режим всегда живой; о недоступном бэкенде
   // говорят заблокированные кнопки и подсказка на них.
-  $("btn-generate").disabled = !online;
-  $("btn-generate").title = online
+  $("btn-generate").disabled = !online || !modelReady;
+  $("btn-generate").title = online && !modelReady
+    ? "Codex CLI не авторизован: выполните codex login и обновите страницу"
+    : online
     ? "Описать задачу и собрать под неё систему"
     : "Бэкенд недоступен: запустите gui/run.py и обновите страницу";
   // Запускать нечего, пока сценарий не создан
-  $("btn-run").disabled = !S.preset || (!online && !S.preset.trace.length);
+  $("btn-run").disabled = !S.preset || (!online && !S.preset.trace.length) || (online && !modelReady);
+  if (online && !modelReady) {
+    $("btn-run").title = "Codex CLI не авторизован: выполните codex login и обновите страницу";
+  }
 }
 
 function liveMessage(kind, agent, text, tool) {
@@ -2009,6 +2032,9 @@ const LS_RUN = "fedotmas-run";
 function initPresets() {
   S.custom = loadStored(LS_CUSTOM, []) || [];
   S.hidden = loadStored(LS_HIDDEN, []) || [];
+  if (!S.custom.length && Array.isArray(window.STARTUP_PRESETS)) {
+    S.custom = window.STARTUP_PRESETS.slice();
+  }
   // В автономной копии показывать нечего: запускать она не умеет, а список берётся
   // из localStorage, которого у нового читателя нет. Подставляем записанные прогоны,
   // вшитые в саму копию. На живом стенде флага нет и поведение прежнее.
@@ -2029,7 +2055,8 @@ function resetOnServerRestart(runId) {
     localStorage.removeItem(LS_CUSTOM);
     localStorage.removeItem(LS_HIDDEN);
   } catch { /* приватный режим — просто очищаем состояние в памяти */ }
-  S.custom = []; S.hidden = [];
+  S.custom = Array.isArray(window.STARTUP_PRESETS) ? window.STARTUP_PRESETS.slice() : [];
+  S.hidden = [];
   renderPresetList();
   showEmptyState();
 }
@@ -2126,7 +2153,10 @@ function init() {
   });
 
   showEmptyState();
-  probeBackend();
+  probeBackend().finally(() => {
+    const first = scenarioList()[0];
+    if (first) loadPreset(first);
+  });
 }
 
 document.addEventListener("DOMContentLoaded", init);

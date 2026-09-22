@@ -9,20 +9,24 @@ FEDOT.MAS как библиотеку и гоняет её в своём про�
 
 ## Быстрый старт
 
-Из корня репозитория FEDOT.MAS:
+Из корня репозитория FEDOT.MAS один раз собрать окружение и MCP-серверы:
 
 ```bash
 uv sync
 uv pip install -r gui/requirements.txt
+for d in mcp-servers/*/; do env -u UV_PROJECT_ENVIRONMENT -u VIRTUAL_ENV uv sync --directory "$d"; done
 ```
 
-Положить рядом `.env` с доступом к провайдеру (сервер найдёт его сам в корне
-репозитория, в `gui/` или в текущей директории):
+Авторизовать Codex CLI в той же учётной записи, где активна подписка Codex:
 
+```bash
+codex login
+codex login status
 ```
-OPENAI_API_KEY=ваш-ключ
-OPENAI_BASE_URL=https://openrouter.ai/api/v1
-```
+
+Модели `host/gpt-5.6-terra`, `host/gpt-5.6-sol` и `host/gpt-5.6-luna`
+вызываются через локальный `codex exec`. Это transport подписки Codex, а не
+OpenAI-совместимый API; `OPENAI_API_KEY` для них не нужен.
 
 Запустить:
 
@@ -30,8 +34,9 @@ OPENAI_BASE_URL=https://openrouter.ai/api/v1
 uv run python gui/run.py
 ```
 
-Открыть <http://localhost:4173>. Всё: сценариев в списке нет, нажмите
-«Добавить сценарий», опишите задачу — система соберётся под неё.
+Открыть <http://localhost:4173>. Два стартовых сценария показывают MAS для
+предсказания свойств заданного рецепта резины и для аудита норм технологической
+карты; новый сценарий можно собрать кнопкой «Добавить сценарий».
 
 Первый запуск занимает больше времени: поднимаются MCP-серверы (`uv` доставляет их
 окружения). Дальше они стартуют за секунды.
@@ -126,20 +131,21 @@ localhost.run меняет имя на живом соединении. Cloudfla
 |---|---|---|
 | `OPENAI_API_KEY`, `OPENAI_BASE_URL` | из `.env` | доступ к провайдеру моделей |
 | `GUI_PORT` | `4173` | порт стенда |
+| `GUI_HOST` | `127.0.0.1` | адрес прослушивания; для прокси среды разработки можно задать `0.0.0.0` |
 | `GUI_PUBLIC` | выкл. | публичный режим: токен доступа + ключ от пользователя |
 | `GUI_ACCESS_TOKEN` | случайный | зафиксировать токен, чтобы ссылка пережила перезапуск |
 | `GUI_PUBLIC_ALLOW_FS` | выкл. | вернуть наружу `document` и `download` (чтение и запись файлов хоста) |
 | `GUI_UPLOAD_MAX_MB` | `25` | предел размера файла-источника |
 | `SMITHERY_API_KEY` | пусто | ключ реестра MCP: без него найденные серверы не подключаются |
 | `GUI_ALLOWED_HOSTS` | пусто | дополнительные имена хоста, с которых принимать запросы |
-| `GUI_MODEL` | `openai/gpt-4.1-mini` | модель по умолчанию |
-| `GUI_JUDGE_MODEL` | `google/gemini-3.8-flash` | модель судьи; должна уметь вызывать инструменты — судья считает в песочнице (семейство gemini-2.5 не умеет) |
-| `GUI_EXTRA_TOOLS` | пусто | подключить тяжёлые инструменты: `browser-usage,youtube-transcript` |
+| `GUI_MODEL` | `host/gpt-5.6-terra` | модель Codex по умолчанию |
+| `GUI_JUDGE_MODEL` | `host/gpt-5.6-terra` | модель судьи |
+| `GUI_EXTRA_TOOLS` | `rubber-recipe-predictor,technology-card-audit` | список дополнительных инструментов; можно добавить `browser-usage,youtube-transcript` |
 | `SEARXNG_URL` | `http://localhost:18888` | адрес своего SearXNG |
 | `GUI_SSE_HEARTBEAT` | `10` | период пульса в потоке событий, секунды |
 | `GUI_AGENT_MAX_OUTPUT_TOKENS` | `12000` | лимит вывода агента |
 | `GUI_GENERATE_ATTEMPTS` | `3` | сколько раз повторить генерацию при невалидной схеме |
-| `GUI_JUDGE_FALLBACK` | `openai/gpt-4.1` | запасная модель судьи |
+| `GUI_JUDGE_FALLBACK` | `host/gpt-5.6-terra` | запасная модель судьи |
 | `GUI_JUDGE_MAX_TOKENS` | `16000` | лимит вывода судьи |
 | `GUI_JUDGE_RETRY_TIMEOUT` | `90` | сколько ждать строгий повтор судьи, секунды |
 | `E2B_API_KEY` | пусто | добавляет полную песочницу `sandbox` рядом с `sandbox-light` |
