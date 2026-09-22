@@ -135,7 +135,11 @@ async def _generate_impl(body: GenerateIn, queue: asyncio.Queue) -> dict:
     _ensure_dependent_after_parallel(config, body.kind)
     _ensure_calculator(config, body.kind)
     _ensure_lookup_tools(config, body.kind, f"{body.task} {body.query or ''}")
-    for agent in getattr(config, "agents", []) or []:
+    # Кап на выход нужен всем агентам обеих схем: у MASConfig нет .agents,
+    # его агенты — координатор и workers.
+    capped = (getattr(config, "agents", None)
+              or [config.coordinator] + list(config.workers))
+    for agent in capped:
         agent.max_output_tokens = AGENT_MAX_OUTPUT_TOKENS
 
     return {

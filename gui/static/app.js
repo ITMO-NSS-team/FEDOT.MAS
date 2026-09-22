@@ -779,9 +779,11 @@ function renderAnswer() {
     </div>`);
   }
   if (S.judge) {
-    const w = S.judge.winner === "system" ? "system" : S.judge.winner === "single" ? "single" : "tie";
+    const w = S.judge.winner === "system" ? "system" : S.judge.winner === "single" ? "single"
+      : S.judge.winner === "error" ? "error" : "tie";
     const label = w === "system" ? "Судья: лучше ответ системы"
-      : w === "single" ? "Судья: лучше ответ одной модели" : "Судья: ничья";
+      : w === "single" ? "Судья: лучше ответ одной модели"
+      : w === "error" ? "Судья: оценка не получена" : "Судья: ничья";
     blocks.push(`<div class="ans-card judge">
       <h4>Оценка судьёй</h4>
       <div class="ans-winner ${w}">${esc(label)}</div>
@@ -886,12 +888,14 @@ async function runJudge() {
     ui.step("Вердикт вынесен", 100);
     S.judge = done;
   } catch (err) {
-    S.judge = { verdict: "Не удалось получить оценку: " + err.message, winner: "tie", model: "—" };
+    // Ошибка — не вердикт: показываем её отдельным статусом и не сохраняем в сценарий,
+    // чтобы сбой сети не превращался в «ничью» при экспорте и реплее.
+    S.judge = { verdict: "Не удалось получить оценку: " + err.message, winner: "error", model: "—" };
   } finally {
     ui.stop();
     btn.disabled = false;
     btn.textContent = "Оценить заново";
-    if (S.preset) { S.preset.judge = S.judge; persistPreset(); }
+    if (S.preset && S.judge.winner !== "error") { S.preset.judge = S.judge; persistPreset(); }
     renderAnswer();
   }
 }
@@ -1074,7 +1078,8 @@ function loadPreset(p) {
   S.agents = indexAgents(p);
   S.events = p.trace;
   const traceMs = p.trace.reduce((s, e) => s + e.ms, 0);
-  S.factor = traceMs ? parseTarget(p.auto) * 1000 / traceMs : 1;
+  const targetS = parseTarget(p.auto);   // 0, если в подписи нет времени — тогда часы идут по журналу
+  S.factor = traceMs && targetS ? targetS * 1000 / traceMs : 1;
 
   $("query").value = p.query;
   S.query = p.query;
@@ -1525,7 +1530,6 @@ async function liveRun() {
           if (io.output) {
             const head = io.output.trim().split("\n")[0].slice(0, 160);
             liveMessage("результат", ev.agent, head || "(агент завершил работу)");
-            const last = trace[trace.length - 1];
             const entry = { agent: ev.agent, phase: "результат", text: head, tokens: 0,
                             ms: ev.ms || 1200, io };
             trace.push(entry);
@@ -1604,8 +1608,9 @@ async function liveRun() {
             S.preset.auto = `${fmtTime(ev.elapsed)} · ${(( ev.tokens || S.tokens) / 1000).toFixed(1).replace(".", ",")}к токенов`;
             $("stat-auto").innerHTML = `<b class="hl">${esc(S.preset.auto)}</b>`;
             persistPreset();
+          } else {
+            $("stat-auto").innerHTML = `<b class="hl">${esc(String(ev.elapsed).replace(".", ","))} с · ${esc(nfmt(ev.tokens))} токенов</b>`;
           }
-          $("stat-auto").innerHTML = `<b class="hl">${esc(String(ev.elapsed).replace(".", ","))} с · ${esc(nfmt(ev.tokens))} токенов</b>`;
         } else if (ev.type === "error") {
           liveMessage("ошибка", "runner", ev.error);
         }
@@ -1823,7 +1828,6 @@ async function submitNewScenario() {
   const wantEffort = $("new-effort").checked;
   const tools = pickedTools();
   const customMcp = S.mcpCustom.slice();
-  const allTools = tools;
   if (!text) { $("new-note").textContent = "Опишите задачу — что нужно сделать."; return; }
   if (!S.backend) { $("new-note").textContent = "Нужен живой режим."; return; }
 
@@ -1855,7 +1859,7 @@ async function submitNewScenario() {
     let d = null;
     for await (const ev of sseEvents("api/generate_stream",
         { task: split.task, query: split.query, kind, model: S.models.gen, web,
-          tools: allTools, custom_mcp: customMcp })) {
+          tools, custom_mcp: customMcp })) {
       if (ev.type === "done") { d = ev; break; }
       if (ev.type === "agent_start" && GEN_STAGE_LABELS[ev.agent]) {
         ui.step(GEN_STAGE_LABELS[ev.agent], ev.agent.startsWith("pipeline") ? 55 : 30);
@@ -1909,7 +1913,7 @@ async function submitNewScenario() {
       tools,
       manual, manualNote, breakdown,
       gen, auto: "—", genSteps: [], config: d.config, trace: [],
-      tools: allTools, customMcp,
+      customMcp,
       sources: parseSources($("new-sources").value)
         .concat(S.files.map((f) => ({ title: f.name, origin: "файл прикреплён к сценарию" }))),
     };
@@ -2015,7 +2019,9 @@ function removeScenario(id) {
   storeScenarios();
   renderPresetList();
   const list = scenarioList();
-  if (wasActive && list.length) loadPreset(list[0]);
+  // Удалили активный и он был последним — иначе интерфейс продолжит показывать
+  // и запускать уже не существующий сценарий (persistPreset уйдёт в никуда).
+  if (wasActive) { if (list.length) loadPreset(list[0]); else showEmptyState(); }
 }
 
 function addScenario(preset) {

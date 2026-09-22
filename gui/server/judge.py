@@ -132,7 +132,11 @@ async def _ask_judge(model: str, prompt: str, content: str = "",
 
 def _parse_winner(text: str) -> str | None:
     """«ПОБЕДИТЕЛЬ: А» — кириллицей или латиницей, возможно в звёздочках."""
-    line = next((ln for ln in text.splitlines() if ln.strip().upper().startswith("ПОБЕДИТЕЛЬ")), "")
+    line = next(
+        (ln for ln in text.splitlines()
+         if ln.strip().lstrip("*#> ").upper().startswith("ПОБЕДИТЕЛЬ")),
+        "",
+    )
     head = line.upper()
     if re.search(r":\s*\**\s*(ОТВЕТ\s*)?[AА]\b", head):
         return "system"

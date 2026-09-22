@@ -10,18 +10,33 @@ import json, re, sys, pathlib, subprocess
 
 HERE = pathlib.Path(__file__).resolve().parent
 STATIC = HERE.parent / "static"   # presets.js лежит рядом с интерфейсом
+# Кейс-пресеты (*_preset.js) регистрируются в window.STARTUP_PRESETS —
+# загружаем их вслед за presets.js и проверяем теми же правилами.
+_case_files = sorted(p.name for p in STATIC.glob("*_preset.js"))
+_loads = "".join(f"require('./{name}');" for name in ["presets.js", *_case_files])
 try:
     dump = subprocess.run(
         ["node", "-e",
-         "global.window={};require('./presets.js');"
-         "console.log(JSON.stringify({presets:window.PRESETS,mcp:window.MCP_SERVERS,meta:window.META_MODEL}))"],
+         f"global.window={{}};{_loads}"
+         "console.log(JSON.stringify({presets:window.PRESETS,"
+         "startup:window.STARTUP_PRESETS||[],"
+         "mcp:window.MCP_SERVERS,meta:window.META_MODEL}))"],
         cwd=STATIC, capture_output=True, text=True, check=True).stdout
 except (OSError, subprocess.CalledProcessError) as exc:
-    sys.exit(f"не удалось прочитать presets.js через node: {exc}")
+    sys.exit(f"не удалось прочитать пресеты через node: {exc}")
 data = json.loads(dump)
-presets, MCP = data["presets"], data["mcp"]
+presets, MCP = data["presets"] + data["startup"], data["mcp"]
 REAL_TOOLS = {"browser-usage","document","download","media","sandbox","sandbox-light",
               "sequential-thinking","web-scraping","websearch-searxng","youtube-transcript"}
+# Кейс-серверы из mcp-servers/ репозитория тоже реальны — читаем их имена из
+# [tool.fedotmas.mcp] в pyproject.toml, чтобы список не отставал от репо.
+import tomllib
+for _pp in (HERE.parent.parent / "mcp-servers").glob("*/pyproject.toml"):
+    try:
+        _name = tomllib.loads(_pp.read_text(encoding="utf-8"))["tool"]["fedotmas"]["mcp"]["name"]
+        REAL_TOOLS.add(_name)
+    except (KeyError, OSError, tomllib.TOMLDecodeError):
+        pass
 errs, warns = [], []
 
 def err(p, m): errs.append(f"[{p}] {m}")
@@ -106,7 +121,8 @@ for pr in presets:
         declared = float(m.group(1).replace(",", ".")) * 1000
         if abs(declared - tok) / max(tok, 1) > 0.05:
             err(p, f"подпись '{pr['auto']}' не сходится с суммой токенов журнала ({tok})")
-    if not re.search(r"\d+\s*(мин|с)", pr["auto"]): err(p, f"из подписи '{pr['auto']}' не парсится время")
+    # без парсимого времени интерфейс считает часы по журналу (factor=1) — это допустимо
+    if not re.search(r"\d+\s*(мин|с)", pr["auto"]): warn(p, f"из подписи '{pr['auto']}' не парсится время — часы пойдут по журналу")
 
 print(f"проверено сценариев: {len(presets)}")
 print(f"\nОШИБКИ ({len(errs)}):"); [print(" ✗", e) for e in errs] or print("  нет")

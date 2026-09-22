@@ -147,6 +147,17 @@ def sanitize_config(config, kind: str, extra_tools: list[str] | None = None):
             for old, new in keys.items():
                 agent.instruction = agent.instruction.replace("{" + old, "{" + new)
 
+    if renames and kind == "mas":
+        # Координатор зовёт воркеров по имени прямо в тексте инструкции: без
+        # переписывания текстов он продолжит звать несуществующий инструмент.
+        for agent in agents:
+            for old, new in renames.items():
+                if agent.instruction:
+                    agent.instruction = agent.instruction.replace(old, new)
+                desc = getattr(agent, "description", None)
+                if desc:
+                    agent.description = desc.replace(old, new)
+
     if renames and kind != "mas":
         def walk(node):
             if node.type == "agent" and node.agent_name in renames:

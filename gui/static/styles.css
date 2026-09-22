@@ -362,6 +362,7 @@ body.zoomed{zoom:1.18}
 .ans-winner.system{color:var(--ok); background:color-mix(in srgb, var(--ok) 12%, transparent)}
 .ans-winner.single{color:var(--warn); background:color-mix(in srgb, var(--warn) 12%, transparent)}
 .ans-winner.tie{color:var(--text-dim); background:var(--panel-2)}
+.ans-winner.error{color:var(--warn); background:color-mix(in srgb, var(--warn) 12%, transparent)}
 .answer-actions{display:flex; gap:8px; padding:10px 14px; border-top:1px solid var(--line-soft)}
 .answer-actions .btn{flex:1 1 auto}
 
