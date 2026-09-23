@@ -68,11 +68,11 @@ def main() -> None:
         observed_artifacts = [artifacts[a] for a in seen.get(example_id, set()) | final_artifacts.get(example_id, set())]
         write_artifacts = [artifacts[a] for a in final_artifacts.get(example_id, set())]
         candidate_union = {
-            candidate["label"]
+            label
             for artifact in observed_artifacts
             for example in artifact["examples"]
             if example["example_id"] == example_id
-            for candidate in example["method_candidates"]
+            for label in example["method_candidates"]
         }
         visible_shortlist = set()
         for artifact_id, limit in visible_specs.get(example_id, []):

@@ -224,7 +224,7 @@ def save_review_decisions(run_id: str, artifact_id: str, decisions: list[ReviewD
         labels={x["candidate_index"]:x["label"] for x in known[eid]["fused_candidates"]}
         if any(x not in labels for x in inds): raise ValueError("Candidate index does not belong to example")
         rows.append({"example_id":eid,"top_1":labels[inds[0]],"top_2":labels[inds[1]],"top_3":labels[inds[2]]})
-    return _store(run_id,rows,True)
+    return _store(run_id,rows,False)
 
 @mcp.tool
 def get_run_status(run_id: str, limit: int=50) -> dict[str,Any]:

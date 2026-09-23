@@ -143,8 +143,16 @@ def main() -> None:
         }
     for offset in range(0, len(rows), 20):
         assigned = [row["example_id"] for row in rows[offset:offset + 20]]
-        if resume and set(assigned) <= stored_ids():
-            continue
+        if resume:
+            batch_stored = set(assigned) & stored_ids()
+            if batch_stored == set(assigned):
+                continue
+            if batch_stored:
+                raise RuntimeError(
+                    f"Cannot resume contaminated batch at offset {offset}: "
+                    f"{len(batch_stored)}/{len(assigned)} IDs are already persisted; "
+                    "repair or use a new run ID instead of rerunning this batch"
+                )
         before = stored_ids()
         trace_path = OUT / f"batch_{offset:04d}_trace.json"
         sentinel = OUT / f"batch_{offset:04d}_complete.json"

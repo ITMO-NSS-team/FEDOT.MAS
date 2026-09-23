@@ -77,7 +77,10 @@ def test_partition_candidate_batch_is_deterministic(data, monkeypatch):
 def test_save_by_ids_review_indices_status_and_finalization(data):
     artifact=server.prepare_candidate_batch(0,100,["one","two"],5,"borda")["artifact_id"]
     assert server.save_candidate_predictions("run",artifact,["1"])["saved"] == 1
-    assert server.save_review_decisions("run",artifact,[{"example_id":"1","candidate_indices":[2,1,0]}])["saved"] == 1
+    original = json.loads(server._run_path("run").read_text())
+    with pytest.raises(ValueError, match="already contains a prediction ID"):
+        server.save_review_decisions("run",artifact,[{"example_id":"1","candidate_indices":[2,1,0]}])
+    assert json.loads(server._run_path("run").read_text()) == original
     with pytest.raises(ValueError): server.save_review_decisions("run",artifact,[{"example_id":"2","candidate_indices":[0,0,1]}])
     with pytest.raises(ValueError): server.save_review_decisions("run",artifact,[{"example_id":"2","candidate_indices":[0,1,99]}])
     status=server.get_run_status("run",3); assert status["missing_count"] == 99 and len(status["next_missing_ids"]) == 3

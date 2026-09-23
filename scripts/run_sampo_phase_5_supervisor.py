@@ -1,4 +1,4 @@
-"""Process-isolated supervisor for bounded Phase 5 behavioral qualification."""
+"""DEPRECATED / NON-OFFICIAL. Use run_sampo_phase_5_qualification.py instead."""
 from __future__ import annotations
 import hashlib, json, os, signal, subprocess, sys, time
 from pathlib import Path

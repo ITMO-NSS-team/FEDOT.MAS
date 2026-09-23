@@ -1,4 +1,4 @@
-"""Harness-owned 3x20 Phase 5 smoke evaluation; no private evaluation data."""
+"""DEPRECATED / NON-OFFICIAL. Use run_sampo_phase_5_smoke.py instead."""
 from __future__ import annotations
 import asyncio,csv,json,time
 from pathlib import Path

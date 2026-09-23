@@ -1,6 +1,6 @@
 """Behaviorally qualify the five already-generated bounded-batch configs."""
 from __future__ import annotations
-import asyncio,csv,json,os,threading,time
+import asyncio,csv,json,os,threading,time,uuid
 from pathlib import Path
 from typing import Any
 from fedotmas import MAS
@@ -12,7 +12,10 @@ from google.adk.events import Event
 from google.adk.runners import InvocationContext
 from sampo_phase_5_policy import evaluate_policy_conformance
 from sampo_phase_5_trace import write_trace_atomic
-ROOT=Path(__file__).resolve().parents[1]; B=Path(os.environ['PHASE5_BATCH']).resolve() if os.environ.get('PHASE5_BATCH') else ROOT/'artifacts/sampo_phase_5/structural_review/batch_7aea72723bfd461585a8d6cd67857954'; OUT=ROOT/'artifacts/sampo_phase_5/behavioral_qualification'/B.name
+ROOT=Path(__file__).resolve().parents[1]; B=Path(os.environ['PHASE5_BATCH']).resolve() if os.environ.get('PHASE5_BATCH') else ROOT/'artifacts/sampo_phase_5/structural_review/batch_7aea72723bfd461585a8d6cd67857954'; QUALIFICATION_ROOT=ROOT/'artifacts/sampo_phase_5/behavioral_qualification'/B.name; OUT=QUALIFICATION_ROOT/f"attempt_{time.strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:8]}"
+# Fixed public-only mixed sample: 10477, 1825, 4507 have retriever agreement;
+# 410 and 12150 have retriever disagreement in the deterministic public artifact.
+QUALIFICATION_IDS=['10477','1825','410','12150','4507']
 class Trace(BasePlugin):
  def __init__(self, path: Path | None = None): super().__init__(name='phase5_behavior_trace'); self.calls=[]; self.tools=[]; self.agents=[]; self.fail=[]; self.path=path; self.durable_ids=set(); self.durable_paths=set(); self.partition_ids=set(); self.evidence_seen=set(); self.terminal=False
  def flush(self):
@@ -54,7 +57,7 @@ def _completion_guard(run: str, assigned: list[str], sentinel: Path) -> None:
    os._exit(0)
   time.sleep(0.1)
 async def one(i,assigned,offset=0):
- d=B/f'config_{i:02d}'; meta=json.loads((d/'metadata.json').read_text()); run=os.environ.get('PHASE5_RUN_ID',meta['run_id']); trace=Trace(Path(os.environ['PHASE5_TRACE_PATH']) if os.environ.get('PHASE5_TRACE_PATH') else None); before=stored(run); start=time.perf_counter(); reason='normal'
+ d=B/f'config_{i:02d}'; meta=json.loads((d/'metadata.json').read_text()); run=os.environ.get('PHASE5_RUN_ID',f"{meta['run_id']}_qual_{uuid.uuid4().hex[:12]}"); trace=Trace(Path(os.environ['PHASE5_TRACE_PATH']) if os.environ.get('PHASE5_TRACE_PATH') else None); before=stored(run); start=time.perf_counter(); reason='normal'
  if os.environ.get('PHASE5_ENFORCE_COMPLETE'):
   sentinel=Path(os.environ['PHASE5_COMPLETION_SENTINEL']); threading.Thread(target=_completion_guard,args=(run,assigned,sentinel),daemon=True).start()
  task=(d/'task.txt').read_text()+f'\nHARNESS RUN-ID OVERRIDE: use durable prediction run_id {run}; this supersedes any run_id in the saved task. HARNESS ASSIGNMENT: process exactly offset {offset} and IDs {assigned}. Do not process any other IDs; do not finalize the pilot.'+os.environ.get('PHASE5_POLICY_SUFFIX','')
@@ -80,9 +83,8 @@ async def one(i,assigned,offset=0):
  static=json.loads((B/'structural_review.json').read_text())['configs'][f'config_{i:02d}']['pass']
  return {'config':str(d.relative_to(ROOT)),'static_sanity':static,'behavioral_pass':static and not failed,'failed_criteria':sorted(set(failed)),'policy_conformance':policy,'trace':{'agents':trace.agents,'model_calls':trace.calls,'tool_calls':trace.tools,'max_prompt_tokens':max([x['prompt_tokens'] for x in trace.calls],default=0),'artifact_ids':sorted({x['artifact_id'] for x in trace.tools if x['artifact_id']}),'final_stored_ids':sorted(after),'runtime_seconds':elapsed,'termination_reason':reason}}
 async def main():
- OUT.mkdir(parents=True,exist_ok=True)
- with (ROOT/'artifacts/sampo_benchmark/pilot_inputs.csv').open(encoding='utf-8',newline='') as f: first_batch=list(csv.DictReader(f))[:20]
- default_ids=[r['example_id'] for r in first_batch[:10]]
+ OUT.mkdir(parents=True,exist_ok=False)
+ default_ids=QUALIFICATION_IDS
  ids=json.loads(os.environ['PHASE5_ASSIGNED_IDS']) if os.environ.get('PHASE5_ASSIGNED_IDS') else default_ids
  offset=int(os.environ.get('PHASE5_OFFSET','0'))
  indexes=[int(os.environ['PHASE5_CONFIG'])] if os.environ.get('PHASE5_CONFIG') else range(1,6)
@@ -95,5 +97,6 @@ async def main():
  selected=next((x['config'] for x in results if x['behavioral_pass']),None)
  report={'batch_id':B.name,'assigned_ids':ids,'private_ground_truth_used':False,'accuracy_used':False,'configs':results,'selected_config':selected}
  (OUT/'report.json').write_text(json.dumps(report,indent=2)+'\n')
- (ROOT/'artifacts/sampo_phase_5/decision_report.md').write_text('# Phase 5 decision report\n\nSelection used behavioral qualification only; no private ground truth or accuracy.\n\nSelected: '+(selected or 'none')+'\n')
+ if selected:
+  (ROOT/'artifacts/sampo_phase_5/decision_report.md').write_text('# Phase 5 decision report\n\nSelection used behavioral qualification only; no private ground truth or accuracy.\n\nSelected: '+selected+'\nQualification report: '+str((OUT/'report.json').relative_to(ROOT))+'\n')
 if __name__=='__main__': asyncio.run(main())

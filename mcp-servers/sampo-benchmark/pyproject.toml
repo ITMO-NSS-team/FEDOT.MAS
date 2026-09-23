@@ -9,6 +9,9 @@ requires-python = ">=3.12"
 dependencies = [ "fastmcp>=2.14.5" ]
 scripts.mcp-sampo-benchmark = "mcp_sampo_benchmark.server:main"
 
+[dependency-groups]
+dev = [ "pytest", "pytest-asyncio" ]
+
 [tool.fedotmas]
 mcp.name = "sampo-benchmark"
 mcp.description = "Public-only SAMPO artifact-backed retrieval. Full retrieval artifacts remain server-side; agents choose methods and rank fusion, reasoning only over compact summaries or bounded evidence. Evidence responses have a 48 KiB budget; request smaller ID subsets when needed. Duplicate retrieval method names are normalized to a canonical unique selection. Stage provisional candidates with stage_candidate_predictions; save_candidate_predictions and get_prediction_status concern final predictions only. Use get_prediction_status to verify the current assigned unit; get_run_status is whole-run/finalization status. No end-to-end prediction policy, ground truth, or database access is provided."
