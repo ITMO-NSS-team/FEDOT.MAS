@@ -174,11 +174,16 @@ def get_candidate_evidence(artifact_id: str, example_ids: list[str], candidate_l
         candidates=_evidence_candidates(example, selection, candidate_limit)
         if candidate_limit is not None:
             compact=[]
+            fused_rank_by_index = {
+                candidate["candidate_index"]: rank
+                for rank, candidate in enumerate(example["fused_candidates"], 1)
+            }
             for candidate in candidates:
                 entries=example["method_candidates"].get(candidate["label"], [])
                 compact.append({
                     "candidate_index":candidate["candidate_index"],
                     "label":candidate["label"],
+                    "fused_rank":fused_rank_by_index[candidate["candidate_index"]],
                     "support_count":len({entry["method"] for entry in entries}),
                     "best_rank":min((entry["rank"] for entry in entries), default=None),
                     "methods":sorted({entry["method"] for entry in entries}),
@@ -212,7 +217,7 @@ def save_candidate_predictions(run_id: str, artifact_id: str, example_ids: list[
     return _store(run_id,[{"example_id":i,**{f"top_{n}":known[i]["fused_candidates"][n-1]["label"] for n in range(1,4)}} for i in example_ids],False)
 
 @mcp.tool
-def save_review_decisions(run_id: str, artifact_id: str, decisions: list[ReviewDecision]) -> dict[str,int]:
+def save_review_decisions(run_id: str, artifact_id: str, decisions: list[ReviewDecision], fill_retrieval_tail: bool = False) -> dict[str,int]:
     """Durably persist reviewed IDs by required artifact-local indices; never later save candidates for those same IDs."""
     data=_artifact(artifact_id); known={e["example_id"]:e for e in data["examples"]}
     normalized=[d.model_dump() if isinstance(d, ReviewDecision) else d for d in decisions]
@@ -223,7 +228,41 @@ def save_review_decisions(run_id: str, artifact_id: str, decisions: list[ReviewD
         if eid not in known or not isinstance(inds,list) or len(inds)!=3 or len(set(inds))!=3 or any(not isinstance(x,int) for x in inds): raise ValueError("Each decision needs three distinct candidate indices")
         labels={x["candidate_index"]:x["label"] for x in known[eid]["fused_candidates"]}
         if any(x not in labels for x in inds): raise ValueError("Candidate index does not belong to example")
-        rows.append({"example_id":eid,"top_1":labels[inds[0]],"top_2":labels[inds[1]],"top_3":labels[inds[2]]})
+        ordered_indices = list(inds)
+        if fill_retrieval_tail:
+            # The experiment lets the model choose top_1 only. Remaining slots
+            # are filled from retrieval using deterministic method coverage,
+            # then fused rank, retriever support, best individual rank, index.
+            selected = [inds[0]]
+            selected_methods = {
+                entry["method"]
+                for entry in known[eid]["method_candidates"].get(labels[inds[0]], [])
+            }
+            retrieval = []
+            for candidate in known[eid]["fused_candidates"]:
+                entries = known[eid]["method_candidates"].get(candidate["label"], [])
+                retrieval.append({
+                    "candidate_index": candidate["candidate_index"],
+                    "methods": {entry["method"] for entry in entries},
+                    "support_count": len({entry["method"] for entry in entries}),
+                    "best_rank": min((entry["rank"] for entry in entries), default=10**9),
+                    "fused_rank": candidate["candidate_index"] + 1,
+                })
+            while len(selected) < 3:
+                remaining = [candidate for candidate in retrieval if candidate["candidate_index"] not in selected]
+                if not remaining:
+                    raise ValueError("Artifact does not contain three distinct retrieval candidates")
+                best = min(remaining, key=lambda candidate: (
+                    -len(candidate["methods"] - selected_methods),
+                    candidate["fused_rank"],
+                    -candidate["support_count"],
+                    candidate["best_rank"],
+                    candidate["candidate_index"],
+                ))
+                selected.append(best["candidate_index"])
+                selected_methods.update(best["methods"])
+            ordered_indices = selected
+        rows.append({"example_id":eid,"top_1":labels[ordered_indices[0]],"top_2":labels[ordered_indices[1]],"top_3":labels[ordered_indices[2]]})
     return _store(run_id,rows,False)
 
 @mcp.tool

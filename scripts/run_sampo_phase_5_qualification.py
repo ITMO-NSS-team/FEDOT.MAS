@@ -36,7 +36,7 @@ class Trace(BasePlugin):
     if x.name=='get_candidate_evidence':
      if self.evidence_seen.intersection(ids): self.fail.append('duplicate_evidence_call'); self.flush(); raise RuntimeError('duplicate_evidence_call')
      self.evidence_seen.update(ids)
-    self.tools.append({'agent':event.author,'tool':x.name,'ids':ids, 'decisions':[{'example_id':d.get('example_id'),'candidate_indices':d.get('candidate_indices')} for d in args.get('decisions',[])], 'artifact_id':args.get('artifact_id'), 'retrieval':({'offset':args.get('offset'),'limit':args.get('limit'),'methods':args.get('methods'),'k':args.get('k'),'fusion':args.get('fusion')} if x.name=='prepare_candidate_batch' else None), 'evidence':({'candidate_limit':args.get('candidate_limit'),'selection':args.get('selection')} if x.name=='get_candidate_evidence' else None)})
+    self.tools.append({'agent':event.author,'tool':x.name,'ids':ids, 'decisions':[{'example_id':d.get('example_id'),'candidate_indices':d.get('candidate_indices')} for d in args.get('decisions',[])], 'fill_retrieval_tail':args.get('fill_retrieval_tail',False), 'artifact_id':args.get('artifact_id'), 'retrieval':({'offset':args.get('offset'),'limit':args.get('limit'),'methods':args.get('methods'),'k':args.get('k'),'fusion':args.get('fusion')} if x.name=='prepare_candidate_batch' else None), 'evidence':({'candidate_limit':args.get('candidate_limit'),'selection':args.get('selection')} if x.name=='get_candidate_evidence' else None)})
     if x.name in {'save_review_decisions','save_candidate_predictions'}:
      self.durable_ids.update(ids); self.durable_paths.add(x.name)
    self.flush()

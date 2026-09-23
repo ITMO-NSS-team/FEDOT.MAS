@@ -81,6 +81,8 @@ def malformed_tool_call(raw: dict, allowed_ids: set[str]) -> bool:
         if call.get("tool") == "save_candidate_predictions" and not set(call.get("ids") or []) <= allowed_ids:
             return True
         if call.get("tool") == "save_review_decisions":
+            if os.environ.get("PHASE5_EXPERIMENTAL_TAIL") == "1" and not call.get("fill_retrieval_tail"):
+                return True
             for decision in call.get("decisions") or []:
                 indices = decision.get("candidate_indices")
                 if not isinstance(indices, list) or len(indices) != 3 or len(set(indices)) != 3:
