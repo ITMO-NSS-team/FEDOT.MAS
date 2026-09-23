@@ -5,8 +5,10 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 from sampo_phase_5_policy import evaluate_policy_conformance
+from sampo_phase_5_trace import read_trace
 B=Path(os.environ['PHASE5_BATCH']).resolve() if os.environ.get('PHASE5_BATCH') else ROOT/'artifacts/sampo_phase_5/structural_review/batch_7aea72723bfd461585a8d6cd67857954'
 CONFIG=B/f"config_{int(os.environ.get('PHASE5_CONFIG','1')):02d}"; OUT=ROOT/'artifacts/sampo_phase_5'/f"smoke_{B.name}_{CONFIG.name}{os.environ.get('PHASE5_SMOKE_SUFFIX','')}"
+REQUIRED_TASK_POLICY=('Request evidence for each review ID exactly once','never retry get_candidate_evidence')
 def rows():
  with (ROOT/'artifacts/sampo_benchmark/pilot_inputs.csv').open(encoding='utf-8',newline='') as f:return list(csv.DictReader(f))
 def stored(path): return {json.loads(x)['example_id'] for x in path.open() if x.strip()} if path.exists() else set()
@@ -40,6 +42,8 @@ def malformed_tool_call(raw, allowed_ids):
  return False
 def main():
  if OUT.exists(): raise RuntimeError(f'Refusing to overwrite {OUT}')
+ saved_task=(CONFIG/'task.txt').read_text(encoding='utf-8')
+ if any(fragment.casefold() not in saved_task.casefold() for fragment in REQUIRED_TASK_POLICY): raise RuntimeError('Saved generated task lacks the one-shot evidence policy; regenerate configs before smoke')
  OUT.mkdir(parents=True); meta=json.loads((CONFIG/'metadata.json').read_text()); run=os.environ.get('PHASE5_RUN_ID',meta['run_id']); prediction=ROOT/f'artifacts/sampo_benchmark/mas_runs/{run}.jsonl'
  if prediction.exists() or prediction.with_suffix('.staged.jsonl').exists(): raise RuntimeError('Smoke run_id is not clean')
  allrows=rows(); report={'config':str(CONFIG.relative_to(ROOT)),'run_id':run,'private_ground_truth_used':False,'fresh_sessions':True,'batches':[]}
@@ -57,7 +61,7 @@ def main():
   if proc.poll() is None:
    try: os.killpg(proc.pid,signal.SIGKILL)
    except (ProcessLookupError, PermissionError): pass
-  proc.wait(); final=stored(prediction); raw=json.loads(trace.read_text()) if trace.exists() else {'model_calls':[],'tool_calls':[],'failures':[]}; outside=(final-before)-set(assigned)
+  proc.wait(); final=stored(prediction); raw=read_trace(trace); outside=(final-before)-set(assigned)
   policy=evaluate_policy_conformance(raw,assigned)
   item={'offset':offset,'assigned_ids':assigned,'runtime_seconds':time.monotonic()-start,'stored_ids':sorted(final & set(assigned)),'outside_ids':sorted(outside),'max_prompt_tokens':max([x['prompt_tokens'] for x in raw['model_calls']],default=0),'model_calls':len(raw['model_calls']),'tool_calls':len(raw['tool_calls']),'duplicate_persistence':duplicate_persistence(raw,set(assigned)),'repeated_prepare':repeated_prepare(raw),'malformed_tool_call':malformed_tool_call(raw,set(assigned)),'policy_conformance':policy,'complete':set(assigned)<=final,'sentinel':sentinel.exists(),'failures':raw['failures']}
   report['batches'].append(item)

@@ -11,11 +11,12 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.events import Event
 from google.adk.runners import InvocationContext
 from sampo_phase_5_policy import evaluate_policy_conformance
+from sampo_phase_5_trace import write_trace_atomic
 ROOT=Path(__file__).resolve().parents[1]; B=Path(os.environ['PHASE5_BATCH']).resolve() if os.environ.get('PHASE5_BATCH') else ROOT/'artifacts/sampo_phase_5/structural_review/batch_7aea72723bfd461585a8d6cd67857954'; OUT=ROOT/'artifacts/sampo_phase_5/behavioral_qualification'/B.name
 class Trace(BasePlugin):
- def __init__(self, path: Path | None = None): super().__init__(name='phase5_behavior_trace'); self.calls=[]; self.tools=[]; self.agents=[]; self.fail=[]; self.path=path
+ def __init__(self, path: Path | None = None): super().__init__(name='phase5_behavior_trace'); self.calls=[]; self.tools=[]; self.agents=[]; self.fail=[]; self.path=path; self.durable_ids=set(); self.durable_paths=set(); self.partition_ids=set(); self.evidence_seen=set(); self.terminal=False
  def flush(self):
-  if self.path: self.path.write_text(json.dumps({'agents':self.agents,'model_calls':self.calls,'tool_calls':self.tools,'failures':self.fail})+'\n')
+  if self.path: write_trace_atomic(self.path, {'agents':self.agents,'model_calls':self.calls,'tool_calls':self.tools,'failures':self.fail})
  async def before_agent_callback(self,*,agent,callback_context): self.agents.append(agent.name); self.flush()
  async def after_model_callback(self,*,callback_context,llm_response:LlmResponse):
   u=llm_response.usage_metadata; p=(u.prompt_token_count if u else 0) or 0; c=(u.candidates_token_count if u else 0) or 0; self.calls.append({'agent':callback_context.agent_name,'prompt_tokens':p,'completion_tokens':c})
@@ -25,9 +26,20 @@ class Trace(BasePlugin):
  async def on_event_callback(self,*,invocation_context:InvocationContext,event:Event):
   if not event.partial:
    for x in event.get_function_calls():
-    args=x.args or {}; self.tools.append({'agent':event.author,'tool':x.name,'ids':args.get('example_ids') or [d.get('example_id') for d in args.get('decisions',[])], 'decisions':[{'example_id':d.get('example_id'),'candidate_indices':d.get('candidate_indices')} for d in args.get('decisions',[])], 'artifact_id':args.get('artifact_id'), 'retrieval':({'offset':args.get('offset'),'limit':args.get('limit'),'methods':args.get('methods'),'k':args.get('k'),'fusion':args.get('fusion')} if x.name=='prepare_candidate_batch' else None), 'evidence':({'candidate_limit':args.get('candidate_limit'),'selection':args.get('selection')} if x.name=='get_candidate_evidence' else None)})
-    self.flush()
-    if len(self.tools)>60:self.fail.append('tool_call_limit'); self.flush(); raise RuntimeError('tool_call_limit')
+    if self.partition_ids and self.durable_ids >= self.partition_ids:
+     self.fail.append('tool_after_durable_write'); self.flush(); raise RuntimeError('tool_after_durable_write')
+    args=x.args or {}; ids=args.get('example_ids') or [d.get('example_id') for d in args.get('decisions',[])]
+    if x.name=='partition_candidate_batch': self.partition_ids.update(ids)
+    if x.name=='get_candidate_evidence':
+     if self.evidence_seen.intersection(ids): self.fail.append('duplicate_evidence_call'); self.flush(); raise RuntimeError('duplicate_evidence_call')
+     self.evidence_seen.update(ids)
+    self.tools.append({'agent':event.author,'tool':x.name,'ids':ids, 'decisions':[{'example_id':d.get('example_id'),'candidate_indices':d.get('candidate_indices')} for d in args.get('decisions',[])], 'artifact_id':args.get('artifact_id'), 'retrieval':({'offset':args.get('offset'),'limit':args.get('limit'),'methods':args.get('methods'),'k':args.get('k'),'fusion':args.get('fusion')} if x.name=='prepare_candidate_batch' else None), 'evidence':({'candidate_limit':args.get('candidate_limit'),'selection':args.get('selection')} if x.name=='get_candidate_evidence' else None)})
+    if x.name in {'save_review_decisions','save_candidate_predictions'}:
+     self.durable_ids.update(ids); self.durable_paths.add(x.name)
+   self.flush()
+   if len(self.tools)>60:self.fail.append('tool_call_limit'); self.flush(); raise RuntimeError('tool_call_limit')
+   if event.get_function_responses() and self.partition_ids and self.durable_ids >= self.partition_ids and self.durable_paths == {'save_review_decisions','save_candidate_predictions'}:
+    self.terminal=True; invocation_context.end_invocation=True; self.flush()
 def stored(run):
  p=ROOT/f'artifacts/sampo_benchmark/mas_runs/{run}.jsonl'
  if not p.exists(): return set()
@@ -48,6 +60,7 @@ async def one(i,assigned,offset=0):
  task=(d/'task.txt').read_text()+f'\nHARNESS RUN-ID OVERRIDE: use durable prediction run_id {run}; this supersedes any run_id in the saved task. HARNESS ASSIGNMENT: process exactly offset {offset} and IDs {assigned}. Do not process any other IDs; do not finalize the pilot.'+os.environ.get('PHASE5_POLICY_SUFFIX','')
  try: await MAS(mcp_servers=['sampo-benchmark','sandbox-light'],plugins=[trace]).build_and_run(MASConfig.model_validate_json((d/'config.json').read_text()),task,timeout=300)
  except Exception as e: reason=f'{type(e).__name__}: {e}'
+ if trace.terminal: reason='phase5_terminal_after_durable_writes'
  elapsed=time.perf_counter()-start; after=stored(run); added=after-before; failed=list(trace.fail); outside=added-set(assigned)
  if outside: failed.append('outside_batch_write')
  if set(assigned)-after: failed.append('incomplete_coverage')
@@ -63,7 +76,7 @@ async def one(i,assigned,offset=0):
  if elapsed>=299.5: reason='wall_clock_timeout'; failed.append('runtime_limit')
  policy=evaluate_policy_conformance({'tool_calls':trace.tools}, assigned)
  if not policy['pass']: failed.extend('policy_conformance:'+reason for reason in policy['reasons'])
- if reason!='normal': failed.append('non_normal_termination')
+ if reason not in {'normal','phase5_terminal_after_durable_writes'}: failed.append('non_normal_termination')
  static=json.loads((B/'structural_review.json').read_text())['configs'][f'config_{i:02d}']['pass']
  return {'config':str(d.relative_to(ROOT)),'static_sanity':static,'behavioral_pass':static and not failed,'failed_criteria':sorted(set(failed)),'policy_conformance':policy,'trace':{'agents':trace.agents,'model_calls':trace.calls,'tool_calls':trace.tools,'max_prompt_tokens':max([x['prompt_tokens'] for x in trace.calls],default=0),'artifact_ids':sorted({x['artifact_id'] for x in trace.tools if x['artifact_id']}),'final_stored_ids':sorted(after),'runtime_seconds':elapsed,'termination_reason':reason}}
 async def main():

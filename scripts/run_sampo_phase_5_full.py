@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from sampo_phase_5_policy import evaluate_policy_conformance
+from sampo_phase_5_trace import read_trace
 BATCH = Path(os.environ["PHASE5_BATCH"]).resolve() if os.environ.get("PHASE5_BATCH") else (
     ROOT / "artifacts/sampo_phase_5/structural_review/batch_1e6819ad6b0a40dda61ab7c86cc18edf"
 )
@@ -20,6 +21,7 @@ CONFIG = BATCH / f"config_{int(os.environ.get('PHASE5_CONFIG', '1')):02d}"
 RUN_ID = os.environ.get("PHASE5_RUN_ID", f"phase5_full_{uuid.uuid4().hex}")
 OUT = ROOT / "artifacts/sampo_phase_5" / f"full_{RUN_ID}"
 SERVER_PYTHON = ROOT / "mcp-servers/sampo-benchmark/.venv/bin/python"
+REQUIRED_TASK_POLICY = ("Request evidence for each review ID exactly once", "never retry get_candidate_evidence")
 
 
 def pilot_rows() -> list[dict[str, str]]:
@@ -117,6 +119,9 @@ def finalize() -> dict:
 
 
 def main() -> None:
+    saved_task = (CONFIG / "task.txt").read_text(encoding="utf-8")
+    if any(fragment.casefold() not in saved_task.casefold() for fragment in REQUIRED_TASK_POLICY):
+        raise RuntimeError("Saved generated task lacks the one-shot evidence policy; regenerate configs before an official run")
     resume = os.environ.get("PHASE5_RESUME") == "1"
     if OUT.exists() and not resume:
         raise RuntimeError(f"Refusing to overwrite {OUT}")
@@ -172,7 +177,7 @@ def main() -> None:
                 pass
         process.wait()
         after = stored_ids()
-        raw = json.loads(trace_path.read_text()) if trace_path.exists() else {"model_calls": [], "tool_calls": [], "failures": []}
+        raw = read_trace(trace_path)
         policy = evaluate_policy_conformance(raw, assigned)
         item = {
             "offset": offset, "assigned_ids": assigned, "runtime_seconds": time.monotonic() - started,

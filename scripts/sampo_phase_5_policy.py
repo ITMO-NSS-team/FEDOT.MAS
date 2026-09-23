@@ -78,6 +78,7 @@ def evaluate_policy_conformance(
     review_ids: set[str] = set()
     fallback_ids: set[str] = set()
     evidence_ids: set[str] = set()
+    evidence_counts: dict[str, int] = {}
     partition_ids: set[str] = set()
     reviewed_writes: set[str] = set()
     fallback_writes: set[str] = set()
@@ -142,6 +143,8 @@ def evaluate_policy_conformance(
             if evidence.get("candidate_limit") != 10:
                 reasons.append("review evidence candidate_limit was not 10")
             evidence_ids.update(ids)
+            for example_id in ids:
+                evidence_counts[example_id] = evidence_counts.get(example_id, 0) + 1
         elif tool == "save_review_decisions":
             if durable_seen & ids:
                 reasons.append("duplicate durable persistence attempt")
@@ -159,6 +162,10 @@ def evaluate_policy_conformance(
         reasons.append("semantic-review IDs do not equal deterministic disagreement gate")
     if fallback_ids != gate_fallback:
         reasons.append("fallback IDs do not equal assigned IDs minus disagreement IDs")
+    if any(evidence_counts.get(example_id, 0) != 1 for example_id in gate_review):
+        reasons.append("every disagreement review ID must receive exactly one evidence call")
+    if any(evidence_counts.get(example_id, 0) != 0 for example_id in gate_fallback):
+        reasons.append("fallback IDs must receive zero semantic evidence calls")
     if reviewed_writes != gate_review:
         reasons.append("reviewed IDs were not persisted only through save_review_decisions")
     if fallback_writes != gate_fallback:

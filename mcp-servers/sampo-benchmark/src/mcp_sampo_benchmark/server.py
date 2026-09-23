@@ -157,7 +157,12 @@ def partition_candidate_batch(artifact_id: str, example_ids: list[str]) -> dict[
 
 @mcp.tool
 def get_candidate_evidence(artifact_id: str, example_ids: list[str], candidate_limit: int | None = None, selection: str = "fused") -> dict[str, Any]:
-    """Return bounded evidence; diverse_round_robin needs an explicit 1--30 candidate limit and preserves artifact-local indices."""
+    """Return bounded evidence exactly once per requested review ID.
+
+    Callers must use the exact artifact_id returned by prepare_candidate_batch,
+    request each example ID at most once, and stop on an error rather than
+    retrying with a modified artifact ID.
+    """
     if not 1 <= len(example_ids) <= 20 or len(set(example_ids)) != len(example_ids): raise ValueError("Provide 1-20 unique example IDs")
     if selection not in EVIDENCE_SELECTIONS: raise ValueError("Unknown evidence selection")
     if candidate_limit is not None and not 1 <= candidate_limit <= MAX_EVIDENCE_CANDIDATES: raise ValueError(f"candidate_limit must be 1--{MAX_EVIDENCE_CANDIDATES}")
