@@ -1,18 +1,20 @@
-"""Small, domain-neutral state store and action recommender for research work."""
+"""Snapshot-driven, domain-neutral research state and action recommendations."""
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
-from dataclasses import dataclass, field
-from threading import RLock
+from copy import deepcopy
+from typing import Any
+from urllib.parse import urlsplit
 
-MAX_ITEMS = 100
-MAX_ITEM_CHARS = 500
-MAX_SEARCH_QUERIES = 12
-REPEATED_INTENT_THRESHOLD = 3
-FAILED_ATTEMPT_THRESHOLD = 5
-REPEATED_STRATEGY_THRESHOLD = 3
+STATE_VERSION = 1
+MAX_ITEMS = 30
+MAX_TEXT_CHARS = 240
+MAX_QUERY_EVENTS = 50
+MAX_TELEMETRY_EVENTS = 50
+MAX_SEARCHES = 12
 
 _STOP_WORDS = {
     "a",
@@ -22,324 +24,495 @@ _STOP_WORDS = {
     "are",
     "as",
     "at",
+    "be",
     "by",
+    "find",
     "for",
     "from",
-    "find",
+    "give",
     "in",
+    "information",
     "is",
+    "latest",
+    "look",
+    "me",
     "of",
     "on",
     "or",
+    "please",
+    "query",
+    "queries",
     "search",
+    "searching",
+    "source",
     "the",
     "to",
     "web",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
     "with",
-    "query",
-    "queries",
-    "exact",
-    "title",
+    "website",
+    "article",
     "paper",
+    "publication",
+    "study",
+    "title",
+    "exact",
+}
+_ALIASES = {
+    "accession": "identifier",
+    "accessions": "identifier",
+    "identification": "identifier",
+    "identifier": "identifier",
+    "identifiers": "identifier",
+    "id": "identifier",
+    "ids": "identifier",
+    "chief": "ceo",
+    "executive": "ceo",
+    "officer": "ceo",
 }
 _STRATEGIES = {
     "browser": {"browser", "navigate", "navigation"},
-    "document extraction": {"pdf", "document", "extract", "extraction"},
+    "document_extraction": {"pdf", "document", "extract", "extraction"},
     "search": {"search", "query", "queries", "searching"},
     "scraping": {"scrape", "scraping", "scraper"},
 }
-
-
-@dataclass
-class ResearchState:
-    """Bounded state for a single research workstream."""
-
-    goal: str
-    findings: list[str] = field(default_factory=list)
-    evidence: list[str] = field(default_factory=list)
-    sources_checked: list[str] = field(default_factory=list)
-    unresolved_questions: list[str] = field(default_factory=list)
-    failed_attempts: list[str] = field(default_factory=list)
-    search_queries: list[str] = field(default_factory=list)
-    confidence: float | None = None
-    remaining_budget: float | None = None
+_LIST_FIELDS = (
+    "findings",
+    "evidence",
+    "evidence_urls",
+    "independent_sources",
+    "sources_checked",
+    "required_fields",
+    "filled_fields",
+    "unresolved_questions",
+    "failed_approaches",
+)
+_TELEMETRY_DEFAULTS: dict[str, Any] = {
+    "controller_calls": 0,
+    "recommendation_count": 0,
+    "strategy_blocked_events": 0,
+    "followed_recommendations": 0,
+    "unfollowed_recommendations": 0,
+    "unknown_follow_through": 0,
+    "recommendations": [],
+    "intervention_outcomes": [],
+    "pending_recommendation": None,
+}
 
 
 class ResearchController:
-    """Maintain compact research state and recommend a next action."""
-
-    def __init__(self) -> None:
-        self._states: dict[str, ResearchState] = {}
-        self._lock = RLock()
+    """Pure snapshot transformer; callers own and persist ``research_state``."""
 
     def update_research_state(
         self,
         *,
         goal: str,
-        research_id: str = "default",
+        research_state: dict[str, Any] | None = None,
+        research_id: str | None = None,
         findings: list[str] | None = None,
         evidence: list[str] | None = None,
+        evidence_urls: list[str] | None = None,
+        independent_sources: list[str] | None = None,
         sources_checked: list[str] | None = None,
+        required_fields: list[str] | None = None,
+        filled_fields: list[str] | None = None,
         unresolved_questions: list[str] | None = None,
         failed_attempts: list[str] | None = None,
         search_queries: list[str] | None = None,
         confidence: float | None = None,
         remaining_budget: float | None = None,
-    ) -> dict[str, object]:
-        """Merge new observations and replace the current unresolved-gap list."""
-        clean_goal = _clean_text(goal)
-        clean_id = _clean_text(research_id)
-        if not clean_goal:
-            raise ValueError("goal must not be empty")
-        if not clean_id:
-            raise ValueError("research_id must not be empty")
+        last_recommendation_followed: bool | None = None,
+    ) -> dict[str, Any]:
+        """Apply new observations and return the updated JSON snapshot."""
+        goal = _clean_text(goal)
+        snapshot_id = (
+            research_state.get("research_id")
+            if isinstance(research_state, dict)
+            else None
+        )
+        state_id = research_id or snapshot_id or "default"
+        state_id = _clean_text(state_id)
+        if not goal or not state_id:
+            raise ValueError("goal and research_id must not be empty")
         if confidence is not None and not 0 <= confidence <= 1:
             raise ValueError("confidence must be between 0 and 1")
         if remaining_budget is not None and remaining_budget < 0:
             raise ValueError("remaining_budget must not be negative")
 
-        with self._lock:
-            state = self._states.get(clean_id)
-            if state is None:
-                state = ResearchState(goal=clean_goal)
-                self._states[clean_id] = state
-            elif _comparison_text(state.goal) != _comparison_text(clean_goal):
-                raise ValueError(
-                    "research_id already belongs to a different goal; use a new id"
-                )
+        state = _load_state(research_state, goal=goal, research_id=state_id)
+        telemetry = state["telemetry"]
+        telemetry["controller_calls"] += 1
 
-            _merge_items(state.findings, findings)
-            _merge_items(state.evidence, evidence)
-            _merge_items(state.sources_checked, sources_checked)
-            _append_events(state.failed_attempts, failed_attempts)
-            _append_events(
-                state.search_queries, search_queries, limit=MAX_SEARCH_QUERIES
-            )
-            if unresolved_questions is not None:
-                state.unresolved_questions = _clean_items(unresolved_questions)
-            if confidence is not None:
-                state.confidence = float(confidence)
-            if remaining_budget is not None:
-                state.remaining_budget = float(remaining_budget)
+        for name, values in (
+            ("findings", findings),
+            ("evidence", evidence),
+            ("evidence_urls", evidence_urls),
+            ("independent_sources", independent_sources),
+            ("sources_checked", sources_checked),
+            ("required_fields", required_fields),
+            ("filled_fields", filled_fields),
+        ):
+            _merge(state[name], values)
+        if unresolved_questions is not None:
+            state["unresolved_questions"] = _strings(unresolved_questions)
 
-            return {
-                "research_id": clean_id,
-                "status": "updated",
-                "counts": _state_counts(state),
-                "confidence": state.confidence,
-                "remaining_budget": state.remaining_budget,
-            }
+        queries = _events(search_queries)
+        failures = _events(failed_attempts)
+        state["search_count"] += len(queries)
+        state["search_intents"].extend(_query_profile(query) for query in queries)
+        state["search_intents"] = state["search_intents"][-MAX_QUERY_EVENTS:]
+        state["failed_attempt_count"] += len(failures)
+        for failure in failures:
+            strategy = _strategy(failure)
+            if strategy:
+                counts = state["failed_strategy_counts"]
+                counts[strategy] = counts.get(strategy, 0) + _reported_count(failure)
+        state["failed_approaches"].extend(failures)
+        state["failed_approaches"] = state["failed_approaches"][-MAX_ITEMS:]
 
-    def get_next_action(self, research_id: str = "default") -> dict[str, object]:
-        """Return a compact continue, change-strategy, or synthesize recommendation."""
-        clean_id = _clean_text(research_id)
-        with self._lock:
-            state = self._states.get(clean_id)
-            if state is None:
-                return {
-                    "research_id": clean_id,
-                    "decision": "update_state",
-                    "reason": "No research state is recorded.",
-                    "next_actions": [
-                        "Record the goal, evidence, sources, open questions, and budget."
-                    ],
-                }
+        if confidence is not None:
+            state["confidence"] = confidence
+        if remaining_budget is not None:
+            state["remaining_budget"] = remaining_budget
+        _finish_recommendation(state, last_recommendation_followed)
+        return {"status": "updated", "counts": _counts(state), "research_state": state}
 
-            if _evidence_is_sufficient(state):
-                return {
-                    "research_id": clean_id,
-                    "decision": "synthesize",
-                    "reason": "Evidence is sufficient and no gaps remain.",
-                    "next_actions": [
-                        "Synthesize the findings with source support and note uncertainty."
-                    ],
-                }
+    def get_next_action(self, research_state: dict[str, Any]) -> dict[str, Any]:
+        """Evaluate the supplied snapshot and return action, reason, and new state."""
+        state = _load_state(research_state)
+        telemetry = state["telemetry"]
+        telemetry["controller_calls"] += 1
+        _finish_recommendation(state, None)
 
-            if state.remaining_budget == 0:
-                return {
-                    "research_id": clean_id,
-                    "decision": "synthesize",
-                    "reason": "No research budget remains; report current limits.",
-                    "next_actions": [
-                        "Synthesize available evidence and state unresolved gaps clearly."
-                    ],
-                }
+        action, reason, guidance = _recommend(state)
+        telemetry["recommendation_count"] += 1
+        event_id = telemetry["recommendation_count"]
+        event = {
+            "id": event_id,
+            "action": action,
+            "reason": reason,
+            "searches_before": state["search_count"],
+            "searches_after": None,
+            "followed": None,
+        }
+        telemetry["recommendations"].append(event)
+        telemetry["recommendations"] = telemetry["recommendations"][
+            -MAX_TELEMETRY_EVENTS:
+        ]
+        telemetry["pending_recommendation"] = {
+            "id": event_id,
+            "action": action,
+            "searches_before": state["search_count"],
+        }
+        if action == "strategy_blocked":
+            telemetry["strategy_blocked_events"] += 1
 
-            repeated_intent = _largest_similar_query_group(state.search_queries)
-            if repeated_intent >= REPEATED_INTENT_THRESHOLD:
-                return _change_strategy(
-                    clean_id,
-                    f"{repeated_intent} searches share the same semantic intent.",
-                    state,
-                )
-
-            strategy_counts: Counter[str] = Counter()
-            for attempt in state.failed_attempts:
-                strategy = _strategy_name(attempt)
-                if strategy is not None:
-                    strategy_counts[strategy] += _reported_attempts(attempt)
-            repeated_strategy = max(strategy_counts.values(), default=0)
-            if (
-                repeated_strategy >= REPEATED_STRATEGY_THRESHOLD
-                or len(state.failed_attempts) >= FAILED_ATTEMPT_THRESHOLD
-                or len(state.search_queries) >= MAX_SEARCH_QUERIES
-            ):
-                return _change_strategy(
-                    clean_id,
-                    "Repeated failures or a high search volume make the current approach low-value.",
-                    state,
-                )
-
-            if not state.unresolved_questions:
-                next_actions = [
-                    "Check whether existing evidence supports the goal.",
-                    "Add a focused evidence check only if a material gap remains.",
-                ]
-                reason = "No open questions are recorded, but evidence is not yet sufficient."
-            else:
-                next_actions = [
-                    "Choose the highest-value unresolved question.",
-                    "Try a distinct source or evidence method; record the result before more searches.",
-                ]
-                reason = "Open questions remain and the current search budget allows more work."
-            return {
-                "research_id": clean_id,
-                "decision": "continue_search",
-                "reason": reason,
-                "next_actions": next_actions,
-            }
+        return {
+            "action": action,
+            "reason": reason,
+            "guidance": guidance,
+            "research_state": state,
+        }
 
 
-def _change_strategy(
-    research_id: str, reason: str, state: ResearchState
-) -> dict[str, object]:
-    next_actions = [
-        "Stop repeating the same search intent or failed approach.",
-        "Inspect sources already checked, or switch to a distinct evidence method.",
-    ]
-    if state.unresolved_questions:
-        next_actions.append("Target the highest-value unresolved question.")
-    return {
+def _new_state(goal: str = "", research_id: str = "default") -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "version": STATE_VERSION,
         "research_id": research_id,
-        "decision": "change_strategy",
-        "reason": reason,
-        "next_actions": next_actions,
+        "goal": goal,
+        **{name: [] for name in _LIST_FIELDS},
+        "search_intents": [],
+        "search_count": 0,
+        "failed_attempt_count": 0,
+        "failed_strategy_counts": {},
+        "confidence": None,
+        "remaining_budget": None,
+        "telemetry": deepcopy(_TELEMETRY_DEFAULTS),
     }
+    return state
 
 
-def _evidence_is_sufficient(state: ResearchState) -> bool:
-    if state.unresolved_questions or not state.evidence:
+def _load_state(
+    snapshot: dict[str, Any] | None,
+    *,
+    goal: str | None = None,
+    research_id: str | None = None,
+) -> dict[str, Any]:
+    if snapshot is None:
+        if goal is None:
+            raise ValueError("research_state is required; initialize it first")
+        return _new_state(goal, research_id or "default")
+    if not isinstance(snapshot, dict):
+        raise TypeError("research_state must be a JSON object")
+
+    state = _new_state()
+    state.update(deepcopy(snapshot))
+    if state["version"] != STATE_VERSION:
+        raise ValueError("unsupported research_state version")
+    if goal is not None and _key(state["goal"]) != _key(goal):
+        raise ValueError(
+            "research_id already belongs to a different goal; use a new id"
+        )
+    if research_id is not None and state["research_id"] != research_id:
+        raise ValueError("research_state has a different research_id")
+
+    for name in _LIST_FIELDS:
+        state[name] = _strings(state.get(name, []))
+    state["failed_approaches"] = state["failed_approaches"][-MAX_ITEMS:]
+    state["search_intents"] = [
+        profile
+        for profile in state.get("search_intents", [])
+        if isinstance(profile, dict) and profile.get("terms")
+    ][-MAX_QUERY_EVENTS:]
+    state["search_count"] = max(0, int(state.get("search_count", 0)))
+    state["failed_attempt_count"] = max(0, int(state.get("failed_attempt_count", 0)))
+    strategies = state.get("failed_strategy_counts", {})
+    state["failed_strategy_counts"] = strategies if isinstance(strategies, dict) else {}
+    telemetry = deepcopy(_TELEMETRY_DEFAULTS)
+    existing_telemetry = state.get("telemetry")
+    if isinstance(existing_telemetry, dict):
+        telemetry.update(existing_telemetry)
+    for field in (
+        "controller_calls",
+        "recommendation_count",
+        "strategy_blocked_events",
+        "followed_recommendations",
+        "unfollowed_recommendations",
+        "unknown_follow_through",
+    ):
+        telemetry[field] = max(0, int(telemetry[field]))
+    for field in ("recommendations", "intervention_outcomes"):
+        events = telemetry[field]
+        telemetry[field] = (
+            [event for event in events if isinstance(event, dict)][
+                -MAX_TELEMETRY_EVENTS:
+            ]
+            if isinstance(events, list)
+            else []
+        )
+    if not isinstance(telemetry["pending_recommendation"], dict):
+        telemetry["pending_recommendation"] = None
+    state["telemetry"] = telemetry
+    return state
+
+
+def _recommend(state: dict[str, Any]) -> tuple[str, str, str]:
+    if _evidence_is_sufficient(state):
+        return (
+            "synthesize",
+            "evidence_requirements_satisfied",
+            "Synthesize findings with citations and preserve the research_state in the handoff.",
+        )
+    if state["remaining_budget"] == 0:
+        return (
+            "synthesize",
+            "search_budget_exhausted",
+            "Synthesize current evidence and report unresolved gaps; do not imply completeness.",
+        )
+
+    similar_queries = _largest_similar_group(state["search_intents"])
+    repeated_strategy = max(state["failed_strategy_counts"].values(), default=0)
+    if (
+        similar_queries >= 3
+        or repeated_strategy >= 3
+        or state["failed_attempt_count"] >= 5
+        or state["search_count"] >= MAX_SEARCHES
+    ):
+        return (
+            "strategy_blocked",
+            "repeated_low_value_search",
+            "Do not repeat this strategy. Use another evidence source/tool or synthesize current findings; this does not stop other research.",
+        )
+    if similar_queries >= 2 or repeated_strategy >= 2:
+        return (
+            "change_strategy",
+            "repeated_low_value_search",
+            "Change query framing or evidence method before another expensive search.",
+        )
+    if not state["unresolved_questions"]:
+        return (
+            "continue_search",
+            "evidence_requirements_incomplete",
+            "Check which reported requirements are missing; make one focused check if needed.",
+        )
+    return (
+        "continue_search",
+        "unresolved_questions",
+        "Target the highest-value unresolved question and record the result.",
+    )
+
+
+def _evidence_is_sufficient(state: dict[str, Any]) -> bool:
+    if state["unresolved_questions"] or not state["evidence"]:
         return False
-    if state.confidence is not None and state.confidence >= 0.8:
-        return True
-    return len(state.evidence) >= 2 and len(state.sources_checked) >= 2
+    if set(state["required_fields"]) - set(state["filled_fields"]):
+        return False
+    sources = set(state["independent_sources"])
+    if not sources:
+        sources = {_source_key(url) for url in state["evidence_urls"]} - {""}
+    return len(sources) >= 2 and len(set(state["evidence_urls"])) >= 2
 
 
-def _state_counts(state: ResearchState) -> dict[str, int]:
+def _finish_recommendation(state: dict[str, Any], followed: bool | None) -> None:
+    telemetry = state["telemetry"]
+    pending = telemetry.get("pending_recommendation")
+    if not pending:
+        return
+    outcome = {
+        "recommendation_id": pending["id"],
+        "action": pending["action"],
+        "searches_before": pending["searches_before"],
+        "searches_after": state["search_count"],
+        "followed": followed,
+    }
+    telemetry["intervention_outcomes"].append(outcome)
+    telemetry["intervention_outcomes"] = telemetry["intervention_outcomes"][
+        -MAX_TELEMETRY_EVENTS:
+    ]
+    for event in reversed(telemetry["recommendations"]):
+        if event["id"] == pending["id"]:
+            event["searches_after"] = state["search_count"]
+            event["followed"] = followed
+            break
+    counter = {
+        True: "followed_recommendations",
+        False: "unfollowed_recommendations",
+        None: "unknown_follow_through",
+    }[followed]
+    telemetry[counter] += 1
+    telemetry["pending_recommendation"] = None
+
+
+def _counts(state: dict[str, Any]) -> dict[str, int]:
+    source_count = len(set(state["independent_sources"]))
+    if not source_count:
+        source_count = len({_source_key(url) for url in state["evidence_urls"]} - {""})
     return {
-        "findings": len(state.findings),
-        "evidence": len(state.evidence),
-        "sources_checked": len(state.sources_checked),
-        "unresolved_questions": len(state.unresolved_questions),
-        "failed_attempts": len(state.failed_attempts),
-        "search_queries": len(state.search_queries),
+        "findings": len(state["findings"]),
+        "evidence": len(state["evidence"]),
+        "evidence_urls": len(state["evidence_urls"]),
+        "independent_sources": source_count,
+        "unresolved_questions": len(state["unresolved_questions"]),
+        "failed_attempts": state["failed_attempt_count"],
+        "searches": state["search_count"],
     }
 
 
-def _clean_items(values: list[str] | None) -> list[str]:
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for value in values or []:
-        item = _clean_text(value)
-        key = _comparison_text(item)
-        if item and key not in seen:
-            cleaned.append(item)
-            seen.add(key)
-    return cleaned[-MAX_ITEMS:]
+def _merge(destination: list[str], values: list[str] | None) -> None:
+    known = {_key(value) for value in destination}
+    for value in _strings(values):
+        if _key(value) not in known:
+            destination.append(value)
+            known.add(_key(value))
+    del destination[:-MAX_ITEMS]
 
 
-def _merge_items(
-    destination: list[str], values: list[str] | None, *, limit: int = MAX_ITEMS
-) -> None:
-    known = {_comparison_text(item) for item in destination}
-    for item in _clean_items(values):
-        key = _comparison_text(item)
-        if key not in known:
-            destination.append(item)
-            known.add(key)
-    if len(destination) > limit:
-        del destination[:-limit]
+def _strings(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    known: set[str] = set()
+    for value in values:
+        if (
+            isinstance(value, str)
+            and (text := _clean_text(value))
+            and _key(text) not in known
+        ):
+            result.append(text)
+            known.add(_key(text))
+    return result[-MAX_ITEMS:]
 
 
-def _append_events(
-    destination: list[str], values: list[str] | None, *, limit: int = MAX_ITEMS
-) -> None:
-    for value in values or []:
-        item = _clean_text(value)
-        if item:
-            destination.append(item)
-    if len(destination) > limit:
-        del destination[:-limit]
+def _events(values: list[str] | None) -> list[str]:
+    return [text for value in values or [] if (text := _clean_text(value))]
 
 
-def _clean_text(value: str) -> str:
-    return " ".join(str(value).split())[:MAX_ITEM_CHARS]
+def _query_profile(query: str) -> dict[str, list[str]]:
+    query = unicodedata.normalize("NFKC", query)
+    entities = re.findall(r"[\"']([^\"']+)[\"']", query)
+    entities += re.findall(r"\b[A-Z][A-Za-z0-9_-]{2,}\b", query)
+    entity_terms = {
+        term for phrase in entities for word in _words(phrase) if (term := _term(word))
+    }
+    terms = {_term(token) for token in _words(query) if _term(token)}
+    return {"terms": sorted(terms), "entities": sorted(entity_terms)}
 
 
-def _comparison_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip().casefold()
+def _words(value: str) -> list[str]:
+    return re.findall(r"[^\W_]+", value.casefold(), flags=re.UNICODE)
 
 
-def _query_tokens(value: str) -> set[str]:
-    tokens = re.findall(r"[a-z0-9]+", value.casefold())
-    normalized: set[str] = set()
-    for token in tokens:
-        if token in _STOP_WORDS:
-            continue
-        if token == "ids":
-            token = "id"
-        elif token.endswith("ies") and len(token) > 5:
-            token = f"{token[:-3]}y"
-        elif token.endswith("s") and len(token) > 4 and not token.endswith("ss"):
-            token = token[:-1]
-        normalized.add(token)
-    return normalized
+def _term(token: str) -> str:
+    if token in _STOP_WORDS or len(token) < 2:
+        return ""
+    if token in _ALIASES:
+        return _ALIASES[token]
+    if token.endswith("ies") and len(token) > 5:
+        token = f"{token[:-3]}y"
+    elif token.endswith("s") and len(token) > 4 and not token.endswith("ss"):
+        token = token[:-1]
+    return _ALIASES.get(token, token)
 
 
-def _largest_similar_query_group(queries: list[str]) -> int:
-    token_sets = [_query_tokens(query) for query in queries]
-    parents = list(range(len(token_sets)))
+def _largest_similar_group(profiles: list[dict[str, Any]]) -> int:
+    parents = list(range(len(profiles)))
 
-    def find(index: int) -> int:
+    def root(index: int) -> int:
         while parents[index] != index:
             parents[index] = parents[parents[index]]
             index = parents[index]
         return index
 
-    for left in range(len(token_sets)):
-        if len(token_sets[left]) < 2:
-            continue
-        for right in range(left + 1, len(token_sets)):
-            if len(token_sets[right]) < 2:
+    for left in range(len(profiles)):
+        left_terms = set(profiles[left].get("terms", []))
+        for right in range(left + 1, len(profiles)):
+            right_terms = set(profiles[right].get("terms", []))
+            shared = len(left_terms & right_terms)
+            if min(len(left_terms), len(right_terms)) < 2 or shared < 1:
                 continue
-            shared = len(token_sets[left] & token_sets[right])
-            union = len(token_sets[left] | token_sets[right])
-            if shared >= 2 and union and shared / union >= 0.5:
-                left_root, right_root = find(left), find(right)
-                parents[right_root] = left_root
-
-    counts = Counter(find(index) for index in range(len(parents)))
-    return max(counts.values(), default=0)
-
-
-def _strategy_name(attempt: str) -> str | None:
-    lowered = attempt.casefold()
-    for strategy, terms in _STRATEGIES.items():
-        if any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in terms):
-            return strategy
-    return None
+            coverage = shared / min(len(left_terms), len(right_terms))
+            union = len(left_terms | right_terms)
+            jaccard = shared / union if union else 0
+            entity_match = bool(
+                set(profiles[left].get("entities", []))
+                & set(profiles[right].get("entities", []))
+            )
+            if (shared >= 2 and (coverage >= 0.7 or jaccard >= 0.42)) or (
+                entity_match and coverage >= 0.5
+            ):
+                parents[root(right)] = root(left)
+    return max(
+        Counter(root(index) for index in range(len(parents))).values(), default=0
+    )
 
 
-def _reported_attempts(attempt: str) -> int:
+def _strategy(attempt: str) -> str | None:
+    words = set(_words(attempt))
+    return next(
+        (name for name, terms in _STRATEGIES.items() if words & terms),
+        None,
+    )
+
+
+def _reported_count(attempt: str) -> int:
     matches = re.findall(r"\b(\d+)\s*(?:times|attempts|retries)\b", attempt.casefold())
     return max([1, *(int(match) for match in matches)])
+
+
+def _source_key(url: str) -> str:
+    try:
+        return (urlsplit(url).hostname or "").casefold().removeprefix("www.")
+    except ValueError:
+        return ""
+
+
+def _clean_text(value: str) -> str:
+    return " ".join(str(value).split())[:MAX_TEXT_CHARS]
+
+
+def _key(value: str) -> str:
+    return " ".join(value.split()).casefold()

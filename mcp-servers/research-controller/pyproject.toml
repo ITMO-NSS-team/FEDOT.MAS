@@ -26,13 +26,12 @@ ini_options.asyncio_mode = "auto"
 mcp.name = "research-controller"
 mcp.description = """
 Lightweight state and next-action guidance for long-horizon research. Assign it to
-research agents that may make repeated or expensive evidence-gathering calls. Use
-update_research_state periodically with new search queries, findings, evidence,
-sources_checked, unresolved_questions, failed_attempts, confidence, and remaining
-budget; send only new queries and failed-attempt events on each update. Call
-get_next_action before continuing expensive searches. It recommends
-whether to continue, change strategy, or synthesize. It does not search, browse,
-scrape, or verify sources. State is kept in memory for the lifetime of this MCP
-process; use a stable, distinct research_id for each workstream.
+research agents as part of their procedure before expensive searches, after repeated
+searches or failures, and before synthesis or handoff. Pass the returned
+research_state JSON snapshot to each operation and store each updated snapshot in
+FEDOT session state; send only new query and failure events. The controller returns
+structured actions (continue_search, change_strategy, synthesize, strategy_blocked)
+from get_next_action after state is updated with update_research_state, with compact
+telemetry. It does not search, browse, scrape, or verify sources.
 """
 mcp.tags = [ "research", "planning", "state" ]

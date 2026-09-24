@@ -89,3 +89,19 @@ def test_two_stage_prompts_share_task_driven_decomposition_rules():
         "[source_A_researcher, source_B_researcher] -> synthesizer/verifier"
         in pipeline_prompt
     )
+
+
+@pytest.mark.parametrize(
+    "prompt_template",
+    [META_AGENT_SYSTEM_PROMPT, POOL_AGENT_SYSTEM_PROMPT, PIPELINE_AGENT_SYSTEM_PROMPT],
+    ids=["single-stage", "pool-stage", "pipeline-stage"],
+)
+def test_research_prompts_require_snapshot_controller_loop(prompt_template):
+    prompt = prompt_template.template.casefold()
+
+    assert "research-controller" in prompt
+    assert "before expensive" in prompt
+    assert "after several searches" in prompt
+    assert "before final synthesis or handoff" in prompt
+    assert "strategy_blocked" in prompt
+    assert "research_state" in prompt
