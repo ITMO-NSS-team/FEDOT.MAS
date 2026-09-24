@@ -5,7 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-store">
 <title>FEDOT.MAS — генерация мультиагентных систем</title>
-<link rel="icon" href="data:,">
+<meta name="description" content="FEDOT.MAS собирает мультиагентную систему по текстовой постановке задачи: граф агентов, журнал выполнения с вызовами инструментов, сравнение с одной моделью и вердикт судьи.">
+<meta property="og:title" content="FEDOT.MAS — генерация мультиагентных систем">
+<meta property="og:description" content="Демо: система агентов собирается по описанию задачи и решает её. Записанные прогоны реальных кейсов.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-width='2.6' stroke-linecap='round'%3E%3Cpath stroke='%2394A6BC' d='M16 11 L7 20 M16 11 L25 20 M11 24 L21 24'/%3E%3Ccircle cx='16' cy='7' r='4.4' stroke='%230E9384'/%3E%3Ccircle cx='7' cy='24' r='4.4' stroke='%232563EB'/%3E%3Ccircle cx='25' cy='24' r='4.4' stroke='%232563EB'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -137,6 +140,7 @@
         <svg viewBox="0 0 24 24" class="ic" id="p-play-icon"><path d="M7 4l12 8-12 8z"/></svg>
       </button>
       <div class="progress"><div class="progress-fill" id="p-fill"></div></div>
+      <button class="pbtn pbtn-text" id="p-speed" title="Скорость воспроизведения записи">×1</button>
       <button class="pbtn pbtn-text" id="p-export" title="Сохранить сценарий целиком в файл: схема, прогон, ответы, оценка">
         <svg viewBox="0 0 24 24" class="ic"><path d="M12 4v11M8 11l4 4 4-4M5 19h14"/></svg>
       </button>

@@ -2041,11 +2041,13 @@ function initPresets() {
   if (!S.custom.length && Array.isArray(window.STARTUP_PRESETS)) {
     S.custom = window.STARTUP_PRESETS.slice();
   }
-  // В автономной копии показывать нечего: запускать она не умеет, а список берётся
-  // из localStorage, которого у нового читателя нет. Подставляем записанные прогоны,
-  // вшитые в саму копию. На живом стенде флага нет и поведение прежнее.
-  if (window.OFFLINE_DEMO && !S.custom.length && Array.isArray(window.PRESETS)) {
-    S.custom = window.PRESETS.slice();
+  // В автономной копии список берётся из localStorage, которого у нового читателя
+  // нет, а запускать она не умеет. Показываем всё, что вшито в саму копию:
+  // кейс-пресеты первыми, затем остальные записанные прогоны (без дублей по id).
+  // На живом стенде флага нет и поведение прежнее.
+  if (window.OFFLINE_DEMO && Array.isArray(window.PRESETS)) {
+    const have = new Set(S.custom.map((p) => p.id));
+    S.custom = S.custom.concat(window.PRESETS.filter((p) => !have.has(p.id)));
   }
   renderPresetList();
 }
@@ -2124,6 +2126,10 @@ function init() {
   $("btn-judge").addEventListener("click", runJudge);
   $("p-play").addEventListener("click", () => (S.playing ? pause() : play()));
   $("p-restart").addEventListener("click", resetRun);
+  $("p-speed").addEventListener("click", () => {
+    S.speed = S.speed >= 3 ? 1 : S.speed + 1;   // ×1 → ×2 → ×3 → ×1
+    $("p-speed").textContent = "×" + S.speed;
+  });
   $("p-export").addEventListener("click", exportScenario);
   $("btn-import").addEventListener("click", () => $("import-file").click());
   $("import-file").addEventListener("change", (e) => {
@@ -2160,8 +2166,15 @@ function init() {
 
   showEmptyState();
   probeBackend().finally(() => {
-    const first = scenarioList()[0];
+    // Deep-link для расшаренных копий: ?scenario=<id> открывает нужный сценарий,
+    // ?autoplay=1 сразу запускает воспроизведение записи (только без бэкенда —
+    // живой запуск по ссылке стартовать нельзя).
+    const params = new URLSearchParams(location.search);
+    const wanted = params.get("scenario");
+    const list = scenarioList();
+    const first = (wanted && list.find((p) => p.id === wanted)) || list[0];
     if (first) loadPreset(first);
+    if (first && params.get("autoplay") === "1" && !S.backend && first.trace.length) play();
   });
 }
 
