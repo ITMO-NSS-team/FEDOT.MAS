@@ -11,7 +11,11 @@ from google.adk.tools.tool_context import ToolContext
 
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp import strip_tool_name_prefix
-from fedotmas.plugins._tool_error_circuit_breaker import WEB_BUDGET_EXHAUSTED
+from fedotmas.plugins._research_telemetry import ResearchTelemetry
+from fedotmas.plugins._tool_error_circuit_breaker import (
+    DUPLICATE_TOOL_CALL,
+    WEB_BUDGET_EXHAUSTED,
+)
 
 _log = get_logger("fedotmas.plugins.web_search_limit")
 
@@ -62,6 +66,8 @@ class WebSearchLimitPlugin(BasePlugin):
         dedupe_identical_calls: bool = True,
         hard_fail: bool | None = None,
         exhausted_agents: set[tuple[str, str]] | None = None,
+        telemetry: ResearchTelemetry | None = None,
+        budget_kind: str = "search",
         name: str = "fedotmas_web_search_limit",
     ) -> None:
         if max_calls_per_agent < 1:
@@ -79,6 +85,8 @@ class WebSearchLimitPlugin(BasePlugin):
         self.ignore_local_urls = ignore_local_urls
         self.reject_empty_urls = reject_empty_urls
         self.dedupe_identical_calls = dedupe_identical_calls
+        self.telemetry = telemetry
+        self.budget_kind = budget_kind
         self._tool_names = {
             name.lower() for name in (tool_names or DEFAULT_WEB_SEARCH_TOOL_NAMES)
         }
@@ -118,9 +126,11 @@ class WebSearchLimitPlugin(BasePlugin):
         agent_name = tool_context._invocation_context.agent.name  # ty: ignore[unresolved-attribute]
         tool_name = strip_tool_name_prefix(tool.name).lower()
         key = (session_id, agent_name)
+        if self.telemetry is not None:
+            self.telemetry.attempt(agent_name, self.budget_kind, tool_args)
 
         if key in self._exhausted_agents:
-            return _finalize_result(agent_name)
+            return _finalize_result(agent_name, self.budget_kind)
 
         url = _normalise_url(tool_args.get("url"))
         if self.reject_empty_urls and "url" in tool_args and not url:
@@ -142,11 +152,16 @@ class WebSearchLimitPlugin(BasePlugin):
             call_key = (session_id, agent_name, _call_fingerprint(tool, tool_args))
             if call_key in self._seen_calls:
                 _log.debug(
-                    "Web limit ignored duplicate call | agent={} tool={}",
+                    "Web limit blocked duplicate call | agent={} tool={}",
                     agent_name,
                     tool.name,
                 )
-                return None
+                if self.telemetry is not None:
+                    self.telemetry.duplicate(agent_name)
+                return {
+                    "error_code": DUPLICATE_TOOL_CALL,
+                    "message": "Identical tool call already made. Use its earlier result or change the query or URL.",
+                }
 
         url_key: tuple[str, str, str] | None = None
         if url:
@@ -179,10 +194,16 @@ class WebSearchLimitPlugin(BasePlugin):
             )
             _log.warning(message)
             self._exhausted_agents.add(key)
+            if self.telemetry is not None:
+                self.telemetry.exhausted(agent_name, self.budget_kind)
+            next_step = (
+                "Stop discovery searches. Inspect already-found URLs with available "
+                "extraction tools, then synthesize from the evidence."
+                if self.budget_kind == "search"
+                else "Stop extraction and synthesize from the evidence already gathered."
+            )
             return _limit_result(
-                f"{message} This agent's web/search budget is exhausted. Stop "
-                "exploration and provide your best final answer from the evidence "
-                "already gathered.",
+                f"{message} This agent's {self.budget_kind} budget is exhausted. {next_step}",
                 error_code=WEB_BUDGET_EXHAUSTED,
             )
 
@@ -191,6 +212,8 @@ class WebSearchLimitPlugin(BasePlugin):
             self._seen_calls.add(call_key)
         if url_key is not None:
             self._seen_urls.add(url_key)
+            if self.telemetry is not None and self.budget_kind == "scraping":
+                self.telemetry.inspected(agent_name, url)
         _log.debug(
             "Web search call allowed | agent={} tool={} used={}/{}",
             agent_name,
@@ -228,11 +251,15 @@ def _limit_result(message: str, *, error_code: str | None = None) -> dict[str, A
     return result
 
 
-def _finalize_result(agent_name: str) -> dict[str, Any]:
+def _finalize_result(agent_name: str, budget_kind: str) -> dict[str, Any]:
+    next_step = (
+        "Inspect already-found URLs with available extraction tools, then synthesize."
+        if budget_kind == "search"
+        else "Synthesize from the evidence already gathered."
+    )
     return _limit_result(
-        f"Web/search tools are disabled for agent '{agent_name}' because its budget "
-        "is exhausted. Stop exploration and provide your best final answer from "
-        "the evidence already gathered.",
+        f"{budget_kind.capitalize()} tools are disabled for agent '{agent_name}' "
+        f"because its budget is exhausted. {next_step}",
         error_code=WEB_BUDGET_EXHAUSTED,
     )
 

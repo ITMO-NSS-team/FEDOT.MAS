@@ -139,3 +139,67 @@ async def test_sequential_agents_keep_budget_exhaustion_local():
         "WEB_BUDGET_EXHAUSTED",
         "WEB_BUDGET_EXHAUSTED",
     ]
+
+
+async def test_search_exhaustion_still_allows_evidence_extraction():
+    searched: list[str] = []
+    inspected: list[str] = []
+
+    def search(query: str) -> dict[str, str]:
+        """Search the web for sources."""
+        searched.append(query)
+        return {"url": "https://example.com/source"}
+
+    def goto(url: str) -> dict[str, str]:
+        """Inspect a discovered web page."""
+        inspected.append(url)
+        return {"evidence": "source text"}
+
+    llm = _ScriptedLlm(
+        model="test",
+        responses=[
+            _call("find source", "search-1"),
+            _call("new discovery", "search-2"),
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            id="inspect-1",
+                            name="goto",
+                            args={"url": "https://example.com/source"},
+                        )
+                    )
+                ],
+            ),
+            _answer("Answer from inspected source."),
+        ],
+    )
+    agent = LlmAgent(
+        name="researcher",
+        model=llm,
+        instruction="Research {user_query}.",
+        tools=[FunctionTool(search), FunctionTool(goto)],
+        output_key="answer",
+        include_contents="none",
+    )
+    result = await run_pipeline(
+        agent,
+        "Question",
+        session_service=InMemorySessionService(),
+        plugins=[
+            WebSearchLimitPlugin(max_calls_per_agent=1),
+            WebSearchLimitPlugin(
+                max_calls_per_agent=1,
+                tool_names={"goto"},
+                budget_kind="scraping",
+                name="scraping_limit",
+            ),
+            ToolErrorCircuitBreakerPlugin(
+                max_errors_per_agent=1, max_same_tool_error_type=1
+            ),
+        ],
+    )
+    assert searched == ["find source"]
+    assert inspected == ["https://example.com/source"]
+    assert result.state["answer"] == "Answer from inspected source."

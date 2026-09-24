@@ -23,6 +23,7 @@ RESCUED_META_KEY = "fedotmas/rescued"
 # Machine-readable control-flow result returned when an agent's own web budget
 # is exhausted. It is a blocked call, not a failure of the underlying tool.
 WEB_BUDGET_EXHAUSTED = "WEB_BUDGET_EXHAUSTED"
+DUPLICATE_TOOL_CALL = "DUPLICATE_TOOL_CALL"
 
 
 class ToolErrorCircuitOpen(RuntimeError):
@@ -72,10 +73,10 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         tool_context: ToolContext,
         result: dict,
     ) -> dict | None:
-        if (
-            isinstance(result, dict)
-            and result.get("error_code") == WEB_BUDGET_EXHAUSTED
-        ):
+        if isinstance(result, dict) and result.get("error_code") in {
+            WEB_BUDGET_EXHAUSTED,
+            DUPLICATE_TOOL_CALL,
+        }:
             return None
         if not _is_error_result(result):
             return None
@@ -149,7 +150,8 @@ def _is_error_result(result: dict) -> bool:
         return False
     if result.get("isError") is True:
         return True
-    return "error" in result and result.get("error") not in {None, ""}
+    value = result.get("error")
+    return "error" in result and value is not None and value != ""
 
 
 def _error_type_from_result(result: dict) -> str:

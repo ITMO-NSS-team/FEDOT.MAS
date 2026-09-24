@@ -4,7 +4,10 @@ from unittest.mock import MagicMock
 
 import pytest
 from fedotmas.plugins import ToolErrorCircuitBreakerPlugin, ToolErrorCircuitOpen
-from fedotmas.plugins._tool_error_circuit_breaker import WEB_BUDGET_EXHAUSTED
+from fedotmas.plugins._tool_error_circuit_breaker import (
+    DUPLICATE_TOOL_CALL,
+    WEB_BUDGET_EXHAUSTED,
+)
 
 
 def _tool(name: str = "markdown") -> MagicMock:
@@ -127,6 +130,22 @@ class TestToolErrorCircuitBreakerPlugin:
 
 
 class TestRescuedAndControlFlowResults:
+    @pytest.mark.asyncio
+    async def test_duplicate_control_result_does_not_count(self):
+        plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)
+        for _ in range(3):
+            await plugin.after_tool_callback(
+                tool=_tool("search"),
+                tool_args={},
+                tool_context=_tool_context(),
+                result={
+                    "error_code": DUPLICATE_TOOL_CALL,
+                    "isError": True,
+                    "error": "duplicate",
+                },
+            )
+        assert plugin._total_errors == {}
+
     """A server that answered a failed call with a usable substitute."""
 
     @pytest.mark.asyncio
@@ -195,6 +214,17 @@ class TestRescuedAndControlFlowResults:
                 tool_args={},
                 tool_context=_tool_context(),
                 result={"isError": True, "meta": {}, "content": []},
+            )
+
+    @pytest.mark.asyncio
+    async def test_structured_backend_error_counts(self):
+        plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)
+        with pytest.raises(ToolErrorCircuitOpen):
+            await plugin.after_tool_callback(
+                tool=_tool("search"),
+                tool_args={},
+                tool_context=_tool_context(),
+                result={"error": {"type": "BackendUnavailable", "message": "down"}},
             )
 
     @pytest.mark.asyncio

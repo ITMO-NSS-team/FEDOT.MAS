@@ -2,6 +2,7 @@ from fedotmas.plugins._browser_fallback_policy import BrowserFallbackPolicyPlugi
 from fedotmas.plugins._checkpoint import Checkpoint, CheckpointPlugin
 from fedotmas.plugins._eval import CheckFn, EvalPlugin, EvaluationError
 from fedotmas.plugins._logging import LoggingPlugin
+from fedotmas.plugins._research_telemetry import ResearchTelemetry
 from fedotmas.plugins._skip_completed import SkipCompletedPlugin
 from fedotmas.plugins._tool_error_circuit_breaker import (
     ToolErrorCircuitBreakerPlugin,
@@ -16,21 +17,22 @@ from fedotmas.plugins._web_search_limit import (
 )
 
 __all__ = [
-    "CheckFn",
     "DEFAULT_WEB_SEARCH_LIMIT",
     "BrowserFallbackPolicyPlugin",
+    "CheckFn",
     "Checkpoint",
     "CheckpointPlugin",
     "EvalPlugin",
     "EvaluationError",
     "LoggingPlugin",
+    "ResearchTelemetry",
     "SkipCompletedPlugin",
     "ToolErrorCircuitBreakerPlugin",
     "ToolErrorCircuitOpen",
     "ToolResultTruncationPlugin",
     "UnknownToolRecoveryPlugin",
-    "WebSearchLimitPlugin",
     "WebSearchLimitExceeded",
+    "WebSearchLimitPlugin",
 ]
 
 try:

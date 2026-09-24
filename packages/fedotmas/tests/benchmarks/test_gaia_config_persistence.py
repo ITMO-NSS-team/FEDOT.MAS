@@ -78,3 +78,30 @@ async def test_successful_gaia_result_persists_serializable_generated_config(
 
     assert result["is_correct"] is True
     assert artifact["maw_config"] == _config().model_dump(mode="json")
+    assert isinstance(artifact["research_telemetry"], dict)
+
+
+@pytest.mark.asyncio
+async def test_generated_config_survives_execution_failure(tmp_path: Path):
+    class FailingMAW(_FakeMAW):
+        async def run(self, _query: str, *, timeout: int) -> dict[str, str]:
+            raise RuntimeError("execution failed after generation")
+
+    task = SimpleNamespace(
+        task_id="task-2",
+        question="Question?",
+        ground_truth="42",
+        file_path=None,
+        file_name=None,
+        difficulty="1",
+    )
+    with (
+        patch("benchmarks.gaia.run_gaia.MAW", FailingMAW),
+        pytest.raises(RuntimeError, match="execution failed"),
+    ):
+        await process_task.__wrapped__(
+            task, SimpleNamespace(), tmp_path, enable_langfuse=False
+        )
+    artifact = json.loads((tmp_path / "result.json").read_text())
+    assert artifact["maw_config"] == _config().model_dump(mode="json")
+    assert isinstance(artifact["research_telemetry"], dict)

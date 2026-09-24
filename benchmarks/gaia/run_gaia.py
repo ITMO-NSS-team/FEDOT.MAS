@@ -21,6 +21,7 @@ from fedotmas.plugins import (
     BrowserFallbackPolicyPlugin,
     LangfusePlugin,
     LoggingPlugin,
+    ResearchTelemetry,
     ToolErrorCircuitBreakerPlugin,
     ToolErrorCircuitOpen,
     ToolResultTruncationPlugin,
@@ -343,7 +344,7 @@ def _unwrap_exception(error: BaseException) -> BaseException:
     if isinstance(error, RetryError):
         try:
             retry_exception = error.last_attempt.exception()
-        except Exception:
+        except Exception:  # noqa: BLE001 - error summaries must survive broken retry wrappers
             retry_exception = None
         if isinstance(retry_exception, BaseException):
             return _unwrap_exception(retry_exception)
@@ -470,7 +471,7 @@ async def preflight_model_endpoint(model: ModelConfig) -> None:
         try:
             await asyncio.to_thread(_check_models_endpoint, model, timeout=timeout)
             return
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - retry endpoint failures uniformly
             last_error = exc
             if attempt < attempts:
                 await asyncio.sleep(min(2**attempt, 10))
@@ -501,16 +502,30 @@ async def preflight_startup_models() -> None:
 
 
 def build_plugins(task, enable_langfuse: bool) -> list:
-    exhausted_web_agents: set[tuple[str, str]] = set()
+    telemetry = ResearchTelemetry()
     plugins = [
         LoggingPlugin(),
+        telemetry,
         BrowserFallbackPolicyPlugin(),
         ToolResultTruncationPlugin(
             max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 60000),
+            max_total_chars=_env_int("FEDOTMAS_GAIA_MAX_SEARCH_RESULT_CHARS", 6000),
+            aggregate_tool_names={
+                "search",
+                "web_search",
+                "web-search",
+                "websearch",
+                "searxng_search",
+            },
+        ),
+        ToolResultTruncationPlugin(
+            max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 60000),
+            max_total_chars=_env_int("FEDOTMAS_GAIA_MAX_DOCUMENT_RESULT_CHARS", 200000),
+            name="fedotmas_gaia_document_result_truncation",
         ),
         WebSearchLimitPlugin(
             max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 10),
-            exhausted_agents=exhausted_web_agents,
+            telemetry=telemetry,
         ),
         WebSearchLimitPlugin(
             max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 12),
@@ -518,7 +533,8 @@ def build_plugins(task, enable_langfuse: bool) -> list:
             count_unique_urls=True,
             same_url_exempt_tool_names={"eval", "evaluate", "links", "status"},
             reject_empty_urls=True,
-            exhausted_agents=exhausted_web_agents,
+            telemetry=telemetry,
+            budget_kind="scraping",
             name="fedotmas_gaia_web_tool_limit",
         ),
         ToolErrorCircuitBreakerPlugin(
@@ -724,11 +740,15 @@ async def process_task(
     meta_model = _gaia_meta_model()
     worker_model = _gaia_worker_model()
 
+    plugins = build_plugins(task, enable_langfuse)
+    telemetry = next(
+        (plugin for plugin in plugins if isinstance(plugin, ResearchTelemetry)), None
+    )
     maw = MAW(
         meta_model=meta_model,
         mcp_servers=_gaia_mcp_servers(),
         worker_models=[worker_model],
-        plugins=build_plugins(task, enable_langfuse),
+        plugins=plugins,
         max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
         two_stage=False,
     )
@@ -745,6 +765,21 @@ async def process_task(
             + _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_BACKSTOP_SECONDS", 180),
         )
     except Exception as exc:
+        if maw.generated_config is not None:
+            task_log_dir.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(
+                (task_log_dir / "result.json").write_text,
+                json.dumps(
+                    {
+                        "task_id": task.task_id,
+                        "maw_config": maw.generated_config.model_dump(mode="json"),
+                        "research_telemetry": telemetry.snapshot() if telemetry else {},
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
         if _is_provider_error(exc):
             raise ProviderErrorCooldown(str(exc)) from exc
         raise
@@ -780,16 +815,23 @@ async def process_task(
             "total_completion": maw.total_completion_tokens,
         },
         "elapsed": maw.elapsed,
+        "research_telemetry": telemetry.snapshot() if telemetry else {},
     }
 
     # Save per-task result
     task_log_dir.mkdir(parents=True, exist_ok=True)
-    with open(task_log_dir / "result.json", "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False, default=str)
+    await asyncio.to_thread(
+        (task_log_dir / "result.json").write_text,
+        json.dumps(result, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
 
     leaderboard = {"task_id": task.task_id, "model_answer": answer}
-    with open(task_log_dir / "leaderboard.json", "w", encoding="utf-8") as f:
-        json.dump(leaderboard, f, indent=2)
+    await asyncio.to_thread(
+        (task_log_dir / "leaderboard.json").write_text,
+        json.dumps(leaderboard, indent=2),
+        encoding="utf-8",
+    )
 
     return result
 
@@ -848,7 +890,7 @@ async def run_gaia(
                 result["response"][:60],
                 task.ground_truth,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - retain an artifact for every task failure
             cause = root_cause_summary(e)
             if isinstance(e, ProviderErrorCooldown) or _is_provider_error(e):
                 provider_cooldown.activate(str(e))
@@ -871,15 +913,23 @@ async def run_gaia(
                 "error": str(e),
                 **cause,
             }
+            partial_path = task_log_dir / "result.json"
+            if partial_path.exists():
+                partial = json.loads(partial_path.read_text(encoding="utf-8"))
+                for key in ("maw_config", "research_telemetry"):
+                    if key in partial:
+                        result[key] = partial[key]
             task_log_dir.mkdir(parents=True, exist_ok=True)
-            with open(task_log_dir / "result.json", "w", encoding="utf-8") as f:
-                json.dump(result, f, indent=2, ensure_ascii=False, default=str)
-            with open(task_log_dir / "leaderboard.json", "w", encoding="utf-8") as f:
-                json.dump(
-                    {"task_id": task.task_id, "model_answer": ""},
-                    f,
-                    indent=2,
-                )
+            await asyncio.to_thread(
+                (task_log_dir / "result.json").write_text,
+                json.dumps(result, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+            await asyncio.to_thread(
+                (task_log_dir / "leaderboard.json").write_text,
+                json.dumps({"task_id": task.task_id, "model_answer": ""}, indent=2),
+                encoding="utf-8",
+            )
 
         results.append(result)
 
@@ -898,8 +948,11 @@ async def run_gaia(
         "results": results,
     }
 
-    with open(base_log_dir / "results.json", "w") as f:
-        json.dump(output_data, f, indent=2, ensure_ascii=False, default=str)
+    await asyncio.to_thread(
+        (base_log_dir / "results.json").write_text,
+        json.dumps(output_data, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
 
     print_score_by_level(metrics_by_level)
     print_token_summary(token_summary)

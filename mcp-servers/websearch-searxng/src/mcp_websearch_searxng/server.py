@@ -13,18 +13,12 @@ class SearchResult(BaseModel):
     url: str
     title: str
     content: str
-    engine: str
-    score: float | None = None
-    category: str | None = None
-    publishedDate: str | None = None
 
 
 class SearchResponse(BaseModel):
     query: str
     number_of_results: int
     results: list[SearchResult]
-    suggestions: list[str]
-    infoboxes: list[dict[str, Any]]
 
 
 DESCRIPTION = """
@@ -33,6 +27,9 @@ MCP server for web search via self-hosted SearXNG. Supports filtering by categor
 """
 
 ENGINES = "bing,duckduckgo,brave,mullvadleta,yahoo,presearch"
+MAX_RETURNED_RESULTS = 6
+MAX_TITLE_CHARS = 160
+MAX_SNIPPET_CHARS = 320
 
 searxng_server = FastMCP("websearch-searxng", instructions=DESCRIPTION)
 
@@ -63,7 +60,7 @@ async def search(
             le=2,
         ),
     ] = 1,
-) -> SearchResponse | str:
+) -> SearchResponse:
     """
     Search the web.
 
@@ -78,9 +75,7 @@ async def search(
         SearchResponse containing:
         - query: The search query
         - number_of_results: Count of returned results
-        - results: List of SearchResult objects (url, title, content, engine, etc.)
-        - suggestions: Query suggestions (if available)
-        - infoboxes: Rich information boxes (if available)
+        - results: Compact SearchResult objects (url, title, content), at most 6
 
     Examples:
         searxng_search("breaking news AI", categories="news")
@@ -111,17 +106,29 @@ async def search(
             data = response.json()
 
         # Extract and limit results
-        raw_results = data.get("results", [])[:max_results]
-        suggestions = data.get("suggestions", [])
-        infoboxes = data.get("infoboxes", [])
+        if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+            raise TypeError("SearXNG returned an invalid results payload")
+        unresponsive = data.get("unresponsive_engines") or []
+        if not data["results"] and len(unresponsive) >= len(ENGINES.split(",")):
+            raise RuntimeError(
+                "SearXNG search failed: all configured engines are unavailable"
+            )
+        raw_results = data["results"][: min(max_results, MAX_RETURNED_RESULTS)]
 
         # Validate and construct SearchResult objects, skip malformed entries
         results: list[SearchResult] = []
         for raw in raw_results:
             try:
-                results.append(SearchResult(**raw))
-            except Exception:
-                await ctx.warning(f"Skipping malformed result: {raw.get('url', '?')}")
+                if not isinstance(raw, dict) or not raw.get("url"):
+                    continue
+                results.append(
+                    SearchResult(
+                        url=str(raw["url"]),
+                        title=str(raw.get("title") or "")[:MAX_TITLE_CHARS],
+                        content=str(raw.get("content") or "")[:MAX_SNIPPET_CHARS],
+                    )
+                )
+            except (TypeError, ValueError):
                 continue
 
         await ctx.info(f"Found {len(results)} results from SearXNG")
@@ -130,8 +137,6 @@ async def search(
             query=query,
             number_of_results=len(results),
             results=results,
-            suggestions=suggestions,
-            infoboxes=infoboxes,
         )
 
     except httpx.HTTPStatusError as e:
@@ -139,15 +144,15 @@ async def search(
             f"SearXNG HTTP error {e.response.status_code}: {e.response.text[:200]}"
         )
         await ctx.error(error_msg)
-        return error_msg
+        raise RuntimeError(error_msg) from e
     except httpx.RequestError as e:
         error_msg = f"SearXNG connection error: {e}. Check if SearXNG is running at {instance_url}"
         await ctx.error(error_msg)
-        return error_msg
-    except Exception as e:
+        raise RuntimeError(error_msg) from e
+    except (TypeError, ValueError) as e:
         error_msg = f"SearXNG search failed: {e}"
         await ctx.error(error_msg)
-        return error_msg
+        raise RuntimeError(error_msg) from e
 
 
 def main():

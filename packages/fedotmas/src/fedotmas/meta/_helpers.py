@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import Any
 
 from pydantic import BaseModel
 
-from fedotmas.maw.models import AgentPoolConfig
-from fedotmas.mcp import MCPServerConfig, get_server_descriptions
 from fedotmas._settings import (
     ModelConfig,
     get_meta_model,
@@ -13,8 +11,8 @@ from fedotmas._settings import (
     get_worker_models,
     resolve_model_config,
 )
-
-T = TypeVar("T", bound=BaseModel)
+from fedotmas.maw.models import AgentPoolConfig
+from fedotmas.mcp import MCPServerConfig, get_server_descriptions
 
 
 def resolve_meta_and_workers(
@@ -41,7 +39,12 @@ def format_server_descriptions(descriptions: dict[str, str]) -> str:
     """Format MCP server descriptions for LLM prompts."""
     if not descriptions:
         return "No MCP tools available."
-    return "\n".join(f"- **{name}**: {desc}" for name, desc in descriptions.items())
+    # ADK treats {foo} anywhere in an instruction as a session-state lookup.
+    # Tool descriptions are external text, not state templates.
+    return "\n".join(
+        f"- **{name}**: {desc.replace('{', '〔').replace('}', '〕')}"
+        for name, desc in descriptions.items()
+    )
 
 
 def resolve_tool_descriptions(
@@ -73,7 +76,7 @@ def format_agent_pool(pool: AgentPoolConfig) -> str:
     return "\n\n".join(lines)
 
 
-def parse_llm_output(raw: Any, schema: type[T]) -> T:
+def parse_llm_output[T: BaseModel](raw: Any, schema: type[T]) -> T:
     """Parse raw LLM output (dict or JSON string) into a Pydantic model."""
     if isinstance(raw, dict):
         return schema.model_validate(raw)

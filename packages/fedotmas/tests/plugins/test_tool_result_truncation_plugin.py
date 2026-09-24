@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
-
 from fedotmas.plugins import ToolResultTruncationPlugin
 
 
@@ -20,6 +20,39 @@ def _tool_context(*, agent_name: str = "researcher"):
 
 
 class TestToolResultTruncationPlugin:
+    @pytest.mark.asyncio
+    async def test_aggregate_nested_search_payload_is_bounded(self):
+        plugin = ToolResultTruncationPlugin(
+            max_string_chars=1000,
+            max_total_chars=1000,
+            aggregate_tool_names={"search"},
+        )
+        payload = {
+            "results": [
+                {"title": "x" * 80, "url": f"https://example.com/{n}"}
+                for n in range(50)
+            ]
+        }
+        result = await plugin.after_tool_callback(
+            tool=_tool("search"),
+            tool_args={},
+            tool_context=_tool_context(),
+            result=payload,
+        )
+        assert result is not None
+        assert len(json.dumps(result, ensure_ascii=False)) <= 1000
+        assert result["truncated"] is True
+        assert len(result["results"]) < 50
+        assert (
+            await plugin.after_tool_callback(
+                tool=_tool("markdown"),
+                tool_args={},
+                tool_context=_tool_context(),
+                result=payload,
+            )
+            is None
+        )
+
     @pytest.mark.asyncio
     async def test_ignores_small_result(self):
         plugin = ToolResultTruncationPlugin(max_string_chars=10)

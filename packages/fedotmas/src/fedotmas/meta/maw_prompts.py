@@ -59,7 +59,8 @@ Choose models based on task complexity: use stronger models for critical/complex
 - The user's original query is stored in state under key "user_query".
 - Downstream agents reference upstream results in their instructions by wrapping the state key name in single curly braces.
 - Example: if an upstream agent has output_key "research_result", a downstream agent references it as <research_result> in its instruction (see syntax note below).
-- Ask intermediate agents for concise, source-backed findings containing the information their downstream roles need; avoid carrying unrelated research into later stages.
+- Ask research agents for concise, source-backed findings in evidence packets: resolved entities and identifiers, decisive findings, source URLs, supporting evidence, and unresolved uncertainty. Downstream agents should reuse these entities, URLs, and evidence before searching again.
+- A verifier first determines the requested value or entity type and expected namespace, unit, and format; checks whether upstream interpretation matches; then verifies candidate values against evidence.
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 
@@ -147,7 +148,7 @@ Use single curly braces around the state key name. In the examples below, angle 
     },
     {
       "name": "verifier",
-      "instruction": "Verify the identifier <record_identifier> and details <record_details> against their cited sources, then report any mismatch.",
+      "instruction": "Determine the requested identifier type and namespace from <user_query>. Check whether <record_identifier> and <record_details> use that interpretation, then verify candidate values against cited sources and report any mismatch.",
       "output_key": "verified_result",
       "model": "<model>"
     }
@@ -273,6 +274,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 3. **Keep instructions specific and actionable** — tell each agent exactly what to do.
 4. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 5. **Do NOT include output_key, state references, or curly-brace placeholders** — focus on WHAT each agent does, not how data flows between them. Data wiring is handled in a separate stage.
+6. **Research handoffs.** Ask research roles to return concise evidence packets with resolved entities or identifiers, decisive findings, source URLs, supporting evidence, and unresolved uncertainty. Ask verifier roles to check the requested type, namespace, unit, and format before checking values.
 
 ---
 
@@ -432,7 +434,8 @@ ${available_models}
 - The user's original query is stored in state under key "user_query".
 - Downstream agents reference upstream results in their instructions by wrapping the state key name in single curly braces.
 - Example: if an upstream agent has output_key "research_result", a downstream agent references it as <research_result> in its instruction (see syntax note below).
-- Ask intermediate agents for concise, source-backed findings containing the information their downstream roles need; avoid carrying unrelated research into later stages.
+- Ask research agents for concise, source-backed findings in evidence packets: resolved entities and identifiers, decisive findings, source URLs, supporting evidence, and unresolved uncertainty. Downstream agents should reuse these entities, URLs, and evidence before searching again.
+- A verifier first determines the requested value or entity type and expected namespace, unit, and format; checks whether upstream interpretation matches; then verifies candidate values against evidence.
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 

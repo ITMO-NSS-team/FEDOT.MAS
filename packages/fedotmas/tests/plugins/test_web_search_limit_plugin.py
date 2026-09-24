@@ -38,6 +38,82 @@ def _invocation_context(session_id: str = "s1"):
 
 class TestWebSearchLimitPlugin:
     @pytest.mark.asyncio
+    async def test_scraping_has_its_own_limit(self):
+        search_limit = WebSearchLimitPlugin(max_calls_per_agent=1)
+        scrape_limit = WebSearchLimitPlugin(
+            max_calls_per_agent=1, tool_names={"goto"}, budget_kind="scraping"
+        )
+        ctx = _tool_context()
+        search = _tool("search", "Search the web")
+        goto = _tool("goto")
+        await search_limit.before_tool_callback(
+            tool=search, tool_args={"query": "first"}, tool_context=ctx
+        )
+        assert (
+            await search_limit.before_tool_callback(
+                tool=search, tool_args={"query": "second"}, tool_context=ctx
+            )
+        )["error_code"] == "WEB_BUDGET_EXHAUSTED"
+        assert (
+            await scrape_limit.before_tool_callback(
+                tool=goto, tool_args={"url": "https://example.com/a"}, tool_context=ctx
+            )
+            is None
+        )
+        assert (
+            await scrape_limit.before_tool_callback(
+                tool=goto, tool_args={"url": "https://example.com/b"}, tool_context=ctx
+            )
+        )["error_code"] == "WEB_BUDGET_EXHAUSTED"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_call_does_not_execute_backend_or_trip_breaker(self):
+        calls: list[str] = []
+
+        def search(query: str) -> dict[str, str]:
+            """Search the web."""
+            calls.append(query)
+            return {"query": query}
+
+        agent = LlmAgent(name="researcher", model="gemini-2.0-flash")
+        context = InvocationContext(
+            invocation_id="invocation",
+            session_service=InMemorySessionService(),
+            session=Session(id="session", app_name="test", user_id="user"),
+            agent=agent,
+            plugin_manager=PluginManager(
+                [
+                    WebSearchLimitPlugin(max_calls_per_agent=2),
+                    ToolErrorCircuitBreakerPlugin(
+                        max_errors_per_agent=1, max_same_tool_error_type=1
+                    ),
+                ]
+            ),
+        )
+        calls_requested = [
+            types.FunctionCall(
+                id=f"call-{index}", name="search", args={"query": "same"}
+            )
+            for index in range(2)
+        ]
+        event = await handle_function_calls_async(
+            context,
+            Event(
+                invocation_id="invocation",
+                author="researcher",
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part(function_call=call) for call in calls_requested],
+                ),
+            ),
+            {"search": FunctionTool(search)},
+        )
+        assert calls == ["same"]
+        responses = [part.function_response.response for part in event.content.parts]
+        assert len(responses) == 2
+        assert sum(r.get("error_code") == "DUPLICATE_TOOL_CALL" for r in responses) == 1
+
+    @pytest.mark.asyncio
     async def test_allows_until_limit_then_blocks(self):
         plugin = WebSearchLimitPlugin(max_calls_per_agent=2)
         tool = _tool("search", "Search the web")
@@ -60,16 +136,13 @@ class TestWebSearchLimitPlugin:
         assert "max 2 calls" in third["error"]
 
     @pytest.mark.asyncio
-    async def test_exhaustion_finalizes_only_agent_across_budget_plugins(self):
-        exhausted_agents: set[tuple[str, str]] = set()
+    async def test_search_exhaustion_allows_scraping_and_sibling_work(self):
         search_limit = WebSearchLimitPlugin(
             max_calls_per_agent=1,
-            exhausted_agents=exhausted_agents,
         )
         scrape_limit = WebSearchLimitPlugin(
             max_calls_per_agent=2,
             tool_names={"goto"},
-            exhausted_agents=exhausted_agents,
         )
         search = _tool("search", "Search the web")
         goto = _tool("goto")
@@ -97,10 +170,9 @@ class TestWebSearchLimitPlugin:
         )
 
         assert exhausted is not None and exhausted["isError"] is True
-        assert "best final answer" in exhausted["error"]
+        assert "Inspect already-found URLs" in exhausted["error"]
         assert exhausted["error_code"] == "WEB_BUDGET_EXHAUSTED"
-        assert blocked_scrape is not None and blocked_scrape["isError"] is True
-        assert blocked_scrape["error_code"] == "WEB_BUDGET_EXHAUSTED"
+        assert blocked_scrape is None
         assert sibling_scrape is None
 
     @pytest.mark.asyncio
@@ -246,7 +318,8 @@ class TestWebSearchLimitPlugin:
         )
 
         assert first is None
-        assert duplicate is None
+        assert duplicate is not None
+        assert duplicate["error_code"] == "DUPLICATE_TOOL_CALL"
         assert over_limit is not None
         assert over_limit["isError"] is True
 
