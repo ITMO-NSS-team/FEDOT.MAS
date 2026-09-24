@@ -3,8 +3,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-
 from fedotmas.plugins import ToolErrorCircuitBreakerPlugin, ToolErrorCircuitOpen
+from fedotmas.plugins._tool_error_circuit_breaker import WEB_BUDGET_EXHAUSTED
 
 
 def _tool(name: str = "markdown") -> MagicMock:
@@ -126,8 +126,7 @@ class TestToolErrorCircuitBreakerPlugin:
         assert result is None
 
 
-
-class TestRescuedResults:
+class TestRescuedAndControlFlowResults:
     """A server that answered a failed call with a usable substitute."""
 
     @pytest.mark.asyncio
@@ -145,7 +144,46 @@ class TestRescuedResults:
                     "content": [{"type": "text", "text": "# Page"}],
                 },
             )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_repeated_budget_blocks_do_not_count_as_tool_failures(self):
+        plugin = ToolErrorCircuitBreakerPlugin(
+            max_errors_per_agent=1,
+            max_same_tool_error_type=1,
+        )
+
+        for _ in range(5):
+            result = await plugin.after_tool_callback(
+                tool=_tool("search"),
+                tool_args={},
+                tool_context=_tool_context(),
+                result={
+                    "isError": True,
+                    "error": "Stop searching and finish from current evidence.",
+                    "error_code": WEB_BUDGET_EXHAUSTED,
+                },
+            )
+
             assert result is None
+
+        assert plugin._total_errors == {}
+        assert plugin._pattern_errors == {}
+
+    @pytest.mark.asyncio
+    async def test_message_text_alone_does_not_trigger_control_flow_exemption(self):
+        plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)
+
+        with pytest.raises(ToolErrorCircuitOpen):
+            await plugin.after_tool_callback(
+                tool=_tool("search"),
+                tool_args={},
+                tool_context=_tool_context(),
+                result={
+                    "isError": True,
+                    "error": f"{WEB_BUDGET_EXHAUSTED}: unrelated tool failure",
+                },
+            )
 
     @pytest.mark.asyncio
     async def test_an_unrescued_error_still_counts(self):

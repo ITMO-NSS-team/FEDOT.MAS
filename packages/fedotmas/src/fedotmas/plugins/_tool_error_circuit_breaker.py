@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from google.adk.plugins import BasePlugin
 from google.adk.runners import InvocationContext
@@ -19,6 +19,10 @@ _log = get_logger("fedotmas.plugins.tool_error_circuit_breaker")
 #: tool that gives it nothing.  A bare string because the server that sets it
 #: is a separate package.
 RESCUED_META_KEY = "fedotmas/rescued"
+
+# Machine-readable control-flow result returned when an agent's own web budget
+# is exhausted. It is a blocked call, not a failure of the underlying tool.
+WEB_BUDGET_EXHAUSTED = "WEB_BUDGET_EXHAUSTED"
 
 
 class ToolErrorCircuitOpen(RuntimeError):
@@ -59,7 +63,6 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
             for key, count in self._pattern_errors.items()
             if key[0] != session_id
         }
-        return None
 
     async def after_tool_callback(
         self,
@@ -68,7 +71,12 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         tool_args: dict[str, Any],
         tool_context: ToolContext,
         result: dict,
-    ) -> Optional[dict]:
+    ) -> dict | None:
+        if (
+            isinstance(result, dict)
+            and result.get("error_code") == WEB_BUDGET_EXHAUSTED
+        ):
+            return None
         if not _is_error_result(result):
             return None
 
@@ -83,7 +91,7 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         tool_args: dict[str, Any],
         tool_context: ToolContext,
         error: Exception,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         self._record_error(
             tool=tool,
             tool_context=tool_context,
@@ -100,7 +108,7 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         error_type: str,
     ) -> None:
         session_id = tool_context._invocation_context.session.id
-        agent_name = tool_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
+        agent_name = tool_context._invocation_context.agent.name  # ty: ignore[unresolved-attribute]
         total_key = (session_id, agent_name)
         pattern_key = (session_id, agent_name, tool.name, error_type)
 

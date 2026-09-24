@@ -3,6 +3,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from fedotmas.maw.maw import MAW
+from fedotmas.plugins import ToolErrorCircuitBreakerPlugin, WebSearchLimitPlugin
 from google.adk.agents import LlmAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
@@ -12,9 +14,6 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.sessions.session import Session
 from google.adk.tools import FunctionTool
 from google.genai import types
-
-from fedotmas.maw.maw import MAW
-from fedotmas.plugins import WebSearchLimitPlugin
 
 
 def _tool(name: str, description: str = "") -> MagicMock:
@@ -65,21 +64,22 @@ class TestWebSearchLimitPlugin:
         exhausted_agents: set[tuple[str, str]] = set()
         search_limit = WebSearchLimitPlugin(
             max_calls_per_agent=1,
-            hard_fail=True,
             exhausted_agents=exhausted_agents,
         )
         scrape_limit = WebSearchLimitPlugin(
             max_calls_per_agent=2,
             tool_names={"goto"},
-            hard_fail=True,
             exhausted_agents=exhausted_agents,
         )
         search = _tool("search", "Search the web")
         goto = _tool("goto")
 
-        assert await search_limit.before_tool_callback(
-            tool=search, tool_args={"query": "first"}, tool_context=_tool_context()
-        ) is None
+        assert (
+            await search_limit.before_tool_callback(
+                tool=search, tool_args={"query": "first"}, tool_context=_tool_context()
+            )
+            is None
+        )
         exhausted = await search_limit.before_tool_callback(
             tool=search,
             tool_args={"query": "over budget"},
@@ -98,7 +98,9 @@ class TestWebSearchLimitPlugin:
 
         assert exhausted is not None and exhausted["isError"] is True
         assert "best final answer" in exhausted["error"]
+        assert exhausted["error_code"] == "WEB_BUDGET_EXHAUSTED"
         assert blocked_scrape is not None and blocked_scrape["isError"] is True
+        assert blocked_scrape["error_code"] == "WEB_BUDGET_EXHAUSTED"
         assert sibling_scrape is None
 
     @pytest.mark.asyncio
@@ -123,14 +125,22 @@ class TestWebSearchLimitPlugin:
             """Search the web."""
             return {"query": query}
 
-        plugin = WebSearchLimitPlugin(max_calls_per_agent=1, hard_fail=True)
+        plugin = WebSearchLimitPlugin(max_calls_per_agent=1)
         agent = LlmAgent(name="researcher", model="gemini-2.0-flash")
         invocation_context = InvocationContext(
             invocation_id="invocation",
             session_service=InMemorySessionService(),
             session=Session(id="session", app_name="test", user_id="user"),
             agent=agent,
-            plugin_manager=PluginManager([plugin]),
+            plugin_manager=PluginManager(
+                [
+                    plugin,
+                    ToolErrorCircuitBreakerPlugin(
+                        max_errors_per_agent=1,
+                        max_same_tool_error_type=1,
+                    ),
+                ]
+            ),
         )
         calls = [
             types.FunctionCall(
@@ -159,6 +169,34 @@ class TestWebSearchLimitPlugin:
         }
         assert set(responses) == {call.id for call in calls}
         assert sum("isError" in response for response in responses.values()) == 2
+        assert (
+            sum(
+                response.get("error_code") == "WEB_BUDGET_EXHAUSTED"
+                for response in responses.values()
+            )
+            == 2
+        )
+        assert sum("error_code" not in response for response in responses.values()) == 1
+
+    @pytest.mark.asyncio
+    async def test_hard_fail_true_is_deprecated_and_still_returns_a_result(self):
+        with pytest.warns(DeprecationWarning, match="hard_fail=True is deprecated"):
+            plugin = WebSearchLimitPlugin(max_calls_per_agent=1, hard_fail=True)
+        tool = _tool("search", "Search the web")
+        ctx = _tool_context()
+
+        assert (
+            await plugin.before_tool_callback(
+                tool=tool, tool_args={"query": "first"}, tool_context=ctx
+            )
+            is None
+        )
+        blocked = await plugin.before_tool_callback(
+            tool=tool, tool_args={"query": "second"}, tool_context=ctx
+        )
+
+        assert blocked is not None
+        assert blocked["error_code"] == "WEB_BUDGET_EXHAUSTED"
 
     @pytest.mark.asyncio
     async def test_ignores_plain_non_web_search_tool(self):

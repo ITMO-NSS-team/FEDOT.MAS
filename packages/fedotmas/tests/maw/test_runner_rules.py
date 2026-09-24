@@ -16,7 +16,6 @@ from fedotmas.plugins import WebSearchLimitExceeded
 
 from .conftest import FakeActions, FakeEvent, FakeSession, FakeUsageMetadata
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -398,13 +397,13 @@ class TestSearchLimitDoesNotRestartPipeline:
         with (
             patch("fedotmas.core.runner.App", _FakeApp),
             patch("fedotmas.core.runner.Runner", side_effect=fake_runner_cm),
+            pytest.raises(PipelineExecutionError, match="limit hit"),
         ):
-            with pytest.raises(PipelineExecutionError, match="limit hit"):
-                await run_pipeline(
-                    _fake_agent(),
-                    "hello",
-                    session_service=mock_session_service,
-                )
+            await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
 
         assert calls == [True]
 

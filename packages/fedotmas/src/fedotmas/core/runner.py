@@ -21,6 +21,7 @@ _log = get_logger("fedotmas.core.runner")
 # ADK keeps its own copy private (base_llm_flow._NO_CONTENT_ERROR_CODE).
 _NO_CONTENT_ERROR_CODE = "MODEL_RETURNED_NO_CONTENT"
 
+
 @dataclass
 class PipelineResult:
     """Result of a pipeline execution."""
@@ -281,6 +282,8 @@ async def _consume_runner_events(
                 f"Agent '{event.author}' failed with error {event.error_code}: "
                 f"{event.error_message}"
             )
+
+
 def _record_empty_step(truncated_agents: list[str], author: str | None) -> None:
     # The field names which steps came up empty, not how often.
     if author and author not in truncated_agents:

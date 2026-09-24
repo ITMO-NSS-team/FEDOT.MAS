@@ -5,21 +5,19 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pydantic import ValidationError
-
 from fedotmas._settings import ModelConfig
 from fedotmas.maw.builder import (
+    _STATE_REF_RE,
     AUTONOMY_CLOSING,
     AUTONOMY_PREAMBLE,
-    _STATE_REF_RE,
     _build_llm_agent,
-    _instruction_provider,
     _inject_exit_loop,
+    _instruction_provider,
     _resolve_llm,
     build,
 )
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-
+from pydantic import ValidationError
 
 # ---- Rules 1-3: text normalization (via MAWAgentConfig model_validator) ----
 
@@ -27,10 +25,10 @@ from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 class TestNormalizeAngleBrackets:
     """Rule 1: <state_key> → {state_key?} (via MAWConfig, context-aware)."""
 
-    def _build(self, instruction: str, extra_keys: list[str] = []) -> str:
+    def _build(self, instruction: str, extra_keys: list[str] | None = None) -> str:
         agents = [
             MAWAgentConfig(name=f"a{i}", instruction="x", output_key=k)
-            for i, k in enumerate(extra_keys)
+            for i, k in enumerate(extra_keys or [])
         ]
         agents.append(MAWAgentConfig(name="t", instruction=instruction, output_key="k"))
         cfg = MAWConfig(
@@ -495,9 +493,7 @@ class TestMissingInputIsNamed:
             ),
             mcp_registry=None,
             worker_models=None,
-            state_keys=frozenset(
-                {"user_query", "compound_research", "source_data"}
-            ),
+            state_keys=frozenset({"user_query", "compound_research", "source_data"}),
             autonomous=False,
         )
 
@@ -508,6 +504,19 @@ class TestMissingInputIsNamed:
 
 
 class TestInstructionProviderIsOnlyUsedWhenNeeded:
+    def test_agent_uses_explicit_state_instead_of_accumulated_history(self):
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="writer",
+                instruction="Use {research_result} to answer {user_query}.",
+                output_key="report",
+            ),
+            None,
+            None,
+        )
+
+        assert agent.include_contents == "none"
+
     def test_static_instruction_stays_a_string(self):
         """No refs, no per-call work: ADK takes a plain string as-is."""
         agent = _build_llm_agent(

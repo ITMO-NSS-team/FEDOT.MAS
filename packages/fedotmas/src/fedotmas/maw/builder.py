@@ -6,8 +6,8 @@ from typing import Any, TypeAlias, cast
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
-from google.adk.models.base_llm import BaseLlm
 from google.adk.agents.readonly_context import ReadonlyContext
+from google.adk.models.base_llm import BaseLlm
 from google.adk.tools.exit_loop_tool import exit_loop
 from google.adk.utils.instructions_utils import inject_session_state
 from google.genai import types as genai_types
@@ -264,6 +264,11 @@ def _build_llm_agent(
         instruction=instruction,
         output_key=cfg.output_key,
         tools=tools,
+        # MAW passes dependencies through explicit session-state references.
+        # Avoid repeating unrelated earlier agents' and tools' conversation
+        # history; ADK still provides the current input and this agent's tool
+        # results while it is working.
+        include_contents="none",
         **kwargs,
     )
 

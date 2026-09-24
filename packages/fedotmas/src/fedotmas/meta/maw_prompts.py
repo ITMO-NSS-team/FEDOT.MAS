@@ -59,6 +59,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 - The user's original query is stored in state under key "user_query".
 - Downstream agents reference upstream results in their instructions by wrapping the state key name in single curly braces.
 - Example: if an upstream agent has output_key "research_result", a downstream agent references it as <research_result> in its instruction (see syntax note below).
+- Ask intermediate agents for concise, source-backed findings containing the information their downstream roles need; avoid carrying unrelated research into later stages.
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 
@@ -69,15 +70,17 @@ Use single curly braces around the state key name. In the examples below, angle 
 
 ## DESIGN PRINCIPLES
 
-1. **Start simple.** Use 1–2 agents for straightforward tasks.
-2. **Use parallel** only when subtasks are truly independent.
-3. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer).
-4. **Every agent** must have a unique `name` and a unique `output_key`.
-5. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
-6. **Instructions must be specific and actionable** — tell the agent exactly what to do.
-7. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
-8. **Never end with parallel.** A `parallel` node MUST be followed by a synthesizer agent that reads the `output_key` of every parallel sub-agent from state and produces a combined answer. Wrap the parallel node and the synthesizer in a `sequential` node.
-9. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
+1. **Let the task determine the team.** Do not optimize for the smallest possible team. One agent is appropriate for a genuinely atomic task; add agents when distinct evidence sources, modalities, tools, reasoning responsibilities, verification work, or independent research branches materially help.
+2. **Keep responsibilities distinct.** Avoid redundant agents with substantially overlapping work. Split materially different semantic stages when this reduces ambiguity or context mixing, such as source finding, domain interpretation, identifier resolution, and verification. When a task needs all of those stages, a sequential handoff could be `source_finder -> domain_interpreter -> identifier_resolver -> verifier`; include only the roles the task actually needs.
+3. **Check dependencies before using parallel.** Ask whether each branch can be solved without another branch's output. If agent A must determine an entity, identifier, date, value, search term, or other input required by agent B, put them in a sequential dependency and pass A's concise result through state. Use parallel only for genuinely independent branches.
+4. **Synthesize or verify parallel work.** After parallel research, use an agent that reads all branch outputs to synthesize or verify them when the task calls for it.
+5. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer).
+6. **Every agent** must have a unique `name` and a unique `output_key`.
+7. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
+8. **Instructions must be specific and actionable** — tell the agent exactly what to do.
+9. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
+10. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and this follow-up in a `sequential` node.
+11. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
 
 ---
 
@@ -126,53 +129,80 @@ Use single curly braces around the state key name. In the examples below, angle 
 }
 ```
 
-### Example 3 — Parallel analysis + synthesis
+### Example 3 — Dependent identifier lookup and verification
 ```json
 {
   "agents": [
     {
-      "name": "researcher",
-      "instruction": "Research: <user_query>",
-      "output_key": "research_data",
+      "name": "identifier_finder",
+      "instruction": "Find the canonical identifier for the record described by <user_query> in an authoritative catalog. Return the identifier and its source.",
+      "output_key": "record_identifier",
       "model": "<model>"
     },
     {
-      "name": "technical_analyst",
-      "instruction": "Analyze the technical aspects of: <research_data>",
-      "output_key": "technical_analysis",
+      "name": "dependent_researcher",
+      "instruction": "Use the identifier {record_identifier} to retrieve the requested record details and report the supporting source.",
+      "output_key": "record_details",
       "model": "<model>"
     },
     {
-      "name": "business_analyst",
-      "instruction": "Analyze the business implications of: <research_data>",
-      "output_key": "business_analysis",
-      "model": "<model>"
-    },
-    {
-      "name": "synthesizer",
-      "instruction": "Combine the technical analysis: <technical_analysis> and business analysis: <business_analysis> into a final report.",
-      "output_key": "final_report",
+      "name": "verifier",
+      "instruction": "Verify the identifier {record_identifier} and details {record_details} against their cited sources, then report any mismatch.",
+      "output_key": "verified_result",
       "model": "<model>"
     }
   ],
   "pipeline": {
     "type": "sequential",
     "children": [
-      {"type": "agent", "agent_name": "researcher"},
-      {
-        "type": "parallel",
-        "children": [
-          {"type": "agent", "agent_name": "technical_analyst"},
-          {"type": "agent", "agent_name": "business_analyst"}
-        ]
-      },
-      {"type": "agent", "agent_name": "synthesizer"}
+      {"type": "agent", "agent_name": "identifier_finder"},
+      {"type": "agent", "agent_name": "dependent_researcher"},
+      {"type": "agent", "agent_name": "verifier"}
     ]
   }
 }
 ```
 
-### Example 4 — Loop with critic
+### Example 4 — Independent sources with synthesis and verification
+```json
+{
+  "agents": [
+    {
+      "name": "source_A_researcher",
+      "instruction": "Investigate the question in <user_query> using one suitable evidence source. Work independently of other branches and return concise findings with sources.",
+      "output_key": "source_A_findings",
+      "model": "<model>"
+    },
+    {
+      "name": "source_B_researcher",
+      "instruction": "Investigate the question in <user_query> using a different suitable evidence source. Work independently of other branches and return concise findings with sources.",
+      "output_key": "source_B_findings",
+      "model": "<model>"
+    },
+    {
+      "name": "synthesizer_verifier",
+      "instruction": "Compare {source_A_findings} and {source_B_findings}, synthesize the supported result, and identify any disagreement or unsupported claim.",
+      "output_key": "verified_synthesis",
+      "model": "<model>"
+    }
+  ],
+  "pipeline": {
+    "type": "sequential",
+    "children": [
+      {
+        "type": "parallel",
+        "children": [
+          {"type": "agent", "agent_name": "source_A_researcher"},
+          {"type": "agent", "agent_name": "source_B_researcher"}
+        ]
+      },
+      {"type": "agent", "agent_name": "synthesizer_verifier"}
+    ]
+  }
+}
+```
+
+### Example 5 — Loop with critic
 ```json
 {
   "agents": [
@@ -238,16 +268,11 @@ Choose models based on task complexity: use stronger models for critical/complex
 
 ## DESIGN PRINCIPLES
 
-1. **Start simple.** Use 1–2 agents for straightforward tasks.
-2. **Each agent = one clear responsibility.** Avoid agents that do too many things.
-3. **Add agents only when needed:**
-   - Task requires clearly different specialized tools.
-   - Independent subtasks benefit from parallel execution.
-   - Different expertise domains are needed.
-4. **Avoid over-engineering:** one versatile agent is better than multiple similar agents.
-5. **Instructions must be specific and actionable** — tell the agent exactly what to do.
-6. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
-7. **Do NOT include output_key, state references, or curly-brace placeholders** — focus on WHAT each agent does, not how data flows between them. Data wiring is handled in a separate stage.
+1. **Let the task determine the team.** Do not optimize for the smallest possible team. One agent fits a genuinely atomic task; use additional agents when distinct evidence sources, modalities, tools, reasoning responsibilities, verification work, independent research branches, or semantic stages materially help.
+2. **Give each agent one clear responsibility.** Avoid redundant agents with substantially overlapping work. Split materially different stages when that reduces semantic ambiguity or context mixing, such as source finding, domain interpretation, identifier resolution, and verification. When a task needs all of those stages, a sequential handoff could be `source_finder -> domain_interpreter -> identifier_resolver -> verifier`; include only the roles the task actually needs.
+3. **Keep instructions specific and actionable** — tell each agent exactly what to do.
+4. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
+5. **Do NOT include output_key, state references, or curly-brace placeholders** — focus on WHAT each agent does, not how data flows between them. Data wiring is handled in a separate stage.
 
 ---
 
@@ -297,6 +322,29 @@ Choose models based on task complexity: use stronger models for critical/complex
     {
       "name": "critic",
       "instruction": "Review the written content for accuracy, clarity, and completeness. Provide specific, actionable feedback for improvement. If the quality is satisfactory, indicate approval.",
+      "model": "<model>"
+    }
+  ]
+}
+```
+
+### Example 4 — Separate source finding, interpretation, and verification
+```json
+{
+  "agents": [
+    {
+      "name": "source_finder",
+      "instruction": "Locate the primary source needed to answer the task and identify the relevant passage.",
+      "model": "<model>"
+    },
+    {
+      "name": "domain_interpreter",
+      "instruction": "Interpret the relevant passage in its domain context and explain what it supports.",
+      "model": "<model>"
+    },
+    {
+      "name": "verifier",
+      "instruction": "Check that the interpretation is supported by the source and flag any ambiguity.",
       "model": "<model>"
     }
   ]
@@ -384,6 +432,7 @@ ${available_models}
 - The user's original query is stored in state under key "user_query".
 - Downstream agents reference upstream results in their instructions by wrapping the state key name in single curly braces.
 - Example: if an upstream agent has output_key "research_result", a downstream agent references it as <research_result> in its instruction (see syntax note below).
+- Ask intermediate agents for concise, source-backed findings containing the information their downstream roles need; avoid carrying unrelated research into later stages.
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 
@@ -394,14 +443,15 @@ Use single curly braces around the state key name. In the examples below, angle 
 
 ## DESIGN PRINCIPLES
 
-1. **Start simple.** Use sequential for straightforward multi-step tasks.
-2. **Use parallel** only when subtasks are truly independent.
-3. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer).
-4. **Every agent** must have a unique `name` and a unique `output_key`.
-5. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
-6. **Instructions must include state references** using curly braces around the state key name, so agents can read upstream outputs.
-7. **Never end with parallel.** A `parallel` node MUST be followed by a synthesizer agent that reads the `output_key` of every parallel sub-agent from state and produces a combined answer. Wrap the parallel node and the synthesizer in a `sequential` node.
-8. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
+1. **Let dependencies determine order.** Before using `parallel`, decide whether each branch can be solved without another branch's output. If agent A determines an entity, identifier, date, value, search term, or other information agent B needs, put A before B in a `sequential` node and pass the needed result through state; for example, `identifier_finder -> dependent_researcher -> verifier`.
+2. **Use parallel only for genuinely independent branches.** After parallel research, add synthesis or verification when appropriate; the follow-up must read all relevant branch outputs. One valid pattern is `[source_A_researcher, source_B_researcher] -> synthesizer/verifier` when the source branches do not need each other's results.
+3. **Keep responsibilities distinct.** Split materially different semantic stages when that reduces ambiguity or context mixing, such as source finding, domain interpretation, identifier resolution, and verification. When a task needs all of those stages, a sequential handoff could be `source_finder -> domain_interpreter -> identifier_resolver -> verifier`; include only the roles the task actually needs.
+4. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer).
+5. **Every agent** must have a unique `name` and a unique `output_key`.
+6. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
+7. **Instructions must include state references** using curly braces around the state key name, so agents can read concise upstream outputs.
+8. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and follow-up in a `sequential` node.
+9. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
 
 ---
 

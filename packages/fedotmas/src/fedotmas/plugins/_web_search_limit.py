@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+import warnings
+from typing import Any
 from urllib.parse import urldefrag, urlsplit, urlunsplit
 
 from google.adk.plugins import BasePlugin
@@ -10,6 +11,7 @@ from google.adk.tools.tool_context import ToolContext
 
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp import strip_tool_name_prefix
+from fedotmas.plugins._tool_error_circuit_breaker import WEB_BUDGET_EXHAUSTED
 
 _log = get_logger("fedotmas.plugins.web_search_limit")
 
@@ -43,9 +45,9 @@ DEFAULT_WEB_SEARCH_LIMIT = 20
 class WebSearchLimitPlugin(BasePlugin):
     """Limit web-search calls per agent within one ADK run.
 
-    Exhaustion returns a tool error for that agent to finalize from current
-    evidence. The legacy ``hard_fail`` argument is accepted but no longer raises,
-    because exceptions abort ADK's whole parallel tool-call batch.
+    Exhaustion returns a marked tool result for that agent to finalize from
+    current evidence. The legacy ``hard_fail=True`` argument warns and is ignored:
+    raising here aborts ADK's whole parallel tool-call batch.
     """
 
     def __init__(
@@ -58,7 +60,7 @@ class WebSearchLimitPlugin(BasePlugin):
         ignore_local_urls: bool = True,
         reject_empty_urls: bool = False,
         dedupe_identical_calls: bool = True,
-        hard_fail: bool = False,
+        hard_fail: bool | None = None,
         exhausted_agents: set[tuple[str, str]] | None = None,
         name: str = "fedotmas_web_search_limit",
     ) -> None:
@@ -66,10 +68,13 @@ class WebSearchLimitPlugin(BasePlugin):
             raise ValueError("max_calls_per_agent must be >= 1")
         super().__init__(name=name)
         self.max_calls_per_agent = max_calls_per_agent
-        # Retained for constructor compatibility. Raising from this callback
-        # aborts ADK's entire parallel tool-call batch, so budget exhaustion is
-        # always returned as a result for the affected tool call.
-        self.hard_fail = hard_fail
+        if hard_fail:
+            warnings.warn(
+                "hard_fail=True is deprecated and ignored; budget exhaustion is "
+                "always returned as a tool result so parallel calls stay correlated.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.count_unique_urls = count_unique_urls
         self.ignore_local_urls = ignore_local_urls
         self.reject_empty_urls = reject_empty_urls
@@ -98,7 +103,6 @@ class WebSearchLimitPlugin(BasePlugin):
         self._seen_urls = {key for key in self._seen_urls if key[0] != session_id}
         stale_agents = {key for key in self._exhausted_agents if key[0] == session_id}
         self._exhausted_agents.difference_update(stale_agents)
-        return None
 
     async def before_tool_callback(
         self,
@@ -106,12 +110,12 @@ class WebSearchLimitPlugin(BasePlugin):
         tool: BaseTool,
         tool_args: dict[str, Any],
         tool_context: ToolContext,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         if not self._is_web_search_tool(tool):
             return None
 
         session_id = tool_context._invocation_context.session.id
-        agent_name = tool_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
+        agent_name = tool_context._invocation_context.agent.name  # ty: ignore[unresolved-attribute]
         tool_name = strip_tool_name_prefix(tool.name).lower()
         key = (session_id, agent_name)
 
@@ -158,15 +162,14 @@ class WebSearchLimitPlugin(BasePlugin):
                     url,
                 )
                 return None
-            if self.count_unique_urls:
-                if url_key in self._seen_urls:
-                    _log.debug(
-                        "Web limit ignored already-counted URL | agent={} tool={} url={}",
-                        agent_name,
-                        tool.name,
-                        url,
-                    )
-                    return None
+            if self.count_unique_urls and url_key in self._seen_urls:
+                _log.debug(
+                    "Web limit ignored already-counted URL | agent={} tool={} url={}",
+                    agent_name,
+                    tool.name,
+                    url,
+                )
+                return None
 
         used = self._counts.get(key, 0)
         if used >= self.max_calls_per_agent:
@@ -179,7 +182,8 @@ class WebSearchLimitPlugin(BasePlugin):
             return _limit_result(
                 f"{message} This agent's web/search budget is exhausted. Stop "
                 "exploration and provide your best final answer from the evidence "
-                "already gathered."
+                "already gathered.",
+                error_code=WEB_BUDGET_EXHAUSTED,
             )
 
         self._counts[key] = used + 1
@@ -209,18 +213,27 @@ class WebSearchLimitPlugin(BasePlugin):
 
 
 class WebSearchLimitExceeded(RuntimeError):
-    """Legacy exception type for web-search/tool budget exhaustion."""
+    """Legacy exception type retained for import compatibility; no longer raised.
+
+    Budget exhaustion is now returned as a synthetic tool result carrying the
+    ``WEB_BUDGET_EXHAUSTED`` error code. Raising from ADK callbacks can abort a
+    parallel tool-call batch and orphan its correlated responses.
+    """
 
 
-def _limit_result(message: str) -> dict[str, Any]:
-    return {"isError": True, "error": message}
+def _limit_result(message: str, *, error_code: str | None = None) -> dict[str, Any]:
+    result: dict[str, Any] = {"isError": True, "error": message}
+    if error_code is not None:
+        result["error_code"] = error_code
+    return result
 
 
 def _finalize_result(agent_name: str) -> dict[str, Any]:
     return _limit_result(
         f"Web/search tools are disabled for agent '{agent_name}' because its budget "
         "is exhausted. Stop exploration and provide your best final answer from "
-        "the evidence already gathered."
+        "the evidence already gathered.",
+        error_code=WEB_BUDGET_EXHAUSTED,
     )
 
 

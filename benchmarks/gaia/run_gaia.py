@@ -22,9 +22,9 @@ from fedotmas.plugins import (
     LangfusePlugin,
     LoggingPlugin,
     ToolErrorCircuitBreakerPlugin,
-    UnknownToolRecoveryPlugin,
     ToolErrorCircuitOpen,
     ToolResultTruncationPlugin,
+    UnknownToolRecoveryPlugin,
     WebSearchLimitExceeded,
     WebSearchLimitPlugin,
 )
@@ -510,7 +510,6 @@ def build_plugins(task, enable_langfuse: bool) -> list:
         ),
         WebSearchLimitPlugin(
             max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 10),
-            hard_fail=True,
             exhausted_agents=exhausted_web_agents,
         ),
         WebSearchLimitPlugin(
@@ -519,7 +518,6 @@ def build_plugins(task, enable_langfuse: bool) -> list:
             count_unique_urls=True,
             same_url_exempt_tool_names={"eval", "evaluate", "links", "status"},
             reject_empty_urls=True,
-            hard_fail=True,
             exhausted_agents=exhausted_web_agents,
             name="fedotmas_gaia_web_tool_limit",
         ),
