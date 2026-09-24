@@ -14,8 +14,9 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-  "browser-use>=0.13,<0.14",
-  "fastmcp>=3.4,<4",
+  "browser-use==0.13.10",
+  # Browser-Use 0.13.10 requires MCP 2; FastMCP 3 requires MCP 1.
+  "fastmcp==4.0.8",
 ]
 scripts.mcp-browser-agent = "mcp_browser_agent.server:main"
 

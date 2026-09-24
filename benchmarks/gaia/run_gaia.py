@@ -6,7 +6,7 @@ import re
 import socket
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from fedotmas import MAW, ModelConfig
 from fedotmas._settings import get_meta_model
 from fedotmas.common.logging import get_logger
+from fedotmas.mcp import MCPServerConfig, StdioMCPServer, resolve_mcp_registry
 from fedotmas.plugins import (
     BrowserFallbackPolicyPlugin,
     LangfusePlugin,
@@ -211,6 +212,22 @@ def _gaia_mcp_servers() -> list[str] | str:
     if value.strip().lower() == "all":
         return "all"
     return [name.strip() for name in value.split(",") if name.strip()]
+
+
+def _gaia_mcp_registry(
+    worker_model: ModelConfig,
+) -> dict[str, MCPServerConfig]:
+    """Give Browser-Use the same resolved provider settings as GAIA workers."""
+    registry = dict(resolve_mcp_registry(_gaia_mcp_servers()))
+    browser = registry.get("browser-agent")
+    if isinstance(browser, StdioMCPServer):
+        env = {**browser.env, "FEDOTMAS_GAIA_WORKER_MODEL": worker_model.model}
+        if worker_model.api_key:
+            env["FEDOTMAS_GAIA_WORKER_API_KEY"] = worker_model.api_key
+        if worker_model.api_base:
+            env["FEDOTMAS_GAIA_WORKER_BASE_URL"] = worker_model.api_base
+        registry["browser-agent"] = replace(browser, env=env)
+    return registry
 
 
 def _gaia_provider_extra_body() -> dict[str, Any] | None:
@@ -552,6 +569,13 @@ def build_plugins(task, enable_langfuse: bool) -> list:
             budget_kind="scraping",
             name="fedotmas_gaia_web_tool_limit",
         ),
+        WebSearchLimitPlugin(
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_BROWSER_AGENT_LIMIT", 3),
+            tool_names={"complete_browser_task"},
+            telemetry=telemetry,
+            budget_kind="browser_agent",
+            name="fedotmas_gaia_browser_agent_limit",
+        ),
         # Keep recovery after the breaker so unresolved names still pass through
         # the local circuit's error accounting.
         UnknownToolRecoveryPlugin(),
@@ -621,8 +645,22 @@ def compute_token_summary(results: list) -> dict:
     total_meta_completion = 0
     total_pipeline_prompt = 0
     total_pipeline_completion = 0
+    browser_usage = {
+        field: 0
+        for field in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "llm_invocations",
+            "steps",
+            "usage_missing",
+        )
+    }
 
     for result in results:
+        for metrics in result.get("research_telemetry", {}).values():
+            for field in browser_usage:
+                browser_usage[field] += metrics.get(f"browser_agent_{field}", 0)
         tokens = result.get("tokens", {})
         total_meta_prompt += tokens.get("meta_prompt", 0)
         total_meta_completion += tokens.get("meta_completion", 0)
@@ -640,6 +678,7 @@ def compute_token_summary(results: list) -> dict:
             "completion_tokens": total_pipeline_completion,
             "total_tokens": total_pipeline_prompt + total_pipeline_completion,
         },
+        "browser_agent": browser_usage,
         "grand_total": {
             "prompt_tokens": total_meta_prompt + total_pipeline_prompt,
             "completion_tokens": total_meta_completion + total_pipeline_completion,
@@ -799,7 +838,7 @@ async def _process_task_attempt(
         )
         maw = MAW(
             meta_model=meta_model,
-            mcp_servers=_gaia_mcp_servers(),
+            mcp_servers=_gaia_mcp_registry(worker_model),
             worker_models=[worker_model],
             plugins=plugins,
             max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),

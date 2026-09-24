@@ -328,10 +328,10 @@ lightpanda-check:
 # browser-use (browser automation)
 
 browser-use-install:
-    uvx browser-use install
+    env -u UV_PROJECT_ENVIRONMENT -u VIRTUAL_ENV uv run --directory mcp-servers/browser-agent browser-use install
 
 browser-use-check:
-    @uvx --from 'browser-use[cli]' browser-use --help > /dev/null 2>&1 && echo "browser-use OK" || echo "browser-use not installed. Run: just browser-use-install"
+    @mcp-servers/browser-agent/.venv/bin/python -c 'import browser_use' > /dev/null 2>&1 && echo "browser-use OK" || echo "browser-use not installed. Run: just browser-use-install"
 
 # GAIA Benchmark
 

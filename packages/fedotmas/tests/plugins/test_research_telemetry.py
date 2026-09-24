@@ -14,6 +14,42 @@ def _context(agent: str = "researcher") -> MagicMock:
 
 
 @pytest.mark.asyncio
+async def test_browser_usage_is_recorded_even_for_mcp_errors():
+    telemetry = ResearchTelemetry()
+    tool = MagicMock()
+    tool.name = "complete_browser_task"
+    result = {
+        "is_error": True,
+        "structured_content": {
+            "status": "failed",
+            "usage": {
+                "prompt_tokens": 120,
+                "completion_tokens": 30,
+                "total_tokens": 150,
+                "llm_invocations": 2,
+            },
+            "steps_taken": 4,
+        },
+    }
+    await telemetry.before_tool_callback(
+        tool=tool, tool_args={"task": "first"}, tool_context=_context()
+    )
+    await telemetry.after_tool_callback(
+        tool=tool, tool_args={}, tool_context=_context(), result=result
+    )
+
+    metrics = telemetry.snapshot()["researcher"]
+    assert metrics["browser_agent_calls"] == 1
+    assert metrics["failed_calls"] == 1
+    assert metrics["browser_agent_prompt_tokens"] == 120
+    assert metrics["browser_agent_completion_tokens"] == 30
+    assert metrics["browser_agent_total_tokens"] == 150
+    assert metrics["browser_agent_llm_invocations"] == 2
+    assert metrics["browser_agent_steps"] == 4
+    assert metrics["browser_agent_usage_missing"] == 0
+
+
+@pytest.mark.asyncio
 async def test_research_telemetry_records_structured_outcomes_and_serializes():
     telemetry = ResearchTelemetry()
     tool = MagicMock(name="search")

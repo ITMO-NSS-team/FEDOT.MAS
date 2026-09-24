@@ -32,6 +32,28 @@ def _invocation_context(session_id: str = "s1"):
 
 class TestToolErrorCircuitBreakerPlugin:
     @pytest.mark.asyncio
+    async def test_browser_mcp_error_opens_circuit_with_machine_code(self):
+        plugin = ToolErrorCircuitBreakerPlugin(max_same_tool_error_type=2)
+        tool = _tool("complete_browser_task")
+        result = {
+            "is_error": True,
+            "structured_content": {
+                "status": "failed",
+                "error_code": "BROWSER_AGENT_FAILED",
+            },
+        }
+        for _ in range(2):
+            await plugin.after_tool_callback(
+                tool=tool, tool_args={}, tool_context=_tool_context(), result=result
+            )
+
+        blocked = await plugin.before_tool_callback(
+            tool=tool, tool_args={}, tool_context=_tool_context()
+        )
+        assert blocked["error_code"] == TOOL_CIRCUIT_OPEN
+        assert "BROWSER_AGENT_FAILED" in blocked["error"]
+
+    @pytest.mark.asyncio
     async def test_ignores_successful_tool_result(self):
         plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)
 

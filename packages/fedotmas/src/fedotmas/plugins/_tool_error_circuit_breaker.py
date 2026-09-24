@@ -191,7 +191,7 @@ def _is_error_result(result: dict) -> bool:
     meta = result.get("meta")
     if isinstance(meta, dict) and meta.get(RESCUED_META_KEY):
         return False
-    if result.get("isError") is True:
+    if result.get("isError") is True or result.get("is_error") is True:
         return True
     value = result.get("error")
     return "error" in result and value is not None and value != ""
@@ -206,6 +206,17 @@ def _session_agent(tool_context: ToolContext) -> tuple[str, str]:
 
 
 def _error_type_from_result(result: dict) -> str:
+    for payload in (
+        result,
+        *(
+            result.get(key)
+            for key in ("meta", "_meta", "structuredContent", "structured_content")
+        ),
+    ):
+        if isinstance(payload, dict):
+            code = payload.get("error_code")
+            if isinstance(code, str) and code.startswith("BROWSER_AGENT_"):
+                return code
     value = result.get("error")
     if isinstance(value, dict):
         for key in ("type", "code", "error_type"):

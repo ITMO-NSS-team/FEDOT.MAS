@@ -68,6 +68,14 @@ class ResearchTelemetry(BasePlugin):
             "scraping_extraction_calls": 0,
             "search_exhaustion": 0,
             "scraping_exhaustion": 0,
+            "browser_agent_calls": 0,
+            "browser_agent_exhaustion": 0,
+            "browser_agent_prompt_tokens": 0,
+            "browser_agent_completion_tokens": 0,
+            "browser_agent_total_tokens": 0,
+            "browser_agent_llm_invocations": 0,
+            "browser_agent_steps": 0,
+            "browser_agent_usage_missing": 0,
             "prompt_tokens": 0,
             "completion_tokens": 0,
         }
@@ -85,6 +93,8 @@ class ResearchTelemetry(BasePlugin):
                     hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()
                 )
                 metrics["unique_queries"] = len(self._queries[agent])
+        elif kind == "browser_agent":
+            metrics["browser_agent_calls"] += 1
         else:
             metrics["scraping_extraction_calls"] += 1
 
@@ -144,7 +154,36 @@ class ResearchTelemetry(BasePlugin):
             and result["error_code"] in CONTROL_CODES
         ):
             return
-        if result.get("isError") is True or result.get("error"):
+        if kind == "browser_agent":
+            payload = _browser_payload(result)
+            usage = payload.get("usage", {}) if payload else {}
+            if not isinstance(usage, dict):
+                usage = {}
+            metrics = self._agents[agent]
+            fields = (
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "llm_invocations",
+            )
+            for field in fields:
+                value = usage.get(field)
+                if (
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value >= 0
+                ):
+                    metrics[f"browser_agent_{field}"] += value
+            steps = payload.get("steps_taken") if payload else None
+            if isinstance(steps, int) and not isinstance(steps, bool) and steps >= 0:
+                metrics["browser_agent_steps"] += steps
+            if any(usage.get(field) is None for field in fields):
+                metrics["browser_agent_usage_missing"] += 1
+        if (
+            result.get("isError") is True
+            or result.get("is_error") is True
+            or result.get("error")
+        ):
             metrics = self._agents[agent]
             metrics["failed_calls"] += 1
             if kind == "search":
@@ -152,6 +191,8 @@ class ResearchTelemetry(BasePlugin):
             return
         metrics = self._agents[agent]
         metrics["successful_calls"] += 1
+        if kind == "browser_agent":
+            return
         if kind == "scraping":
             url = tool_args.get("url")
             if (
@@ -236,9 +277,35 @@ def _search_payload(result: dict[str, Any]) -> dict[str, Any] | None:
 
 def _research_tool_kind(name: str) -> str | None:
     normalized = strip_tool_name_prefix(name).lower()
+    if normalized == "complete_browser_task":
+        return "browser_agent"
     if normalized in SEARCH_TOOLS:
         return "search"
     short_name = normalized.rsplit("_", 1)[-1]
     if normalized in SCRAPING_TOOLS or short_name in SCRAPING_TOOLS:
         return "scraping"
+    return None
+
+
+def _browser_payload(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Read either MCP SDK spelling, choosing one copy of structured/text data."""
+    if isinstance(result.get("usage"), dict) and "status" in result:
+        return result
+    for key in ("structuredContent", "structured_content", "result"):
+        value = result.get(key)
+        if isinstance(value, dict):
+            found = _browser_payload(value)
+            if found is not None:
+                return found
+    content = result.get("content")
+    for item in content if isinstance(content, list) else []:
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            try:
+                value = json.loads(item["text"])
+            except ValueError:
+                continue
+            if isinstance(value, dict):
+                found = _browser_payload(value)
+                if found is not None:
+                    return found
     return None

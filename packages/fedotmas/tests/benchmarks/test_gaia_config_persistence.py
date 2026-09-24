@@ -6,12 +6,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fedotmas import ModelConfig
 from fedotmas.core.runner import PipelineExecutionError, PipelineResult
 from fedotmas.maw.models import MAWConfig
+from fedotmas.plugins import ResearchTelemetry
 
 from benchmarks.gaia.run_gaia import (
     GAIA_BASE_MCP_SERVERS,
+    _attempt_diagnostics,
+    _gaia_mcp_registry,
     _gaia_mcp_servers,
+    build_plugins,
     compute_token_summary,
     process_task,
     root_cause_summary,
@@ -75,11 +80,117 @@ def test_gaia_uses_full_sandbox_when_e2b_key_is_set(monkeypatch: pytest.MonkeyPa
     assert "sandbox-light" not in servers
 
 
+def test_gaia_passes_resolved_worker_settings_to_browser_agent(monkeypatch):
+    monkeypatch.delenv("FEDOTMAS_GAIA_MCP_SERVERS", raising=False)
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    worker = ModelConfig(
+        model="openai/gpt-6-luna",
+        api_base="https://openrouter.ai/api/v1",
+        api_key="worker-key",
+    )
+
+    browser = _gaia_mcp_registry(worker)["browser-agent"]
+
+    assert browser.env["FEDOTMAS_GAIA_WORKER_MODEL"] == "openai/gpt-6-luna"
+    assert (
+        browser.env["FEDOTMAS_GAIA_WORKER_BASE_URL"] == "https://openrouter.ai/api/v1"
+    )
+    assert browser.env["FEDOTMAS_GAIA_WORKER_API_KEY"] == "worker-key"
+
+
 def test_gaia_mcp_server_override_is_preserved(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FEDOTMAS_GAIA_MCP_SERVERS", "download, browser-agent")
     monkeypatch.setenv("E2B_API_KEY", "test-key")
 
     assert _gaia_mcp_servers() == ["download", "browser-agent"]
+
+
+@pytest.mark.asyncio
+async def test_gaia_browser_limit_is_per_agent_and_uses_budget_control(monkeypatch):
+    monkeypatch.delenv("FEDOTMAS_GAIA_BROWSER_AGENT_LIMIT", raising=False)
+    plugins = build_plugins(SimpleNamespace(), enable_langfuse=False)
+    limit = next(
+        plugin
+        for plugin in plugins
+        if getattr(plugin, "budget_kind", None) == "browser_agent"
+    )
+    telemetry = next(
+        plugin for plugin in plugins if isinstance(plugin, ResearchTelemetry)
+    )
+    tool = SimpleNamespace(name="complete_browser_task", description="Browser task")
+
+    def context(agent):
+        return SimpleNamespace(
+            _invocation_context=SimpleNamespace(
+                session=SimpleNamespace(id="session"),
+                agent=SimpleNamespace(name=agent),
+            )
+        )
+
+    for index in range(3):
+        assert (
+            await limit.before_tool_callback(
+                tool=tool,
+                tool_args={"task": f"task {index}"},
+                tool_context=context("researcher"),
+            )
+            is None
+        )
+    blocked = await limit.before_tool_callback(
+        tool=tool, tool_args={"task": "task 4"}, tool_context=context("researcher")
+    )
+    sibling = await limit.before_tool_callback(
+        tool=tool, tool_args={"task": "sibling"}, tool_context=context("sibling")
+    )
+    assert blocked["isError"] is True
+    assert blocked["error_code"] == "WEB_BUDGET_EXHAUSTED"
+    assert sibling is None
+    assert telemetry.snapshot()["researcher"]["browser_agent_exhaustion"] == 1
+
+
+def test_gaia_diagnostics_aggregate_browser_tokens_separately():
+    records = [
+        {
+            "tokens": {"meta_prompt": 10},
+            "research_telemetry": {
+                "researcher": {
+                    "browser_agent_prompt_tokens": 100,
+                    "browser_agent_completion_tokens": 20,
+                    "browser_agent_total_tokens": 120,
+                    "browser_agent_llm_invocations": 2,
+                    "browser_agent_steps": 4,
+                }
+            },
+        },
+        {
+            "tokens": {"meta_prompt": 15},
+            "research_telemetry": {
+                "researcher": {
+                    "browser_agent_prompt_tokens": 40,
+                    "browser_agent_completion_tokens": 10,
+                    "browser_agent_total_tokens": 50,
+                    "browser_agent_llm_invocations": 1,
+                    "browser_agent_steps": 3,
+                }
+            },
+        },
+    ]
+    diagnostics = _attempt_diagnostics(records)
+    summary = compute_token_summary([diagnostics])
+
+    assert (
+        diagnostics["research_telemetry"]["researcher"]["browser_agent_total_tokens"]
+        == 170
+    )
+    assert summary["browser_agent"] == {
+        "prompt_tokens": 140,
+        "completion_tokens": 30,
+        "total_tokens": 170,
+        "llm_invocations": 3,
+        "steps": 7,
+        "usage_missing": 0,
+    }
+    assert summary["grand_total"]["prompt_tokens"] == 25
 
 
 class _FakeMAW:
