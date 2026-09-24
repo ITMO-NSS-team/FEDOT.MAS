@@ -1,0 +1,14 @@
+# Токен доступа генерируется на машине и не должен попасть в репозиторий
+.access_token
+# Ключи провайдера
+.env
+# Экспорт сценариев: локальные прогоны, у каждого свои
+static/presets_custom.js
+# Сборка автономной копии
+fedotmas-demo.html
+fedotmas-offline.html
+# Журналы и кеш
+*.log
+__pycache__/
+*.py[cod]
+.ruff_cache/
