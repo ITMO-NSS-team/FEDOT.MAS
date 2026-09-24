@@ -1,0 +1,85 @@
+{
+  "agents": [
+    {
+      "name": "анализатор_телеметрии",
+      "instruction": "Обработать и проанализировать телеметрию насосных агрегатов (вибрация, температура подшипников, давление) для выявления признаков возможных отказов и оценки риска отказа на горизонте 30 суток.",
+      "model": "openai/gpt-4.1-mini",
+      "output_key": "анализ_телеметрии",
+      "tools": [
+        "sandbox-light"
+      ],
+      "max_output_tokens": null
+    },
+    {
+      "name": "анализатор_журнала_ремонтов",
+      "instruction": "Проанализировать журнал ремонтов насосных агрегатов для выявления закономерностей и факторов, влияющих на риск отказа агрегатов на горизонте 30 суток.",
+      "model": "openai/gpt-4.1-mini",
+      "output_key": "анализ_журнала_ремонтов",
+      "tools": [],
+      "max_output_tokens": null
+    },
+    {
+      "name": "планировщик_техобслуживания",
+      "instruction": "На основе анализа телеметрии: {анализ_телеметрии?} и истории ремонтов: {анализ_журнала_ремонтов?} сформировать план технического обслуживания насосных агрегатов с приоритетами, сроками и обоснованием каждого мероприятия.",
+      "model": "openai/gpt-4.1-mini",
+      "output_key": "план_техобслуживания",
+      "tools": [
+        "sandbox-light"
+      ],
+      "max_output_tokens": null
+    },
+    {
+      "name": "критик_плана",
+      "instruction": "Проверить полноту и обоснованность сформированного плана технического обслуживания: {план_техобслуживания?}. Если план неполон или содержит ошибки, вернуть рекомендации для доработки, иначе вызвать exit_loop.",
+      "model": "openai/gpt-4.1-mini",
+      "output_key": "рекомендации_к_плану",
+      "tools": [],
+      "max_output_tokens": null
+    }
+  ],
+  "pipeline": {
+    "type": "loop",
+    "agent_name": null,
+    "children": [
+      {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "parallel",
+            "agent_name": null,
+            "children": [
+              {
+                "type": "agent",
+                "agent_name": "анализатор_телеметрии",
+                "children": [],
+                "max_iterations": null
+              },
+              {
+                "type": "agent",
+                "agent_name": "анализатор_журнала_ремонтов",
+                "children": [],
+                "max_iterations": null
+              }
+            ],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "планировщик_техобслуживания",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      {
+        "type": "agent",
+        "agent_name": "критик_плана",
+        "children": [],
+        "max_iterations": null
+      }
+    ],
+    "max_iterations": 5
+  }
+}

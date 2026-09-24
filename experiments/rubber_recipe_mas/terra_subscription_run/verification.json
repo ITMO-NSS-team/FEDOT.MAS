@@ -1,0 +1,24 @@
+{
+  "status": "pass",
+  "checks": {
+    "workflow_is_mas_master_orchestrator": true,
+    "routing_model_is_exact_terra": true,
+    "configured_models_are_exact_terra": true,
+    "routing_uses_each_configured_worker_once": true,
+    "coordinator_has_numerical_tool": true,
+    "user_input_has_no_numerical_result": true,
+    "saved_input_matches_task": true,
+    "state_keys_match_config": true,
+    "final_report_key_is_absent": true,
+    "all_outputs_nonempty": true,
+    "recipe_matches_numerical_engine": true,
+    "all_point_constraints_satisfied": true,
+    "uncertainty_is_reported": true,
+    "open_data_provenance_is_reported": true,
+    "call_budget_respected": true
+  },
+  "notes": [
+    "Structural checks do not replace laboratory testing or review by a rubber technologist.",
+    "Subscription-host execution is not a LiteLLM/provider-API execution."
+  ]
+}

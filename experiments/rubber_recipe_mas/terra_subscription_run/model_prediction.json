@@ -1,0 +1,120 @@
+{
+  "request_id": "mas_tool_request",
+  "status": "constraints_satisfied",
+  "recipe": {
+    "nr_smr20_phr": 58.0,
+    "sbr1502_phr": 42.0,
+    "carbon_black_n220_phr": 60.0,
+    "zinc_oxide_phr": 5.0,
+    "stearic_acid_phr": 2.0,
+    "tmq_antioxidant_phr": 1.5,
+    "6ppd_antiozonant_phr": 1.5,
+    "process_oil_phr": 5.0,
+    "sulfur_phr": 5.0,
+    "tmtd_accelerator_phr": 2.0,
+    "reclaim_phr": 5.0
+  },
+  "predicted_properties": {
+    "thermal_conductivity_w_mk": {
+      "value": 0.45186,
+      "loocv_rmse": 0.02142,
+      "constraint_satisfied": true
+    },
+    "oil_swelling_pct_1006h": {
+      "value": 19.78792,
+      "loocv_rmse": 2.56418,
+      "constraint_satisfied": true
+    },
+    "water_swelling_pct_1006h": {
+      "value": 27.8601,
+      "loocv_rmse": 1.57623,
+      "constraint_satisfied": true
+    },
+    "specific_gravity": {
+      "value": 1.2097,
+      "loocv_rmse": 0.00876,
+      "constraint_satisfied": true
+    }
+  },
+  "validation_metrics": {
+    "thermal_conductivity_w_mk": {
+      "mae": 0.01752,
+      "rmse": 0.02142,
+      "r2": 0.98244
+    },
+    "oil_swelling_pct_1006h": {
+      "mae": 2.14347,
+      "rmse": 2.56418,
+      "r2": 0.92575
+    },
+    "water_swelling_pct_1006h": {
+      "mae": 1.15025,
+      "rmse": 1.57623,
+      "r2": 0.97033
+    },
+    "specific_gravity": {
+      "mae": 0.00715,
+      "rmse": 0.00876,
+      "r2": 0.96525
+    }
+  },
+  "domain": {
+    "inside_published_grid": true,
+    "normalized_distance_to_nearest_observation": 0.32,
+    "training_rows": 20
+  },
+  "model": {
+    "type": "degree-2 polynomial ridge surface",
+    "features": [
+      "nr_phr",
+      "carbon_black_n220_phr"
+    ],
+    "selection": "minimum constraint violation, then lower N220, then NR near requested center",
+    "coefficients": {
+      "thermal_conductivity_w_mk": [
+        0.43395715,
+        -0.16569998,
+        0.13967999,
+        -0.06905999,
+        0.00528571,
+        0.0126
+      ],
+      "oil_swelling_pct_1006h": [
+        23.18928618,
+        -11.52499885,
+        -5.38199952,
+        2.14499961,
+        2.82142777,
+        0.44999989
+      ],
+      "water_swelling_pct_1006h": [
+        31.11785759,
+        -11.18999888,
+        -5.21399953,
+        3.48599937,
+        3.11428482,
+        0.04499999
+      ],
+      "specific_gravity": [
+        1.19295536,
+        -0.0235,
+        0.05804999,
+        -0.0009,
+        0.00071429,
+        0.0106875
+      ]
+    }
+  },
+  "provenance": {
+    "doi": "10.5281/zenodo.3838695",
+    "license": "CC BY 4.0",
+    "source_rows": 20,
+    "digitized_figures": [
+      4,
+      10,
+      11,
+      14
+    ],
+    "warning": "Approximate values digitized from plots; not raw instrument data."
+  }
+}

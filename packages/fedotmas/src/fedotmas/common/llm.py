@@ -143,6 +143,11 @@ def make_llm(cfg: ModelConfig) -> BaseLlm:
     When *cfg.api_base* is set (proxy mode), replaces the default litellm
     transport with ``_ProxyClient`` so model names pass through as-is.
     """
+    from fedotmas.common.codex_cli import CodexCliLlm, is_codex_model
+
+    if is_codex_model(cfg.model):
+        return CodexCliLlm(model=cfg.model)
+
     if cfg.api_base:
         llm = LiteLlm(model=cfg.model)
         llm.llm_client = _ProxyClient(  # type: ignore
