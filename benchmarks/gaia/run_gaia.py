@@ -764,6 +764,9 @@ async def process_task(
         "difficulty": task.difficulty,
         "is_correct": is_correct,
         "session_state": {k: str(v) for k, v in state.items()},
+        "maw_config": maw.generated_config.model_dump(mode="json")
+        if maw.generated_config is not None
+        else None,
         "tokens": {
             "meta_prompt": maw.meta_prompt_tokens,
             "meta_completion": maw.meta_completion_tokens,

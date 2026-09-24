@@ -1,10 +1,45 @@
 from __future__ import annotations
 
+import re
+from unittest.mock import MagicMock
+
+import pytest
+from fedotmas.meta._helpers import format_server_descriptions
 from fedotmas.meta.maw_prompts import (
     META_AGENT_SYSTEM_PROMPT,
     PIPELINE_AGENT_SYSTEM_PROMPT,
     POOL_AGENT_SYSTEM_PROMPT,
 )
+from google.adk.utils.instructions_utils import inject_session_state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prompt_template",
+    [
+        META_AGENT_SYSTEM_PROMPT,
+        POOL_AGENT_SYSTEM_PROMPT,
+        PIPELINE_AGENT_SYSTEM_PROMPT,
+    ],
+    ids=["single-stage", "pool-stage", "pipeline-stage"],
+)
+async def test_rendered_meta_prompts_are_safe_with_empty_adk_state(prompt_template):
+    """Render the prompts through ADK's own state interpolation path."""
+    rendered = prompt_template.substitute(
+        mcp_servers_desc=format_server_descriptions(
+            {"websearch-searxng": "Search the web"}
+        ),
+        available_models="- `openai/gpt-4o`",
+    )
+    live_state_refs = re.findall(r"(?<!\{)\{(\w+)\??\}(?!\})", rendered)
+
+    assert not live_state_refs
+
+    context = MagicMock()
+    context.state = {}
+    context._invocation_context.session.state = {}
+    context._invocation_context.artifact_service = None
+    assert await inject_session_state(rendered, context) == rendered
 
 
 def test_single_stage_prompt_uses_task_driven_team_size_and_specialization():

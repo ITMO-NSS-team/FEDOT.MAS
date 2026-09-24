@@ -141,13 +141,13 @@ Use single curly braces around the state key name. In the examples below, angle 
     },
     {
       "name": "dependent_researcher",
-      "instruction": "Use the identifier {record_identifier} to retrieve the requested record details and report the supporting source.",
+      "instruction": "Use the identifier <record_identifier> to retrieve the requested record details and report the supporting source.",
       "output_key": "record_details",
       "model": "<model>"
     },
     {
       "name": "verifier",
-      "instruction": "Verify the identifier {record_identifier} and details {record_details} against their cited sources, then report any mismatch.",
+      "instruction": "Verify the identifier <record_identifier> and details <record_details> against their cited sources, then report any mismatch.",
       "output_key": "verified_result",
       "model": "<model>"
     }
@@ -181,7 +181,7 @@ Use single curly braces around the state key name. In the examples below, angle 
     },
     {
       "name": "synthesizer_verifier",
-      "instruction": "Compare {source_A_findings} and {source_B_findings}, synthesize the supported result, and identify any disagreement or unsupported claim.",
+      "instruction": "Compare <source_A_findings> and <source_B_findings>, synthesize the supported result, and identify any disagreement or unsupported claim.",
       "output_key": "verified_synthesis",
       "model": "<model>"
     }

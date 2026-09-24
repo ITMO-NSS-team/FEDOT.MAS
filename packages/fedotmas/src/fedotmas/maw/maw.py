@@ -4,15 +4,15 @@ from typing import Literal
 
 from google.adk.agents.base_agent import BaseAgent
 
-from fedotmas.common.logging import get_logger
 from fedotmas._settings import resolve_model_config, validate_model_name
+from fedotmas.common.logging import get_logger
 from fedotmas.core.base import BaseMAS
 from fedotmas.maw.builder import _STATE_REF_RE, build
 from fedotmas.maw.models import AgentPoolConfig, MAWAgentConfig, MAWConfig
 from fedotmas.meta._result import MetaAgentResult
-from fedotmas.meta.maw_single_stage import generate_pipeline_config
 from fedotmas.meta.maw_pipeline_stage import PipelineGenerator
 from fedotmas.meta.maw_pool_stage import PoolGenerator
+from fedotmas.meta.maw_single_stage import generate_pipeline_config
 
 _log = get_logger("fedotmas.maw")
 
@@ -42,6 +42,12 @@ class MAW(BaseMAS[MAWConfig]):
     def __init__(self, *, two_stage: bool = True, **kwargs) -> None:
         super().__init__(**kwargs)
         self._two_stage = two_stage
+        self._generated_config: MAWConfig | None = None
+
+    @property
+    def generated_config(self) -> MAWConfig | None:
+        """The most recently generated pipeline config, if any."""
+        return self._generated_config
 
     async def generate_config(
         self,
@@ -115,6 +121,7 @@ class MAW(BaseMAS[MAWConfig]):
         _drop_generated_token_budgets(config)
         if existing_agents is not None:
             config = _restore_external_agents(config, existing_agents)
+        self._generated_config = config
         _log.info(
             "Config generated | agents={} pipeline_type={}",
             len(config.agents),

@@ -98,14 +98,26 @@ def _instruction_provider(
     instruction: str,
     agent_name: str,
     state_keys: frozenset[str] | None = None,
+    output_key: str | None = None,
 ):
-    """Resolve state refs at call time, naming the ones that came back empty."""
+    """Resolve state refs at call time, naming missing inputs and safe self refs."""
 
     async def provide(readonly_context: ReadonlyContext) -> str:
         state = readonly_context.state
         text = instruction
+        if output_key is not None and _is_blank(state.get(output_key)):
+            marker = (
+                f'[No previous output for "{output_key}" exists yet. Create the '
+                "initial result; later loop iterations will receive your previous "
+                "output here.]"
+            )
+            for ref, key in {
+                (m.group(0), m.group(1)) for m in _STATE_REF_RE.finditer(text)
+            }:
+                if key == output_key:
+                    text = text.replace(ref, marker)
         for ref, key in {
-            (m.group(0), m.group(1)) for m in _STATE_REF_RE.finditer(instruction)
+            (m.group(0), m.group(1)) for m in _STATE_REF_RE.finditer(text)
         }:
             # Only a key some step produces can be *missing*; anything else is
             # a literal the task carried in.
@@ -249,6 +261,7 @@ def _build_llm_agent(
             instruction_text,
             cfg.name,
             state_keys - {cfg.output_key} if state_keys is not None else None,
+            output_key=cfg.output_key,
         )
         if _STATE_REF_RE.search(instruction_text)
         else instruction_text

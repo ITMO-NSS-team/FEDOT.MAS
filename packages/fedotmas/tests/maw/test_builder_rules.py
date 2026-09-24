@@ -502,6 +502,31 @@ class TestMissingInputIsNamed:
         assert 'MISSING INPUT "compound_research"' not in text
         assert 'MISSING INPUT "source_data"' in text
 
+    @pytest.mark.asyncio
+    async def test_first_self_reference_is_safe_and_later_reads_previous_output(self):
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="writer",
+                instruction="Refine {draft}",
+                output_key="draft",
+                model="openai/gpt-4o",
+            ),
+            mcp_registry=None,
+            worker_models=None,
+            state_keys=frozenset({"user_query", "draft"}),
+            autonomous=False,
+        )
+
+        first_iteration = await agent.instruction(_readonly_context({}))
+        second_iteration = await agent.instruction(
+            _readonly_context({"draft": "the previous draft"})
+        )
+
+        assert 'No previous output for "draft" exists yet' in first_iteration
+        assert "MISSING INPUT" not in first_iteration
+        assert "Refine the previous draft" in second_iteration
+        assert "No previous output" not in second_iteration
+
 
 class TestInstructionProviderIsOnlyUsedWhenNeeded:
     def test_agent_uses_explicit_state_instead_of_accumulated_history(self):
