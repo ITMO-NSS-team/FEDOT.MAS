@@ -15,6 +15,8 @@ from sampo_phase_6 import (
     TASK,
     BatchTrace,
     _find_tool_error,
+    labels,
+    qualify_trace,
     assert_neutral_manual_inputs,
     manual_input_audit_text,
 )
@@ -187,3 +189,112 @@ def test_mcp_error_result_records_only_the_conflicting_assigned_ids() -> None:
         message,
     )
     assert trace.conflicting_rewrites == ["410"]
+
+
+def _valid_rows(ids: list[str]) -> list[dict[str, str]]:
+    allowed = labels()
+    return [
+        {
+            "example_id": example_id,
+            "top_1": allowed[0],
+            "top_2": allowed[1],
+            "top_3": allowed[2],
+        }
+        for example_id in ids
+    ]
+
+
+def test_durable_full_coverage_ends_invocation_before_an_extra_model_call(monkeypatch) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    import sampo_phase_6
+
+    ids = ["10477"]
+    trace = BatchTrace(ids, 0, "phase6_test_terminal")
+    trace.model_calls.append({"agent": "worker", "prompt_tokens": 17, "completion_tokens": 5})
+    trace.tool_calls.append({"kind": "worker_call", "name": "worker"})
+    trace.tool_calls.append({"kind": "mcp_tool", "name": "save_ranked_top3"})
+    monkeypatch.setattr(sampo_phase_6, "read_stored", lambda _: _valid_rows(ids))
+    invocation = SimpleNamespace(invocation_id="invocation_terminal", end_invocation=False)
+    event = SimpleNamespace(partial=False, get_function_responses=lambda: [])
+
+    asyncio.run(trace.on_event_callback(invocation_context=invocation, event=event))
+
+    assert trace.terminal is True
+    assert trace.terminal_reason == "assigned_batch_complete"
+    assert invocation.end_invocation is True
+    assert trace.terminal_snapshot == {
+        "model_calls": 1,
+        "prompt_tokens": 17,
+        "completion_tokens": 5,
+        "worker_delegations": 1,
+        "mcp_tool_calls": 1,
+    }
+
+
+def test_completed_batch_suppresses_31st_model_budget_failure(monkeypatch) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    import sampo_phase_6
+
+    ids = ["10477"]
+    trace = BatchTrace(ids, 0, "phase6_test_terminal_budget")
+    trace.model_request_attempts = LIMITS["max_model_calls"]
+    monkeypatch.setattr(sampo_phase_6, "read_stored", lambda _: _valid_rows(ids))
+    invocation = SimpleNamespace(invocation_id="invocation_budget", end_invocation=False)
+    callback_context = SimpleNamespace(get_invocation_context=lambda: invocation)
+
+    response = asyncio.run(
+        trace.before_model_callback(
+            callback_context=callback_context,
+            llm_request=SimpleNamespace(model="openai/gpt-5-mini"),
+        )
+    )
+
+    assert response is not None
+    assert trace.terminal is True
+    assert trace.terminal_reason == "assigned_batch_complete"
+    assert invocation.end_invocation is True
+    assert "model_call_limit" not in trace.failures
+    assert trace.blocked_model_attempts == 0
+    assert trace.terminal_suppressed_model_attempts == 1
+
+
+def test_rejected_conflict_is_telemetry_when_final_batch_is_valid(monkeypatch) -> None:
+    import sampo_phase_6
+
+    ids = ["410"]
+    trace = BatchTrace(ids, 0, "phase6_test_recovered_conflict")
+    monkeypatch.setattr(sampo_phase_6, "read_stored", lambda _: _valid_rows(ids))
+    trace._record_tool_error(
+        "save_ranked_top3",
+        {"rankings": [{"example_id": "410", "candidate_indices": [1, 0, 2]}]},
+        "Prediction conflicts with an existing stored top-3 for IDs: 410",
+    )
+
+    result = qualify_trace(trace, ids, runtime_seconds=1.0)
+
+    assert result["passed"] is True
+    assert result["failures"] == []
+    assert result["conflicting_rewrites"] == ["410"]
+    assert result["tool_errors"]
+
+
+def test_rejected_unknown_artifact_does_not_trigger_integrity_failure(monkeypatch) -> None:
+    import sampo_phase_6
+
+    ids = ["10477"]
+    trace = BatchTrace(ids, 0, "phase6_test_unknown_artifact")
+    monkeypatch.setattr(sampo_phase_6, "read_stored", lambda _: _valid_rows(ids))
+    trace._record_tool_call(
+        "inspect_candidates",
+        {"artifact_id": "hallucinated-artifact", "example_ids": ids},
+    )
+
+    result = qualify_trace(trace, ids, runtime_seconds=1.0)
+
+    assert trace.prepared_artifacts == set()
+    assert "artifact_missing" not in result["failures"]
+    assert result["passed"] is True

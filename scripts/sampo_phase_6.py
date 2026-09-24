@@ -231,6 +231,7 @@ class BatchTrace(BasePlugin):
         self.containment_violations: list[dict[str, Any]] = []
         self.idempotent_write_retries: list[str] = []
         self.conflicting_rewrites: list[str] = []
+        self.successful_conflicting_rewrites: list[str] = []
         self.write_intents: dict[str, tuple[str, str, str]] = {}
         self.pending_write_intents: dict[str, dict[str, tuple[str, str, str]]] = {}
         self.pending_tool_names: dict[str, str] = {}
@@ -238,11 +239,22 @@ class BatchTrace(BasePlugin):
         self.prepared_artifacts: set[str] = set()
         self.blocked_reason: str | None = None
         self.terminal = False
+        self.terminal_reason: str | None = None
+        self.terminal_snapshot: dict[str, int] | None = None
+        self.terminal_suppressed_model_attempts = 0
+        self.terminal_suppressed_tool_attempts = 0
+        self.invocation_contexts: dict[str, InvocationContext] = {}
 
     async def before_agent_callback(self, *, agent, callback_context):
         self.agents.append(agent.name)
 
     async def before_model_callback(self, *, callback_context, llm_request):
+        invocation_context = self._context_from(callback_context)
+        if self._durable_batch_complete():
+            self._mark_terminal(invocation_context)
+        if self.terminal:
+            self.terminal_suppressed_model_attempts += 1
+            return self._terminal_response()
         if self.blocked_reason:
             self.blocked_model_attempts += 1
             return self._budget_response(self.blocked_reason)
@@ -271,6 +283,16 @@ class BatchTrace(BasePlugin):
             turn_complete=True,
         )
 
+    @staticmethod
+    def _terminal_response() -> LlmResponse:
+        return LlmResponse(
+            content=Content(
+                role="model",
+                parts=[Part(text="The assigned batch is complete.")],
+            ),
+            turn_complete=True,
+        )
+
     async def after_model_callback(
         self, *, callback_context, llm_response: LlmResponse
     ):
@@ -291,6 +313,12 @@ class BatchTrace(BasePlugin):
             return self._budget_response(self.blocked_reason)
 
     async def before_tool_callback(self, *, tool, tool_args, tool_context):
+        invocation_context = self._context_from(tool_context)
+        if self._durable_batch_complete():
+            self._mark_terminal(invocation_context)
+        if self.terminal:
+            self.terminal_suppressed_tool_attempts += 1
+            return {"status": "assigned_batch_complete"}
         if self.blocked_reason:
             self.blocked_tool_attempts += 1
             return {"error": f"Phase 6 execution limit reached ({self.blocked_reason}). Stop execution."}
@@ -327,7 +355,18 @@ class BatchTrace(BasePlugin):
                 self.idempotent_write_retries.append(example_id)
             for example_id in stored_ids | identical_ids:
                 if example_id in intents:
+                    previous = self.write_intents.get(example_id)
+                    if previous is not None and previous != intents[example_id]:
+                        self.successful_conflicting_rewrites.append(example_id)
                     self.write_intents[example_id] = intents[example_id]
+        if error is None:
+            artifact_id = None
+            if name == "prepare_candidates":
+                artifact_id = _find_artifact_id(result)
+            elif name in {"inspect_candidates", "save_default_top3", "save_ranked_top3"}:
+                artifact_id = (tool_args or {}).get("artifact_id")
+            if artifact_id:
+                self.prepared_artifacts.add(artifact_id)
 
     async def on_tool_error_callback(self, *, tool, tool_args, tool_context, error):
         name = tool.name or "unknown"
@@ -336,6 +375,7 @@ class BatchTrace(BasePlugin):
     async def on_event_callback(
         self, *, invocation_context: InvocationContext, event: Event
     ):
+        self._remember_invocation_context(invocation_context)
         if event.partial:
             return
         for function_response in event.get_function_responses():
@@ -344,9 +384,55 @@ class BatchTrace(BasePlugin):
             error = _find_tool_error(response)
             if error is not None:
                 self._record_tool_error(response_name, {}, error)
-            artifact_id = _find_artifact_id(response)
-            if artifact_id:
+            artifact_id = _find_artifact_id(response) if response_name == "prepare_candidates" else None
+            if error is None and artifact_id:
                 self.prepared_artifacts.add(artifact_id)
+        if self._durable_batch_complete():
+            self._mark_terminal(invocation_context)
+
+    @staticmethod
+    def _context_from(context: Any) -> InvocationContext | None:
+        if context is None:
+            return None
+        getter = getattr(context, "get_invocation_context", None)
+        if callable(getter):
+            try:
+                return getter()
+            except (AttributeError, RuntimeError):
+                return None
+        return getattr(context, "_invocation_context", None)
+
+    def _remember_invocation_context(self, invocation_context: InvocationContext | None) -> None:
+        if invocation_context is None:
+            return
+        key = str(getattr(invocation_context, "invocation_id", id(invocation_context)))
+        self.invocation_contexts[key] = invocation_context
+
+    def _durable_batch_complete(self) -> bool:
+        try:
+            rows = read_stored(self.run_id)
+        except (OSError, json.JSONDecodeError):
+            return False
+        return not _schema_failures(rows, sorted(self.ids))
+
+    def _mark_terminal(self, invocation_context: InvocationContext | None = None) -> None:
+        self._remember_invocation_context(invocation_context)
+        if not self.terminal:
+            self.terminal = True
+            self.terminal_reason = "assigned_batch_complete"
+            self.terminal_snapshot = {
+                "model_calls": len(self.model_calls),
+                "prompt_tokens": sum(item["prompt_tokens"] for item in self.model_calls),
+                "completion_tokens": sum(item["completion_tokens"] for item in self.model_calls),
+                "worker_delegations": sum(
+                    item.get("kind") == "worker_call" for item in self.tool_calls
+                ),
+                "mcp_tool_calls": sum(
+                    item.get("kind") != "worker_call" for item in self.tool_calls
+                ),
+            }
+        for context in self.invocation_contexts.values():
+            context.end_invocation = True
 
     def _record_tool_error(self, name: str, args: dict[str, Any], error: str) -> None:
         message = error[:1000]
@@ -406,8 +492,6 @@ class BatchTrace(BasePlugin):
                 {"tool": name, "reason": "Run ID outside assigned scope"}
             )
         artifact_id = args.get("artifact_id")
-        if artifact_id:
-            self.prepared_artifacts.add(artifact_id)
         self.tool_calls.append(
             {
                 "name": name,
@@ -593,8 +677,8 @@ def qualify_trace(trace: BatchTrace, ids: list[str], runtime_seconds: float) -> 
     rows = read_stored(trace.run_id)
     failures = list(trace.failures)
     failures.extend(_schema_failures(rows, ids))
-    if trace.conflicting_rewrites:
-        failures.append("conflicting_rewrite_unresolved")
+    if trace.successful_conflicting_rewrites:
+        failures.append("conflicting_write_succeeded")
     if runtime_seconds >= LIMITS["timeout_seconds"]:
         failures.append("runtime_limit")
     failures.extend(_artifact_integrity(trace))
@@ -606,8 +690,12 @@ def qualify_trace(trace: BatchTrace, ids: list[str], runtime_seconds: float) -> 
         "model_calls": len(trace.model_calls),
         "model_call_attempts": trace.model_request_attempts,
         "blocked_model_attempts": trace.blocked_model_attempts,
+        "terminal_suppressed_model_attempts": trace.terminal_suppressed_model_attempts,
         "tool_calls": len(trace.tool_calls),
         "blocked_tool_attempts": trace.blocked_tool_attempts,
+        "terminal_suppressed_tool_attempts": trace.terminal_suppressed_tool_attempts,
+        "mcp_tool_calls": sum(item.get("kind") != "worker_call" for item in trace.tool_calls),
+        "worker_delegations": sum(item.get("kind") == "worker_call" for item in trace.tool_calls),
         "prompt_tokens": sum(item["prompt_tokens"] for item in trace.model_calls),
         "completion_tokens": sum(item["completion_tokens"] for item in trace.model_calls),
         "max_prompt_tokens": max((item["prompt_tokens"] for item in trace.model_calls), default=0),
@@ -620,6 +708,14 @@ def qualify_trace(trace: BatchTrace, ids: list[str], runtime_seconds: float) -> 
         "batch_containment_violations": trace.containment_violations,
         "idempotent_write_retries": trace.idempotent_write_retries,
         "conflicting_rewrites": sorted(set(trace.conflicting_rewrites)),
+        "successful_conflicting_rewrites": sorted(set(trace.successful_conflicting_rewrites)),
+        "terminal": trace.terminal,
+        "terminal_reason": trace.terminal_reason,
+        "model_calls_at_completion": (trace.terminal_snapshot or {}).get("model_calls"),
+        "prompt_tokens_at_completion": (trace.terminal_snapshot or {}).get("prompt_tokens"),
+        "completion_tokens_at_completion": (trace.terminal_snapshot or {}).get("completion_tokens"),
+        "worker_delegations_at_completion": (trace.terminal_snapshot or {}).get("worker_delegations"),
+        "mcp_tool_calls_at_completion": (trace.terminal_snapshot or {}).get("mcp_tool_calls"),
         "private_ground_truth_used": False,
         "private_ground_truth_accesses": 0,
     }

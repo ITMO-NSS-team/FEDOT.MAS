@@ -228,7 +228,7 @@ def inspect_candidates(
 
 @mcp.tool
 def save_default_top3(run_id: str, artifact_id: str, example_ids: list[str]) -> dict[str, Any]:
-    """Persist the artifact's default top-three for supplied IDs and report stored or identical IDs."""
+    """Persist the artifact's default top-three for supplied IDs. Predictions are write-once. An exact repeated prediction is an idempotent no-op; a different prediction for an already stored ID is rejected."""
     _run_id(run_id)
     data = _artifact_for_batch(artifact_id)
     if not example_ids or len(example_ids) != len(set(example_ids)):
@@ -252,7 +252,7 @@ def save_default_top3(run_id: str, artifact_id: str, example_ids: list[str]) -> 
 def save_ranked_top3(
     run_id: str, artifact_id: str, rankings: list[RankedTop3]
 ) -> dict[str, Any]:
-    """Persist caller-selected top-three indices and report stored or identical IDs."""
+    """Persist caller-selected top-three indices. Predictions are write-once. An exact repeated prediction is an idempotent no-op; a different prediction for an already stored ID is rejected."""
     _run_id(run_id)
     data = _artifact_for_batch(artifact_id)
     decisions = [ranking.model_dump() for ranking in rankings]

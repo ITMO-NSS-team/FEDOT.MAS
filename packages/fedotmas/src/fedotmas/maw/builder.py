@@ -245,7 +245,11 @@ def _build_llm_agent(
     # Decided on the final text: a reference anywhere in it, framing included,
     # has to reach the provider rather than ADK's plain-string path.
     instruction = (
-        _instruction_provider(instruction_text, cfg.name, state_keys)
+        _instruction_provider(
+            instruction_text,
+            cfg.name,
+            state_keys - {cfg.output_key} if state_keys is not None else None,
+        )
         if _STATE_REF_RE.search(instruction_text)
         else instruction_text
     )

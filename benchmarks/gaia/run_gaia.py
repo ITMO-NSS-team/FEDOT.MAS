@@ -50,9 +50,9 @@ DEFAULT_GAIA_MCP_SERVERS = [
     "document",
     "media",
 ]
-DEFAULT_GAIA_WORKER_MODEL = "openai/gpt-5-mini"
-DEFAULT_MEDIA_MODEL = "openai/gpt-5-mini"
-DEFAULT_DOCUMENT_VISION_MODEL = "openai/gpt-5-mini"
+DEFAULT_GAIA_WORKER_MODEL = "openai/gpt-6-luna"
+DEFAULT_MEDIA_MODEL = "openai/gpt-6-luna"
+DEFAULT_DOCUMENT_VISION_MODEL = "openai/gpt-6-luna"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GAIA_WEB_SCRAPING_TOOL_NAMES = {
     "goto",
@@ -501,6 +501,7 @@ async def preflight_startup_models() -> None:
 
 
 def build_plugins(task, enable_langfuse: bool) -> list:
+    exhausted_web_agents: set[tuple[str, str]] = set()
     plugins = [
         LoggingPlugin(),
         BrowserFallbackPolicyPlugin(),
@@ -510,6 +511,7 @@ def build_plugins(task, enable_langfuse: bool) -> list:
         WebSearchLimitPlugin(
             max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 10),
             hard_fail=True,
+            exhausted_agents=exhausted_web_agents,
         ),
         WebSearchLimitPlugin(
             max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 12),
@@ -518,6 +520,7 @@ def build_plugins(task, enable_langfuse: bool) -> list:
             same_url_exempt_tool_names={"eval", "evaluate", "links", "status"},
             reject_empty_urls=True,
             hard_fail=True,
+            exhausted_agents=exhausted_web_agents,
             name="fedotmas_gaia_web_tool_limit",
         ),
         ToolErrorCircuitBreakerPlugin(
@@ -790,7 +793,13 @@ async def process_task(
     return result
 
 
-async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any:
+async def run_gaia(
+    difficulty: str,
+    split: str,
+    *,
+    enable_langfuse: bool,
+    task_ids: list[str] | None = None,
+) -> Any:
     """Run GAIA benchmark using FEDOT.MAS MAW."""
     base_log_dir = Path(__file__).resolve().parent / "gaia_logs" / f"run_{RUN_ID}"
     base_log_dir.mkdir(parents=True, exist_ok=True)
@@ -802,12 +811,25 @@ async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any
     gaia = GaiaBenchmark({"difficulty": difficulty, "split": split})
     gaia.download()
 
+    tasks = list(gaia)
+
+    if task_ids:
+        wanted = set(task_ids)
+        tasks = [task for task in tasks if task.task_id in wanted]
+
+        found = {task.task_id for task in tasks}
+        missing = wanted - found
+        if missing:
+            raise ValueError(
+                f"GAIA task IDs not found in split {split!r}: {sorted(missing)}"
+            )
+
     results = []
     provider_cooldown = ProviderCooldown(
         _env_int("FEDOTMAS_GAIA_PROVIDER_ERROR_COOLDOWN_SECONDS", 300)
     )
 
-    for task in tqdm(gaia, desc="Processing GAIA tasks"):
+    for task in tqdm(tasks, desc="Processing GAIA tasks"):
         await provider_cooldown.wait_if_active()
         task_log_dir = base_log_dir / f"task_{task.task_id}"
         try:
@@ -904,6 +926,12 @@ def main():
         action="store_true",
         help="Disable Langfuse tracing for this GAIA run.",
     )
+    parser.add_argument(
+        "--task-id",
+        action="append",
+        default=None,
+        help="Run only this GAIA task_id. Can be specified multiple times.",
+    )
     args = parser.parse_args()
 
     enable_langfuse = _env_flag("GAIA_ENABLE_LANGFUSE", True) and not args.no_langfuse
@@ -912,6 +940,7 @@ def main():
             difficulty=args.difficulty,
             split=args.split,
             enable_langfuse=enable_langfuse,
+            task_ids=args.task_id,
         )
     )
 

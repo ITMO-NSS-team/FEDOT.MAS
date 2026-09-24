@@ -41,7 +41,12 @@ DEFAULT_WEB_SEARCH_LIMIT = 20
 
 
 class WebSearchLimitPlugin(BasePlugin):
-    """Limit web-search tool calls per agent within one ADK run."""
+    """Limit web-search calls per agent within one ADK run.
+
+    Exhaustion returns a tool error for that agent to finalize from current
+    evidence. The legacy ``hard_fail`` argument is accepted but no longer raises,
+    because exceptions abort ADK's whole parallel tool-call batch.
+    """
 
     def __init__(
         self,
@@ -54,17 +59,17 @@ class WebSearchLimitPlugin(BasePlugin):
         reject_empty_urls: bool = False,
         dedupe_identical_calls: bool = True,
         hard_fail: bool = False,
+        exhausted_agents: set[tuple[str, str]] | None = None,
         name: str = "fedotmas_web_search_limit",
     ) -> None:
         if max_calls_per_agent < 1:
             raise ValueError("max_calls_per_agent must be >= 1")
         super().__init__(name=name)
         self.max_calls_per_agent = max_calls_per_agent
+        # Retained for constructor compatibility. Raising from this callback
+        # aborts ADK's entire parallel tool-call batch, so budget exhaustion is
+        # always returned as a result for the affected tool call.
         self.hard_fail = hard_fail
-        # When True, every matched web/search tool call is blocked with a soft
-        # "answer now" result (never raises). Set during the post-budget
-        # finalization turn so the agent stops exploring and commits an answer.
-        self.finalizing = False
         self.count_unique_urls = count_unique_urls
         self.ignore_local_urls = ignore_local_urls
         self.reject_empty_urls = reject_empty_urls
@@ -78,6 +83,9 @@ class WebSearchLimitPlugin(BasePlugin):
         self._counts: dict[tuple[str, str], int] = {}
         self._seen_calls: set[tuple[str, str, str]] = set()
         self._seen_urls: set[tuple[str, str, str]] = set()
+        self._exhausted_agents = (
+            exhausted_agents if exhausted_agents is not None else set()
+        )
 
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
@@ -88,6 +96,8 @@ class WebSearchLimitPlugin(BasePlugin):
         }
         self._seen_calls = {key for key in self._seen_calls if key[0] != session_id}
         self._seen_urls = {key for key in self._seen_urls if key[0] != session_id}
+        stale_agents = {key for key in self._exhausted_agents if key[0] == session_id}
+        self._exhausted_agents.difference_update(stale_agents)
         return None
 
     async def before_tool_callback(
@@ -100,17 +110,13 @@ class WebSearchLimitPlugin(BasePlugin):
         if not self._is_web_search_tool(tool):
             return None
 
-        if self.finalizing:
-            return _limit_result(
-                "Search/exploration budget exhausted and tools are now disabled. "
-                "Do not call web, browser, or search tools. Provide your best final "
-                "answer from the evidence already gathered."
-            )
-
         session_id = tool_context._invocation_context.session.id
         agent_name = tool_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
         tool_name = strip_tool_name_prefix(tool.name).lower()
         key = (session_id, agent_name)
+
+        if key in self._exhausted_agents:
+            return _finalize_result(agent_name)
 
         url = _normalise_url(tool_args.get("url"))
         if self.reject_empty_urls and "url" in tool_args and not url:
@@ -169,9 +175,12 @@ class WebSearchLimitPlugin(BasePlugin):
                 f"'{agent_name}': max {self.max_calls_per_agent} calls per run."
             )
             _log.warning(message)
-            if self.hard_fail:
-                raise WebSearchLimitExceeded(message)
-            return _limit_result(message)
+            self._exhausted_agents.add(key)
+            return _limit_result(
+                f"{message} This agent's web/search budget is exhausted. Stop "
+                "exploration and provide your best final answer from the evidence "
+                "already gathered."
+            )
 
         self._counts[key] = used + 1
         if call_key is not None:
@@ -200,11 +209,19 @@ class WebSearchLimitPlugin(BasePlugin):
 
 
 class WebSearchLimitExceeded(RuntimeError):
-    """Raised when a hard web-search/tool budget is exhausted."""
+    """Legacy exception type for web-search/tool budget exhaustion."""
 
 
 def _limit_result(message: str) -> dict[str, Any]:
     return {"isError": True, "error": message}
+
+
+def _finalize_result(agent_name: str) -> dict[str, Any]:
+    return _limit_result(
+        f"Web/search tools are disabled for agent '{agent_name}' because its budget "
+        "is exhausted. Stop exploration and provide your best final answer from "
+        "the evidence already gathered."
+    )
 
 
 def _normalise_url(value: Any) -> str:

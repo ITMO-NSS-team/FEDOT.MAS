@@ -281,7 +281,9 @@ async def smoke(batch_dir: Path, selected: int) -> dict[str, Any]:
         "single_agent": [],
         "fedotmas_generated": [],
     }
-    for offset in (0, 20, 40):
+    stopped_after_incomplete_generated_batch = False
+    planned_offsets = (0, 20, 40)
+    for offset in planned_offsets:
         ids = assigned_ids(offset, BATCH_SIZE)
         comparisons["deterministic_tfidf"].append(deterministic_baseline(offset, BATCH_SIZE))
         single_id = f"{run_prefix}_single_{offset:04d}"
@@ -291,16 +293,25 @@ async def smoke(batch_dir: Path, selected: int) -> dict[str, Any]:
         comparisons["single_agent"].append(
             await run_single_agent_batch(ids, offset, single_id)
         )
-        comparisons["fedotmas_generated"].append(
-            await run_generated_batch(config, ids, offset, mas_id)
-        )
+        generated_result = await run_generated_batch(config, ids, offset, mas_id)
+        comparisons["fedotmas_generated"].append(generated_result)
+        if not generated_result["passed"]:
+            stopped_after_incomplete_generated_batch = True
+            break
 
     report = {
         "selected_config_index": selected,
         "selected_architecture": audit["generated_mas_configs"][selected - 1],
         "worker_model": WORKER_MODEL,
-        "batch_offsets": [0, 20, 40],
+        "planned_batch_offsets": list(planned_offsets),
+        "batch_offsets": [item["offset"] for item in comparisons["deterministic_tfidf"]],
         "batch_size": BATCH_SIZE,
+        "stopped_after_incomplete_generated_batch": stopped_after_incomplete_generated_batch,
+        "stop_reason": (
+            "generated_mas_incomplete_assigned_batch"
+            if stopped_after_incomplete_generated_batch
+            else None
+        ),
         "systems": comparisons,
         "phase5_reference": {
             "status": "not_run_in_phase6_smoke",

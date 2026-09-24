@@ -484,6 +484,28 @@ class TestMissingInputIsNamed:
         assert 'MISSING INPUT "calc"' in text
         assert 'MISSING INPUT "raw_data"' not in text
 
+    @pytest.mark.asyncio
+    async def test_agent_output_key_is_not_a_required_upstream_input(self):
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="compound_finder",
+                instruction="Use {compound_research?} and {source_data?}.",
+                output_key="compound_research",
+                model="openai/gpt-4o",
+            ),
+            mcp_registry=None,
+            worker_models=None,
+            state_keys=frozenset(
+                {"user_query", "compound_research", "source_data"}
+            ),
+            autonomous=False,
+        )
+
+        text = await agent.instruction(_readonly_context({}))
+
+        assert 'MISSING INPUT "compound_research"' not in text
+        assert 'MISSING INPUT "source_data"' in text
+
 
 class TestInstructionProviderIsOnlyUsedWhenNeeded:
     def test_static_instruction_stays_a_string(self):
