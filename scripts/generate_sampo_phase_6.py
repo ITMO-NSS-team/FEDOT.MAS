@@ -1,0 +1,170 @@
+"""Generate the fixed Phase 6 config set and its pre-execution leakage audit."""
+from __future__ import annotations
+
+import asyncio
+import argparse
+import json
+from pathlib import Path
+from string import Template
+from typing import Any
+
+from fedotmas.mas.models import MASConfig
+from fedotmas.meta._adk_runner import run_meta_agent_call
+from fedotmas.meta._helpers import parse_llm_output, resolve_meta_and_workers
+from fedotmas.mcp.registry import get_server_descriptions
+
+from sampo_phase_6 import OUT_ROOT, atomic_json, assert_neutral_manual_inputs
+
+CONFIG_COUNT = 5
+
+PHASE6_ROUTING_PROMPT = Template(
+    """You design a FEDOT.MAS routing configuration for the task supplied by the user.
+
+Return one configuration containing a coordinator and a list of workers that conforms to the MASConfig schema.
+
+## FEDOT.MAS MECHANICS
+
+- The coordinator receives the task and controls execution.
+- Workers are exposed to the coordinator as call-and-return tools. A worker receives the coordinator's request and returns its response to the coordinator.
+- The coordinator may make additional worker calls after receiving a response.
+- Each worker has a name, description, instruction, model, and optional MCP server names.
+- In MASConfig, a worker's tools list contains MCP server names. Assign the listed server name to a worker to give it access to that server's listed functions.
+
+## AVAILABLE MCP SERVER AND TOOLS
+
+${mcp_catalogue}
+
+## AVAILABLE WORKER MODELS
+
+${available_models}
+
+Use only the MCP server names and worker models listed above. Keep messages and returned content bounded by the limits supplied with the task. The task and tool schemas define the available data and execution constraints.
+
+Respond with only valid JSON matching MASConfig. Do not include markdown or additional text."""
+)
+
+
+def render_prompt(mcp_catalogue: str, worker_models: list[str]) -> str:
+    return PHASE6_ROUTING_PROMPT.substitute(
+        mcp_catalogue=mcp_catalogue,
+        available_models="\n".join(f"- `{model}`" for model in worker_models),
+    )
+
+
+async def generate_batch(batch_dir: Path) -> Path:
+    audit_path = batch_dir / "phase6_leakage_audit.json"
+    audit: dict[str, Any] = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert_neutral_manual_inputs(audit["manual_inputs"])
+    run_prefix = audit["run_prefix"]
+    if audit.get("generation_completed"):
+        if len(audit.get("generated_mas_configs", [])) != CONFIG_COUNT:
+            raise RuntimeError("Completed generation audit has an unexpected config count")
+        report_path = batch_dir / "generation_report.json"
+        if not report_path.exists():
+            atomic_json(
+                report_path,
+                {
+                    "batch_id": batch_dir.name,
+                    "run_prefix": run_prefix,
+                    "config_count": CONFIG_COUNT,
+                    "generation_cost": audit["generation_cost"],
+                    "audit": str(audit_path.relative_to(OUT_ROOT.parent)),
+                    "executed": False,
+                    "private_ground_truth_used": False,
+                },
+            )
+        return batch_dir
+    system_prompt = audit["manual_inputs"]["meta_system_prompt"]
+    task = audit["manual_inputs"]["task"]
+    meta_model, worker_models, temperature = resolve_meta_and_workers(
+        audit["generation_model"], audit["worker_models"], None
+    )
+    if audit.get("generated_mas_configs") or any(
+        (batch_dir / f"config_{index:02d}" / "config.json").exists()
+        for index in range(1, CONFIG_COUNT + 1)
+    ):
+        raise FileExistsError("This Phase 6 config set has already been generated")
+
+    generation_cost: list[dict[str, Any]] = []
+    configs: list[dict[str, Any]] = []
+    for index in range(1, CONFIG_COUNT + 1):
+        result = await run_meta_agent_call(
+            agent_name=f"phase6_routing_meta_agent_{index:02d}",
+            instruction=system_prompt,
+            user_message=f"TASK: {task}",
+            output_schema=MASConfig,
+            output_key="agent_system_config",
+            model=meta_model,
+            temperature=temperature,
+            max_retries=0,
+            allowed_models=[model.model for model in worker_models],
+            timeout_s=180,
+        )
+        config = parse_llm_output(result.raw_output, MASConfig)
+        config_dump = json.loads(config.model_dump_json())
+        config_dir = batch_dir / f"config_{index:02d}"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text(
+            config.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        )
+        generation_cost.append(
+            {
+                "config_index": index,
+                "prompt_tokens": result.prompt_tokens,
+                "completion_tokens": result.completion_tokens,
+                "elapsed_seconds": result.elapsed,
+            }
+        )
+        configs.append(config_dump)
+
+    # Strategy language generated by the meta-agent is deliberately retained and not audited out.
+    audit["generated_mas_configs"] = configs
+    audit["generation_cost"] = generation_cost
+    audit["generation_completed"] = True
+    audit["runtime_agent_instructions"] = [
+        {
+            "config_index": index,
+            "coordinator": config["coordinator"]["instruction"],
+            "workers": [
+                {"name": worker["name"], "instruction": worker["instruction"]}
+                for worker in config["workers"]
+            ],
+        }
+        for index, config in enumerate(configs, start=1)
+    ]
+    audit["manual_input_neutrality_asserted"] = True
+    atomic_json(audit_path, audit)
+
+    atomic_json(
+        batch_dir / "generation_report.json",
+        {
+            "batch_id": batch_dir.name,
+            "run_prefix": run_prefix,
+            "config_count": CONFIG_COUNT,
+            "generation_cost": generation_cost,
+            "audit": str(audit_path.relative_to(OUT_ROOT.parent)),
+            "executed": False,
+            "private_ground_truth_used": False,
+        },
+    )
+    return batch_dir
+
+
+async def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--batch-dir", type=Path, required=True)
+    args = parser.parse_args()
+    batch_dir = await generate_batch(args.batch_dir.resolve())
+    audit = json.loads((batch_dir / "phase6_leakage_audit.json").read_text())
+    print(json.dumps({
+        "batch_dir": str(batch_dir.relative_to(OUT_ROOT.parent)),
+        "audit_path": str((batch_dir / "phase6_leakage_audit.json").relative_to(OUT_ROOT.parent)),
+        "configs_generated": len(audit["generated_mas_configs"]),
+        "manual_input_neutrality_asserted": audit["manual_input_neutrality_asserted"],
+        "private_ground_truth_used": audit["private_ground_truth_used"],
+        "generation_cost": audit["generation_cost"],
+    }, indent=2))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
