@@ -59,7 +59,7 @@
 
   const config = {
     coordinator: {
-      name: "technology_card_master",
+      name: "мастер_оркестратор",
       description: "Мастер-оркестратор: распределяет чтение ТТК, расчёт отклонений и аудит доказательств.",
       instruction: "Зафиксируй карту, пороги и запреты из запроса. Вызови профильных агентов, передавая им исходные условия и результаты предыдущих проверок. Не придумывай нормы и не выдавай демонстрационные строки за реальные. Сформируй technology_card_audit: нормы со ссылками, правило расчёта, сводку, таблицу нарушений, интерпретацию и следующий шаг.",
       model,
@@ -69,7 +69,7 @@
     },
     workers: [
       {
-        name: "card_norm_extractor",
+        name: "эксперт_по_нормам_ттк",
         description: "Извлекает из ТТК количественные нормы и точные ссылки на их источник.",
         instruction: "Вызови read_technology_card. Верни только явно присутствующие нормы, единицы и card_ref. Проверь согласованность производительности, численности и трудоёмкости. Обязательно сохрани пометку о происхождении демонстрационных данных.",
         model,
@@ -78,7 +78,7 @@
         max_output_tokens: 12000
       },
       {
-        name: "historical_productivity_analyst",
+        name: "аналитик_исторической_выработки",
         description: "Программно сопоставляет исторические выполнения с нормой карты.",
         instruction: "Вызови audit_historical_productivity с порогами из запроса. Проверь matching_field, количество строк и расчёт fact_rate = volume / working_days. Верни все обязательные поля нарушений без добавления строк от себя.",
         model,
@@ -87,7 +87,7 @@
         max_output_tokens: 12000
       },
       {
-        name: "evidence_auditor",
+        name: "аудитор_доказательств",
         description: "Сверяет нормы, расчёты, ссылки и границы допустимой интерпретации.",
         instruction: "Независимо сверь результаты инструментов. Для каждой строки должны быть work_name, object, dates, fact_rate, norm_rate, deviation_pct и card_ref; norm_rate должен быть положительным. Проверь, что синтетические данные не названы реальными STAIRS/SAMPO.",
         model,
@@ -100,7 +100,7 @@
 
   const trace = [
     {
-      agent: "technology_card_master",
+      agent: "мастер_оркестратор",
       phase: "контракт и маршрутизация",
       tokens: 0,
       ms: 0,
@@ -108,7 +108,7 @@
       io: {instruction: config.coordinator.instruction, incoming: query, outputKey: "orchestration_contract", output: "card_norms → history_audit → evidence_check → technology_card_audit"}
     },
     {
-      agent: "card_norm_extractor",
+      agent: "эксперт_по_нормам_ттк",
       phase: "чтение ТТК",
       tokens: 0,
       ms: 0,
@@ -118,7 +118,7 @@
       io: {instruction: config.workers[0].instruction, incoming: "demo://earthworks/бурение_котлованов", outputKey: "card_norms", output: cardToolResult}
     },
     {
-      agent: "historical_productivity_analyst",
+      agent: "аналитик_исторической_выработки",
       phase: "программная проверка истории",
       tokens: 0,
       ms: 0,
@@ -128,7 +128,7 @@
       io: {instruction: config.workers[1].instruction, incoming: cardToolResult, outputKey: "history_audit", output: auditToolResult}
     },
     {
-      agent: "evidence_auditor",
+      agent: "аудитор_доказательств",
       phase: "аудит доказательств",
       tokens: 0,
       ms: 0,
@@ -136,7 +136,7 @@
       io: {instruction: config.workers[2].instruction, incoming: cardToolResult + "\n" + auditToolResult, outputKey: "evidence_check", output: "Поля и арифметика корректны; производственные выводы без первичных документов запрещены."}
     },
     {
-      agent: "technology_card_master",
+      agent: "мастер_оркестратор",
       phase: "синтез результата",
       tokens: 0,
       ms: 0,
