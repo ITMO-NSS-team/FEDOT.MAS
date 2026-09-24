@@ -49,6 +49,7 @@ GAIA_BASE_MCP_SERVERS = [
     "youtube-transcript",
     "document",
     "media",
+    "research-controller",
 ]
 DEFAULT_GAIA_WORKER_MODEL = "openai/gpt-6-luna"
 DEFAULT_MEDIA_MODEL = "openai/gpt-6-luna"

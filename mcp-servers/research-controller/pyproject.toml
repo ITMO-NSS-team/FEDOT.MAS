@@ -1,0 +1,38 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-research-controller"
+version = "0.1.0"
+description = "Stateful research loop controller MCP server"
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [ "fastmcp>=2.14.5" ]
+scripts.mcp-research-controller = "mcp_research_controller.server:main"
+
+[dependency-groups]
+dev = [ "pytest", "pytest-asyncio" ]
+
+[tool.pytest]
+ini_options.asyncio_mode = "auto"
+
+[tool.fedotmas]
+mcp.name = "research-controller"
+mcp.description = """
+Lightweight state and next-action guidance for long-horizon research. Assign it to
+research agents that may make repeated or expensive evidence-gathering calls. Use
+update_research_state periodically with new search queries, findings, evidence,
+sources_checked, unresolved_questions, failed_attempts, confidence, and remaining
+budget; send only new queries and failed-attempt events on each update. Call
+get_next_action before continuing expensive searches. It recommends
+whether to continue, change strategy, or synthesize. It does not search, browse,
+scrape, or verify sources. State is kept in memory for the lifetime of this MCP
+process; use a stable, distinct research_id for each workstream.
+"""
+mcp.tags = [ "research", "planning", "state" ]

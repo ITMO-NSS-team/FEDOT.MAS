@@ -68,6 +68,11 @@ def test_gaia_default_mcp_servers_include_web_task_tools_and_light_sandbox(
     assert "download" in servers
     assert "youtube-transcript" in servers
     assert "browser-agent" in servers
+    assert "research-controller" in servers
+
+    registry = _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
+    assert "research-controller" in registry
+    assert "get_next_action" in registry["research-controller"].description
 
 
 def test_gaia_uses_full_sandbox_when_e2b_key_is_set(monkeypatch: pytest.MonkeyPatch):

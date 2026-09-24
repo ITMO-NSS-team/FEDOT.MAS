@@ -1,0 +1,1 @@
+"""Stateful research loop guidance."""
