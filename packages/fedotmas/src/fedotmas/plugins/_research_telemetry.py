@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import defaultdict
 from typing import Any
@@ -14,7 +15,26 @@ from google.adk.tools.tool_context import ToolContext
 from fedotmas.mcp import strip_tool_name_prefix
 from fedotmas.plugins._tool_error_circuit_breaker import (
     DUPLICATE_TOOL_CALL,
+    TOOL_CIRCUIT_OPEN,
     WEB_BUDGET_EXHAUSTED,
+)
+
+SEARCH_TOOLS = frozenset(
+    {
+        "search",
+        "web_search",
+        "web-search",
+        "websearch",
+        "google_search",
+        "searxng_search",
+    }
+)
+SCRAPING_TOOLS = frozenset(
+    {"goto", "markdown", "extract", "links", "eval", "evaluate", "screenshot", "status"}
+)
+URL_INSPECTION_TOOLS = SCRAPING_TOOLS - {"status"}
+CONTROL_CODES = frozenset(
+    {DUPLICATE_TOOL_CALL, WEB_BUDGET_EXHAUSTED, TOOL_CIRCUIT_OPEN}
 )
 
 
@@ -25,15 +45,22 @@ class ResearchTelemetry(BasePlugin):
         super().__init__(name=name)
         self._agents: dict[str, dict[str, Any]] = defaultdict(self._new_agent)
         self._queries: dict[str, set[str]] = defaultdict(set)
+        self._query_fingerprints: dict[str, set[str]] = defaultdict(set)
         self._discovered: dict[str, set[str]] = defaultdict(set)
         self._inspected: dict[str, set[str]] = defaultdict(set)
 
     @staticmethod
     def _new_agent() -> dict[str, Any]:
         return {
+            "attempted_calls": 0,
+            "blocked_calls": 0,
+            "successful_calls": 0,
+            "failed_calls": 0,
             "search_calls": 0,
+            "successful_searches": 0,
             "unique_queries": 0,
             "duplicate_blocks": 0,
+            "circuit_open_blocks": 0,
             "zero_result_searches": 0,
             "backend_errors": 0,
             "urls_discovered": 0,
@@ -47,20 +74,54 @@ class ResearchTelemetry(BasePlugin):
 
     def attempt(self, agent: str, kind: str, args: dict[str, Any]) -> None:
         metrics = self._agents[agent]
+        metrics["attempted_calls"] += 1
         if kind == "search":
             metrics["search_calls"] += 1
             query = args.get("query")
             if isinstance(query, str) and query.strip():
-                self._queries[agent].add(query.strip().casefold())
+                normalized_query = query.strip().casefold()
+                self._queries[agent].add(normalized_query)
+                self._query_fingerprints[agent].add(
+                    hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()
+                )
                 metrics["unique_queries"] = len(self._queries[agent])
         else:
             metrics["scraping_extraction_calls"] += 1
 
+    async def before_tool_callback(
+        self,
+        *,
+        tool: BaseTool,
+        tool_args: dict[str, Any],
+        tool_context: ToolContext,
+    ) -> None:
+        kind = _research_tool_kind(tool.name)
+        if kind is None:
+            return
+        agent = tool_context._invocation_context.agent.name
+        self.attempt(agent, kind, tool_args)
+
     def duplicate(self, agent: str) -> None:
-        self._agents[agent]["duplicate_blocks"] += 1
+        metrics = self._agents[agent]
+        metrics["duplicate_blocks"] += 1
+        metrics["blocked_calls"] += 1
 
     def exhausted(self, agent: str, kind: str) -> None:
-        self._agents[agent][f"{kind}_exhaustion"] += 1
+        metrics = self._agents[agent]
+        metrics[f"{kind}_exhaustion"] += 1
+        metrics["blocked_calls"] += 1
+
+    def budget_blocked(self, agent: str) -> None:
+        self._agents[agent]["blocked_calls"] += 1
+
+    def blocked(self, agent: str) -> None:
+        self._agents[agent]["blocked_calls"] += 1
+
+    def circuit_blocked(self, agent: str, tool_name: str) -> None:
+        del tool_name
+        metrics = self._agents[agent]
+        metrics["blocked_calls"] += 1
+        metrics["circuit_open_blocks"] += 1
 
     def inspected(self, agent: str, url: str) -> None:
         self._inspected[agent].add(url)
@@ -74,27 +135,39 @@ class ResearchTelemetry(BasePlugin):
         tool_context: ToolContext,
         result: dict,
     ) -> None:
-        del tool_args
-        if strip_tool_name_prefix(tool.name).lower() not in {
-            "search",
-            "web_search",
-            "web-search",
-            "websearch",
-            "google_search",
-            "searxng_search",
-        }:
+        kind = _research_tool_kind(tool.name)
+        if kind is None:
             return
         agent = tool_context._invocation_context.agent.name
-        if result.get("error_code") in {DUPLICATE_TOOL_CALL, WEB_BUDGET_EXHAUSTED}:
+        if (
+            isinstance(result.get("error_code"), str)
+            and result["error_code"] in CONTROL_CODES
+        ):
             return
         if result.get("isError") is True or result.get("error"):
-            self._agents[agent]["backend_errors"] += 1
+            metrics = self._agents[agent]
+            metrics["failed_calls"] += 1
+            if kind == "search":
+                metrics["backend_errors"] += 1
             return
+        metrics = self._agents[agent]
+        metrics["successful_calls"] += 1
+        if kind == "scraping":
+            url = tool_args.get("url")
+            if (
+                strip_tool_name_prefix(tool.name).lower() in URL_INSPECTION_TOOLS
+                and isinstance(url, str)
+                and url.strip()
+            ):
+                self.inspected(agent, url.strip())
+            return
+
         payload = _search_payload(result)
         if payload is None:
             return
         results = payload.get("results")
         if isinstance(results, list):
+            metrics["successful_searches"] += 1
             if not results:
                 self._agents[agent]["zero_result_searches"] += 1
             for item in results:
@@ -111,17 +184,12 @@ class ResearchTelemetry(BasePlugin):
         error: Exception,
     ) -> None:
         del tool_args, error
-        if strip_tool_name_prefix(tool.name).lower() in {
-            "search",
-            "web_search",
-            "web-search",
-            "websearch",
-            "google_search",
-            "searxng_search",
-        }:
-            self._agents[tool_context._invocation_context.agent.name][
-                "backend_errors"
-            ] += 1
+        kind = _research_tool_kind(tool.name)
+        if kind is not None:
+            metrics = self._agents[tool_context._invocation_context.agent.name]
+            metrics["failed_calls"] += 1
+            if kind == "search":
+                metrics["backend_errors"] += 1
 
     async def on_event_callback(
         self, *, invocation_context: InvocationContext, event: Any
@@ -134,7 +202,12 @@ class ResearchTelemetry(BasePlugin):
         metrics["completion_tokens"] += event.usage_metadata.candidates_token_count or 0
 
     def snapshot(self) -> dict[str, dict[str, Any]]:
-        return {agent: dict(metrics) for agent, metrics in self._agents.items()}
+        snapshot = {agent: dict(metrics) for agent, metrics in self._agents.items()}
+        for agent, metrics in snapshot.items():
+            metrics["_query_fingerprints"] = sorted(self._query_fingerprints[agent])
+            metrics["_discovered_urls"] = sorted(self._discovered[agent])
+            metrics["_inspected_urls"] = sorted(self._inspected[agent])
+        return snapshot
 
 
 def _search_payload(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -158,4 +231,14 @@ def _search_payload(result: dict[str, Any]) -> dict[str, Any] | None:
                     found = _search_payload(value)
                     if found is not None:
                         return found
+    return None
+
+
+def _research_tool_kind(name: str) -> str | None:
+    normalized = strip_tool_name_prefix(name).lower()
+    if normalized in SEARCH_TOOLS:
+        return "search"
+    short_name = normalized.rsplit("_", 1)[-1]
+    if normalized in SCRAPING_TOOLS or short_name in SCRAPING_TOOLS:
+        return "scraping"
     return None

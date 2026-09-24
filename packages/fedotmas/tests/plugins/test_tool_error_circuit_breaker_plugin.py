@@ -3,9 +3,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from fedotmas.plugins import ToolErrorCircuitBreakerPlugin, ToolErrorCircuitOpen
+from fedotmas.plugins import ToolErrorCircuitBreakerPlugin
 from fedotmas.plugins._tool_error_circuit_breaker import (
     DUPLICATE_TOOL_CALL,
+    TOOL_CIRCUIT_OPEN,
     WEB_BUDGET_EXHAUSTED,
 )
 
@@ -56,13 +57,19 @@ class TestToolErrorCircuitBreakerPlugin:
             result={"isError": True, "error": "OperationTimedout: timeout"},
         )
 
-        with pytest.raises(ToolErrorCircuitOpen, match="OperationTimedout"):
-            await plugin.after_tool_callback(
-                tool=tool,
-                tool_args={},
-                tool_context=ctx,
-                result={"isError": True, "error": "OperationTimedout: timeout"},
-            )
+        await plugin.after_tool_callback(
+            tool=tool,
+            tool_args={},
+            tool_context=ctx,
+            result={"isError": True, "error": "OperationTimedout: timeout"},
+        )
+
+        control = await plugin.before_tool_callback(
+            tool=tool, tool_args={}, tool_context=ctx
+        )
+        assert control["error_code"] == TOOL_CIRCUIT_OPEN
+        assert "OperationTimedout" in control["error"]
+        assert set(plugin._open_circuits) == {("s1", "researcher", "goto")}
 
     @pytest.mark.asyncio
     async def test_opens_on_total_agent_tool_errors(self):
@@ -79,13 +86,17 @@ class TestToolErrorCircuitBreakerPlugin:
             result={"isError": True, "error": "OperationTimedout: timeout"},
         )
 
-        with pytest.raises(ToolErrorCircuitOpen, match="2 tool errors"):
-            await plugin.on_tool_error_callback(
-                tool=_tool("markdown"),
-                tool_args={},
-                tool_context=ctx,
-                error=RuntimeError("CouldntResolveHost"),
-            )
+        await plugin.on_tool_error_callback(
+            tool=_tool("markdown"),
+            tool_args={},
+            tool_context=ctx,
+            error=RuntimeError("CouldntResolveHost"),
+        )
+        control = await plugin.before_tool_callback(
+            tool=_tool("markdown"), tool_args={}, tool_context=ctx
+        )
+        assert control["error_code"] == TOOL_CIRCUIT_OPEN
+        assert "2 tool failures" in control["error"]
 
     @pytest.mark.asyncio
     async def test_counts_are_per_agent(self):
@@ -193,48 +204,90 @@ class TestRescuedAndControlFlowResults:
     async def test_message_text_alone_does_not_trigger_control_flow_exemption(self):
         plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)
 
-        with pytest.raises(ToolErrorCircuitOpen):
-            await plugin.after_tool_callback(
-                tool=_tool("search"),
-                tool_args={},
-                tool_context=_tool_context(),
-                result={
-                    "isError": True,
-                    "error": f"{WEB_BUDGET_EXHAUSTED}: unrelated tool failure",
-                },
-            )
+        await plugin.after_tool_callback(
+            tool=_tool("search"),
+            tool_args={},
+            tool_context=_tool_context(),
+            result={
+                "isError": True,
+                "error": f"{WEB_BUDGET_EXHAUSTED}: unrelated tool failure",
+            },
+        )
+        assert plugin._open_circuits
 
     @pytest.mark.asyncio
     async def test_an_unrescued_error_still_counts(self):
         plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)
 
-        with pytest.raises(ToolErrorCircuitOpen):
-            await plugin.after_tool_callback(
-                tool=_tool("extract"),
-                tool_args={},
-                tool_context=_tool_context(),
-                result={"isError": True, "meta": {}, "content": []},
-            )
+        await plugin.after_tool_callback(
+            tool=_tool("extract"),
+            tool_args={},
+            tool_context=_tool_context(),
+            result={"isError": True, "meta": {}, "content": []},
+        )
+        assert plugin._open_circuits
 
     @pytest.mark.asyncio
     async def test_structured_backend_error_counts(self):
         plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)
-        with pytest.raises(ToolErrorCircuitOpen):
-            await plugin.after_tool_callback(
-                tool=_tool("search"),
-                tool_args={},
-                tool_context=_tool_context(),
-                result={"error": {"type": "BackendUnavailable", "message": "down"}},
-            )
+        await plugin.after_tool_callback(
+            tool=_tool("search"),
+            tool_args={},
+            tool_context=_tool_context(),
+            result={"error": {"type": "BackendUnavailable", "message": "down"}},
+        )
+        assert plugin._open_circuits
 
     @pytest.mark.asyncio
     async def test_a_falsy_marker_does_not_excuse_the_error(self):
         plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)
 
-        with pytest.raises(ToolErrorCircuitOpen):
-            await plugin.after_tool_callback(
-                tool=_tool("extract"),
-                tool_args={},
-                tool_context=_tool_context(),
-                result={"isError": True, "meta": {"fedotmas/rescued": False}},
-            )
+        await plugin.after_tool_callback(
+            tool=_tool("extract"),
+            tool_args={},
+            tool_context=_tool_context(),
+            result={"isError": True, "meta": {"fedotmas/rescued": False}},
+        )
+        assert plugin._open_circuits
+
+    @pytest.mark.asyncio
+    async def test_open_circuit_is_scoped_to_agent_and_tool_and_ignores_control(self):
+        plugin = ToolErrorCircuitBreakerPlugin(max_same_tool_error_type=1)
+        tool = _tool("search")
+        await plugin.after_tool_callback(
+            tool=tool,
+            tool_args={},
+            tool_context=_tool_context(agent_name="researcher"),
+            result={"isError": True, "error": "BackendUnavailable: down"},
+        )
+
+        blocked = await plugin.before_tool_callback(
+            tool=tool,
+            tool_args={},
+            tool_context=_tool_context(agent_name="researcher"),
+        )
+        sibling_agent = await plugin.before_tool_callback(
+            tool=tool,
+            tool_args={},
+            tool_context=_tool_context(agent_name="sibling"),
+        )
+        sibling_tool = await plugin.before_tool_callback(
+            tool=_tool("goto"),
+            tool_args={},
+            tool_context=_tool_context(agent_name="researcher"),
+        )
+        await plugin.after_tool_callback(
+            tool=tool,
+            tool_args={},
+            tool_context=_tool_context(agent_name="researcher"),
+            result=blocked,
+        )
+
+        assert blocked["error_code"] == TOOL_CIRCUIT_OPEN
+        assert sibling_agent is None
+        assert sibling_tool is None
+        assert plugin._total_errors[("s1", "researcher")] == 1
+        assert (
+            plugin._pattern_errors[("s1", "researcher", "search", "BackendUnavailable")]
+            == 1
+        )

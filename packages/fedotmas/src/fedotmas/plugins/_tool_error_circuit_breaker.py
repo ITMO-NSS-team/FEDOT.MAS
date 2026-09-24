@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from google.adk.plugins import BasePlugin
 from google.adk.runners import InvocationContext
@@ -8,6 +8,10 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 
 from fedotmas.common.logging import get_logger
+from fedotmas.mcp import strip_tool_name_prefix
+
+if TYPE_CHECKING:
+    from fedotmas.plugins._research_telemetry import ResearchTelemetry
 
 _log = get_logger("fedotmas.plugins.tool_error_circuit_breaker")
 
@@ -24,20 +28,22 @@ RESCUED_META_KEY = "fedotmas/rescued"
 # is exhausted. It is a blocked call, not a failure of the underlying tool.
 WEB_BUDGET_EXHAUSTED = "WEB_BUDGET_EXHAUSTED"
 DUPLICATE_TOOL_CALL = "DUPLICATE_TOOL_CALL"
+TOOL_CIRCUIT_OPEN = "TOOL_CIRCUIT_OPEN"
 
 
 class ToolErrorCircuitOpen(RuntimeError):
-    """Raised when repeated tool failures trip a circuit breaker."""
+    """Legacy exception retained for import compatibility; circuits are local."""
 
 
 class ToolErrorCircuitBreakerPlugin(BasePlugin):
-    """Abort runs that repeatedly hit tool errors for the same agent/tool pattern."""
+    """Open a local agent/tool circuit after repeated errors."""
 
     def __init__(
         self,
         *,
         max_errors_per_agent: int = 10,
         max_same_tool_error_type: int = 3,
+        telemetry: ResearchTelemetry | None = None,
         name: str = "fedotmas_tool_error_circuit_breaker",
     ) -> None:
         if max_errors_per_agent < 1:
@@ -47,8 +53,10 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         super().__init__(name=name)
         self.max_errors_per_agent = max_errors_per_agent
         self.max_same_tool_error_type = max_same_tool_error_type
+        self.telemetry = telemetry
         self._total_errors: dict[tuple[str, str], int] = {}
         self._pattern_errors: dict[tuple[str, str, str, str], int] = {}
+        self._open_circuits: dict[tuple[str, str, str], str] = {}
 
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
@@ -64,6 +72,32 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
             for key, count in self._pattern_errors.items()
             if key[0] != session_id
         }
+        self._open_circuits = {
+            key: reason
+            for key, reason in self._open_circuits.items()
+            if key[0] != session_id
+        }
+
+    async def before_tool_callback(
+        self,
+        *,
+        tool: BaseTool,
+        tool_args: dict[str, Any],
+        tool_context: ToolContext,
+    ) -> dict | None:
+        del tool_args
+        session_id, agent_name = _session_agent(tool_context)
+        circuit_key = (session_id, agent_name, tool.name)
+        reason = self._open_circuits.get(circuit_key)
+        if reason is None:
+            return None
+        if self.telemetry is not None:
+            self.telemetry.circuit_blocked(agent_name, tool.name)
+        return {
+            "isError": True,
+            "error_code": TOOL_CIRCUIT_OPEN,
+            "error": reason,
+        }
 
     async def after_tool_callback(
         self,
@@ -73,9 +107,11 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         tool_context: ToolContext,
         result: dict,
     ) -> dict | None:
-        if isinstance(result, dict) and result.get("error_code") in {
+        error_code = result.get("error_code") if isinstance(result, dict) else None
+        if isinstance(error_code, str) and error_code in {
             WEB_BUDGET_EXHAUSTED,
             DUPLICATE_TOOL_CALL,
+            TOOL_CIRCUIT_OPEN,
         }:
             return None
         if not _is_error_result(result):
@@ -108,10 +144,14 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         tool_context: ToolContext,
         error_type: str,
     ) -> None:
-        session_id = tool_context._invocation_context.session.id
-        agent_name = tool_context._invocation_context.agent.name  # ty: ignore[unresolved-attribute]
+        session_id, agent_name = _session_agent(tool_context)
         total_key = (session_id, agent_name)
-        pattern_key = (session_id, agent_name, tool.name, error_type)
+        tool_name = strip_tool_name_prefix(tool.name)
+        circuit_key = (session_id, agent_name, tool.name)
+        pattern_key = (session_id, agent_name, tool_name, error_type)
+
+        if circuit_key in self._open_circuits:
+            return
 
         total = self._total_errors.get(total_key, 0) + 1
         pattern_total = self._pattern_errors.get(pattern_key, 0) + 1
@@ -130,16 +170,19 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         )
 
         if pattern_total >= self.max_same_tool_error_type:
-            raise ToolErrorCircuitOpen(
-                "Tool error circuit opened for agent "
-                f"'{agent_name}' on tool '{tool.name}' with error type "
-                f"'{error_type}': {pattern_total} repeated failures."
+            reason = (
+                f"The {tool.name} circuit is open for this agent after "
+                f"{pattern_total} {error_type} failures. Use another tool, existing "
+                "evidence, or finish your assigned role."
             )
-        if total >= self.max_errors_per_agent:
-            raise ToolErrorCircuitOpen(
-                "Tool error circuit opened for agent "
-                f"'{agent_name}': {total} tool errors in this run."
+            self._open_circuits[circuit_key] = reason
+        elif total >= self.max_errors_per_agent:
+            reason = (
+                f"The {tool.name} circuit is open for this agent after "
+                f"{total} tool failures in this run. Use another tool, existing "
+                "evidence, or finish your assigned role."
             )
+            self._open_circuits[circuit_key] = reason
 
 
 def _is_error_result(result: dict) -> bool:
@@ -152,6 +195,14 @@ def _is_error_result(result: dict) -> bool:
         return True
     value = result.get("error")
     return "error" in result and value is not None and value != ""
+
+
+def _session_agent(tool_context: ToolContext) -> tuple[str, str]:
+    invocation = tool_context._invocation_context
+    return (
+        invocation.session.id,
+        invocation.agent.name,  # ty: ignore[unresolved-attribute]
+    )
 
 
 def _error_type_from_result(result: dict) -> str:

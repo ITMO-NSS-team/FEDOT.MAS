@@ -67,6 +67,37 @@ class TestWebSearchLimitPlugin:
         )["error_code"] == "WEB_BUDGET_EXHAUSTED"
 
     @pytest.mark.asyncio
+    async def test_shared_exhaustion_storage_is_scoped_by_budget_kind(self):
+        shared: set[tuple[str, str, str]] = set()
+        search_limit = WebSearchLimitPlugin(
+            max_calls_per_agent=1, exhausted_agents=shared
+        )
+        scrape_limit = WebSearchLimitPlugin(
+            max_calls_per_agent=1,
+            tool_names={"goto"},
+            exhausted_agents=shared,
+            budget_kind="scraping",
+        )
+        ctx = _tool_context()
+        search = _tool("search", "Search the web")
+        goto = _tool("goto")
+
+        await search_limit.before_tool_callback(
+            tool=search, tool_args={"query": "first"}, tool_context=ctx
+        )
+        blocked = await search_limit.before_tool_callback(
+            tool=search, tool_args={"query": "second"}, tool_context=ctx
+        )
+        scrape = await scrape_limit.before_tool_callback(
+            tool=goto,
+            tool_args={"url": "https://example.com/source"},
+            tool_context=ctx,
+        )
+
+        assert blocked["error_code"] == "WEB_BUDGET_EXHAUSTED"
+        assert scrape is None
+
+    @pytest.mark.asyncio
     async def test_duplicate_call_does_not_execute_backend_or_trip_breaker(self):
         calls: list[str] = []
 

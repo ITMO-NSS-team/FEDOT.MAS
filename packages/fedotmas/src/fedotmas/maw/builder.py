@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import itertools
 import re
-from typing import Any, TypeAlias, cast
+from typing import Any, cast
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
@@ -22,7 +22,7 @@ from fedotmas.common.logging import get_logger
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.mcp import MCPServerConfig, create_toolset
 
-AgentTree: TypeAlias = BaseAgent
+type AgentTree = BaseAgent
 
 _log = get_logger("fedotmas.maw.builder")
 
@@ -52,19 +52,16 @@ def _missing_input_marker(key: str) -> str:
 #: loop opts out with ``autonomous=False``.  No braces: ADK would read them as
 #: state references.
 AUTONOMY_PREAMBLE = (
-    "You are working on your own. No one is reading along to answer a question, "
-    "pick between options, or supply a document you ask for; a request for input "
-    "reaches nobody and ends the run with nothing delivered.\n"
-    "So do not ask the user for anything and do not end your turn waiting for a "
-    "reply. Where the task leaves something open, take the most reasonable "
-    "reading, name it in one line, and carry it through. Where something is "
-    "genuinely unavailable, say what is missing and what it would change, then "
-    "give the best answer the available evidence supports. If your own task is to "
-    "raise questions or lay out options, write them as your answer -- just do not "
-    "hand them over as a decision for someone else to make. A provisional answer "
-    "with its assumptions named is the deliverable; a request for input is not.\n"
-    "These are your working conditions, not your subject. Write the answer "
-    "itself, and do not quote or discuss this notice."
+    "You are working on your own; no one is available to answer questions or "
+    "supply information you request. Complete the role assigned by your "
+    "instruction and produce its requested deliverable. When the deliverable is "
+    "for downstream agents, include the findings, evidence, assumptions, and "
+    "uncertainty they need to continue. Do not take over sibling or downstream "
+    "responsibilities unless your instruction explicitly requires it.\n"
+    "Do not ask the user for input or wait for a reply. If something is unclear, "
+    "make a reasonable interpretation and name it in your deliverable. If evidence "
+    "is unavailable, say what is missing and what that limits. Do not quote or "
+    "discuss this notice."
 )
 
 #: The same rule again at the end, where a long answer drifts back into

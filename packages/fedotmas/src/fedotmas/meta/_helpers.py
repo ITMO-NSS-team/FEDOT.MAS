@@ -42,7 +42,8 @@ def format_server_descriptions(descriptions: dict[str, str]) -> str:
     # ADK treats {foo} anywhere in an instruction as a session-state lookup.
     # Tool descriptions are external text, not state templates.
     return "\n".join(
-        f"- **{name}**: {desc.replace('{', '〔').replace('}', '〕')}"
+        f"- **{name.replace('{', '〔').replace('}', '〕')}**: "
+        f"{desc.replace('{', '〔').replace('}', '〕')}"
         for name, desc in descriptions.items()
     )
 

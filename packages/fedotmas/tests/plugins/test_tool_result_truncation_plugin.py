@@ -21,6 +21,20 @@ def _tool_context(*, agent_name: str = "researcher"):
 
 class TestToolResultTruncationPlugin:
     @pytest.mark.asyncio
+    async def test_aggregate_limit_is_opt_in_for_other_callers(self):
+        plugin = ToolResultTruncationPlugin(max_string_chars=1000)
+        payload = {"results": [{"snippet": "x" * 500} for _ in range(500)]}
+
+        result = await plugin.after_tool_callback(
+            tool=_tool("unrelated_tool"),
+            tool_args={},
+            tool_context=_tool_context(),
+            result=payload,
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_aggregate_nested_search_payload_is_bounded(self):
         plugin = ToolResultTruncationPlugin(
             max_string_chars=1000,

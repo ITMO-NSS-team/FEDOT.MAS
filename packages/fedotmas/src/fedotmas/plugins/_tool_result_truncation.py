@@ -21,7 +21,7 @@ class ToolResultTruncationPlugin(BasePlugin):
         self,
         *,
         max_string_chars: int = 50000,
-        max_total_chars: int | None = 200000,
+        max_total_chars: int | None = None,
         aggregate_tool_names: set[str] | None = None,
         name: str = "fedotmas_tool_result_truncation",
     ) -> None:

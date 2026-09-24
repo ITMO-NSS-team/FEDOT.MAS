@@ -65,7 +65,7 @@ class WebSearchLimitPlugin(BasePlugin):
         reject_empty_urls: bool = False,
         dedupe_identical_calls: bool = True,
         hard_fail: bool | None = None,
-        exhausted_agents: set[tuple[str, str]] | None = None,
+        exhausted_agents: set[tuple[str, str, str]] | None = None,
         telemetry: ResearchTelemetry | None = None,
         budget_kind: str = "search",
         name: str = "fedotmas_web_search_limit",
@@ -125,15 +125,17 @@ class WebSearchLimitPlugin(BasePlugin):
         session_id = tool_context._invocation_context.session.id
         agent_name = tool_context._invocation_context.agent.name  # ty: ignore[unresolved-attribute]
         tool_name = strip_tool_name_prefix(tool.name).lower()
-        key = (session_id, agent_name)
-        if self.telemetry is not None:
-            self.telemetry.attempt(agent_name, self.budget_kind, tool_args)
+        key = (session_id, agent_name, self.budget_kind)
 
         if key in self._exhausted_agents:
+            if self.telemetry is not None:
+                self.telemetry.budget_blocked(agent_name)
             return _finalize_result(agent_name, self.budget_kind)
 
         url = _normalise_url(tool_args.get("url"))
         if self.reject_empty_urls and "url" in tool_args and not url:
+            if self.telemetry is not None:
+                self.telemetry.blocked(agent_name)
             return _limit_result(
                 "Empty URL rejected for web tool "
                 f"'{tool.name}' on agent '{agent_name}'."
@@ -212,8 +214,6 @@ class WebSearchLimitPlugin(BasePlugin):
             self._seen_calls.add(call_key)
         if url_key is not None:
             self._seen_urls.add(url_key)
-            if self.telemetry is not None and self.budget_kind == "scraping":
-                self.telemetry.inspected(agent_name, url)
         _log.debug(
             "Web search call allowed | agent={} tool={} used={}/{}",
             agent_name,

@@ -15,6 +15,7 @@ from fedotmas.maw.builder import (
     _instruction_provider,
     _resolve_llm,
     build,
+    frame_instruction,
 )
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from pydantic import ValidationError
@@ -621,6 +622,19 @@ class TestAutonomyPreamble:
         for text in (AUTONOMY_PREAMBLE, AUTONOMY_CLOSING):
             assert not _STATE_REF_RE.search(text)
             assert "{" not in text
+
+    def test_intermediate_research_role_gets_handoff_framing(self):
+        text = frame_instruction(
+            "Find reliable sources and pass their URLs and evidence to the extractor."
+        )
+
+        assert "Complete the role assigned" in text
+        assert "requested deliverable" in text
+        assert "downstream agents" in text
+        assert "Do not take over sibling or downstream responsibilities" in text
+        assert "Do not ask the user for input" in text
+        assert "give the best answer" not in text
+        assert "Write the answer itself" not in text
 
     def test_a_caller_with_a_person_in_the_loop_can_turn_it_off(self):
         agent = _build_llm_agent(

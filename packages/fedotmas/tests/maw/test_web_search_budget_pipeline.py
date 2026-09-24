@@ -203,3 +203,71 @@ async def test_search_exhaustion_still_allows_evidence_extraction():
     assert searched == ["find source"]
     assert inspected == ["https://example.com/source"]
     assert result.state["answer"] == "Answer from inspected source."
+
+
+async def test_tool_circuit_opens_locally_and_pipeline_continues():
+    backend_calls: list[str] = []
+
+    def search(query: str) -> dict[str, str | bool]:
+        """Search the web for evidence."""
+        backend_calls.append(query)
+        return {"isError": True, "error": "BackendUnavailable: search is down"}
+
+    agent_a_llm = _ScriptedLlm(
+        model="test",
+        responses=[
+            _call("first", "a-call-1"),
+            _call("second", "a-call-2"),
+            _call("blocked", "a-call-3"),
+            _answer("Agent A completed its handoff."),
+        ],
+    )
+    agent_b_llm = _ScriptedLlm(
+        model="test", responses=[_answer("Agent B completed downstream work.")]
+    )
+    agent_a = LlmAgent(
+        name="agent_a",
+        instruction="Find evidence for {user_query}.",
+        model=agent_a_llm,
+        tools=[FunctionTool(search)],
+        output_key="agent_a_output",
+        include_contents="none",
+    )
+    agent_b = LlmAgent(
+        name="agent_b",
+        instruction="Continue from {agent_a_output}.",
+        model=agent_b_llm,
+        output_key="agent_b_output",
+        include_contents="none",
+    )
+    breaker = ToolErrorCircuitBreakerPlugin(
+        max_errors_per_agent=10,
+        max_same_tool_error_type=2,
+    )
+
+    result = await run_pipeline(
+        SequentialAgent(name="pipeline", sub_agents=[agent_a, agent_b]),
+        "Research the question.",
+        session_service=InMemorySessionService(),
+        plugins=[breaker],
+    )
+
+    assert backend_calls == ["first", "second"]
+    assert result.state["agent_a_output"] == "Agent A completed its handoff."
+    assert result.state["agent_b_output"] == "Agent B completed downstream work."
+
+    call_ids: set[str] = set()
+    response_ids: set[str] = set()
+    blocked_responses = []
+    for kind, part in _function_parts(agent_a_llm.requests):
+        if kind == "call" and part.id is not None:
+            call_ids.add(part.id)
+        elif kind == "response" and part.id is not None:
+            response_ids.add(part.id)
+            if part.response.get("error_code") == "TOOL_CIRCUIT_OPEN":
+                blocked_responses.append(part)
+
+    assert call_ids == {"a-call-1", "a-call-2", "a-call-3"}
+    assert response_ids == call_ids
+    assert len(blocked_responses) == 1
+    assert blocked_responses[0].id == "a-call-3"

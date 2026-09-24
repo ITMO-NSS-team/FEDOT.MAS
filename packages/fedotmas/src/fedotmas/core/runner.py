@@ -42,6 +42,7 @@ class PipelineExecutionError(RuntimeError):
 
     def __init__(self, cause: Exception, result: PipelineResult) -> None:
         super().__init__(str(cause))
+        self.cause = cause
         self.result = result
 
 
