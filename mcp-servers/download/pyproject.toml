@@ -23,5 +23,5 @@ scripts.mcp-download = "mcp_download.server:main"
 
 [tool.fedotmas]
 mcp.name = "download"
-mcp.description = "Download files from URLs to the local filesystem. Supports single and batch downloads with size validation."
+mcp.description = "Download file resources from URLs to the local filesystem, including batches with size validation. Use web-scraping to read page contents; download is for files."
 mcp.tags = [ "web", "files" ]

@@ -40,10 +40,12 @@ load_dotenv()
 
 RUN_ID = uuid.uuid4()
 _log = get_logger("fedotmas.benchmarks.gaia")
-DEFAULT_GAIA_MCP_SERVERS = [
+GAIA_BASE_MCP_SERVERS = [
     "websearch-searxng",
     "web-scraping",
-    "sandbox-light",
+    "browser-agent",
+    "download",
+    "youtube-transcript",
     "document",
     "media",
 ]
@@ -204,7 +206,8 @@ def _env_list(name: str) -> list[str] | None:
 def _gaia_mcp_servers() -> list[str] | str:
     value = os.getenv("FEDOTMAS_GAIA_MCP_SERVERS")
     if value is None:
-        return DEFAULT_GAIA_MCP_SERVERS
+        sandbox = "sandbox" if os.getenv("E2B_API_KEY") else "sandbox-light"
+        return [*GAIA_BASE_MCP_SERVERS[:5], sandbox, *GAIA_BASE_MCP_SERVERS[5:]]
     if value.strip().lower() == "all":
         return "all"
     return [name.strip() for name in value.split(",") if name.strip()]

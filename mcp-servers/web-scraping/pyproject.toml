@@ -21,7 +21,7 @@ dev = [ "pytest" ]
 
 [tool.fedotmas]
 mcp.name = "web-scraping"
-mcp.description = "Read-only web scraping: navigate pages, extract markdown, links, structured data, and run JavaScript."
+mcp.description = "Direct page extraction from known URLs: read markdown, links, and structured data or run page JavaScript. Use websearch-searxng to discover pages and browser-agent for interactive, multi-step tasks."
 # Proxies lightpanda, whose tool names we do not control; its "search"
 # collided with websearch-searxng's and shadowed it. Prefix this one so the
 # plain name keeps pointing at the real web search.

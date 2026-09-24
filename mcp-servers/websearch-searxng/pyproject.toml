@@ -24,7 +24,8 @@ scripts.mcp-websearch = "mcp_websearch_searxng.server:main"
 [tool.fedotmas]
 mcp.name = "websearch-searxng"
 mcp.description = """
-MCP server for web search via self-hosted SearXNG. Supports filtering by category
-(general, news, science, etc.) and language.
+Web discovery through self-hosted SearXNG: find candidate pages and sources by query,
+category, and language. Use web-scraping to extract a known page or browser-agent for
+interactive, multi-step work.
 """
 mcp.tags = [ "web", "search", "research" ]

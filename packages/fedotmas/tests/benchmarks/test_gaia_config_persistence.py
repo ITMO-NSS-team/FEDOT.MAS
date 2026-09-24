@@ -10,6 +10,8 @@ from fedotmas.core.runner import PipelineExecutionError, PipelineResult
 from fedotmas.maw.models import MAWConfig
 
 from benchmarks.gaia.run_gaia import (
+    GAIA_BASE_MCP_SERVERS,
+    _gaia_mcp_servers,
     compute_token_summary,
     process_task,
     root_cause_summary,
@@ -43,6 +45,41 @@ def _config() -> MAWConfig:
             },
         }
     )
+
+
+def test_gaia_default_mcp_servers_include_web_task_tools_and_light_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("FEDOTMAS_GAIA_MCP_SERVERS", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+
+    servers = _gaia_mcp_servers()
+
+    assert servers == [
+        *GAIA_BASE_MCP_SERVERS[:5],
+        "sandbox-light",
+        *GAIA_BASE_MCP_SERVERS[5:],
+    ]
+    assert "download" in servers
+    assert "youtube-transcript" in servers
+    assert "browser-agent" in servers
+
+
+def test_gaia_uses_full_sandbox_when_e2b_key_is_set(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("FEDOTMAS_GAIA_MCP_SERVERS", raising=False)
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+
+    servers = _gaia_mcp_servers()
+
+    assert "sandbox" in servers
+    assert "sandbox-light" not in servers
+
+
+def test_gaia_mcp_server_override_is_preserved(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("FEDOTMAS_GAIA_MCP_SERVERS", "download, browser-agent")
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+
+    assert _gaia_mcp_servers() == ["download", "browser-agent"]
 
 
 class _FakeMAW:

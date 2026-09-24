@@ -25,8 +25,8 @@ ini_options.asyncio_mode = "auto"
 [tool.fedotmas]
 mcp.name = "sandbox"
 mcp.description = """\
-  Full Python sandbox, pip install, file I/O, shell commands, persistent Jupyter-style sessions. Variables, imports, \
-  and packages are preserved across calls. Use when code requires third-party libraries, data processing, or system \
-  access.\
+  Full Python sandbox for computation and file operations, with pip install, shell commands, and persistent \
+  Jupyter-style sessions. Variables, imports, and packages are preserved across calls. Use for calculations, data \
+  processing, or filesystem work.\
   """
 mcp.tags = [ "code", "sandbox" ]

@@ -1,0 +1,29 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-browser-agent"
+version = "0.1.0"
+description = "MCP server for bounded, multi-step Browser-Use tasks"
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+  "browser-use>=0.13,<0.14",
+  "fastmcp>=3.4,<4",
+]
+scripts.mcp-browser-agent = "mcp_browser_agent.server:main"
+
+[dependency-groups]
+dev = [ "pytest" ]
+
+[tool.fedotmas]
+mcp.name = "browser-agent"
+mcp.description = "Interactive, multi-step web tasks: Browser-Use runs its own Chromium and LLM loop to navigate dynamic sites, follow workflows, and return concise findings with relevant URLs. Use for tasks that require browser interaction; use websearch-searxng to discover sources and web-scraping to extract known pages directly."
+mcp.tags = [ "browser", "web", "automation", "research" ]
+mcp.timeout = 600
