@@ -198,6 +198,10 @@ cython_debug/
 # ADK meta
 .adk/
 
+# Local agent context
+/.claude/
+/AGENTS.md
+
 mcp-servers/download/downloads
 benchmarks/gaia/gaia_data/
 benchmarks/gaia/gaia_logs/
