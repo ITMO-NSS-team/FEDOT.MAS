@@ -69,7 +69,8 @@ MODELS = [
 # через запятую, без префикса openrouter/.
 _OPENROUTER_DEFAULT = ("anthropic/claude-sonnet-5,openai/gpt-5.6-terra,"
                        "google/gemini-2.5-pro,deepseek/deepseek-v4-pro,"
-                       "deepseek/deepseek-v4-flash")
+                       "deepseek/deepseek-v4-flash,qwen/qwen3.8-max-prime,"
+                       "qwen/qwen3.8-flash")
 if os.getenv("OPENROUTER_API_KEY") or PUBLIC_MODE:
     MODELS += [
         {"id": "openrouter/" + slug,
