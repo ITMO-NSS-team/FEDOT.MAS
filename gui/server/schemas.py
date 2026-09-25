@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class KeyIn(BaseModel):
@@ -72,6 +72,14 @@ class JudgeIn(BaseModel):
     query: str
     system_answer: str
     single_answer: str
+    model: str | None = None
+
+
+class SyntheticExamplesIn(BaseModel):
+    """Запрос на тестовые переформулировки для оценщика качества."""
+
+    query: str = Field(min_length=1, max_length=12_000)
+    count: int = Field(default=3, ge=1, le=10)
     model: str | None = None
 
 

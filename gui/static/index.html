@@ -74,8 +74,8 @@
           <select id="model-single" title="Модель, которая отвечает на ту же задачу одна, без системы"></select>
         </label>
         <label class="model-pick">
-          <span>Судья</span>
-          <select id="model-judge" title="Модель, которая сравнивает ответ системы с ответом одной модели"></select>
+          <span>Судья и синтетика</span>
+          <select id="model-judge" title="Модель сравнивает ответы и переформулирует запросы для синтетических тестов"></select>
         </label>
       </div>
     </section>
@@ -169,6 +169,25 @@
         <div class="gen-progress-head"><b id="judge-progress-step">Судья читает ответы…</b><span id="judge-progress-time">0 с</span></div>
         <div class="gen-progress-bar"><i id="judge-progress-fill"></i></div>
         <div class="gen-progress-log" id="judge-progress-log"></div>
+      </div>
+      <div class="synthetic-box">
+        <div class="synthetic-head">
+          <div>
+            <b>Синтетические тесты</b>
+            <span>Смысл и ограничения запроса сохраняются</span>
+          </div>
+          <label>за раз
+            <select id="synthetic-count" title="Количество вариантов за один вызов модели">
+              <option value="1">1</option>
+              <option value="3" selected>3</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+            </select>
+          </label>
+        </div>
+        <button class="btn btn-mini" id="btn-synthetic" disabled>Сгенерировать синтетический пример</button>
+        <div class="synthetic-note" id="synthetic-note"></div>
+        <div class="synthetic-list" id="synthetic-examples"></div>
       </div>
       <div class="answer-actions" id="answer-actions">
         <button class="btn btn-mini" id="btn-baseline" disabled>Сравнить с одной моделью</button>

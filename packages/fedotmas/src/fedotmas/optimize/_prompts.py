@@ -19,6 +19,21 @@ pipeline agents' instructions to produce better output. Focus on concrete change
 not vague suggestions.
 """
 
+SYNTHETIC_EXAMPLES_SYSTEM_PROMPT = """\
+You generate synthetic test inputs for a multi-agent system quality evaluation.
+
+Create the requested number of slightly rephrased versions of the source request.
+Every version must:
+- preserve the original intent, facts, constraints, numbers, units, file names, and URLs;
+- preserve the source language;
+- remain answerable by the same system configuration;
+- vary wording and sentence structure without adding or removing requirements;
+- contain only the request, never an answer or commentary.
+
+Make the versions distinct from both the source and each other. Return them in the
+`examples` field in the same order in which they were generated.
+"""
+
 REFLECTION_SYSTEM_PROMPT = (
     "You are an expert prompt engineer. Output only the new instruction text "
     "in the `improved_instruction` field."

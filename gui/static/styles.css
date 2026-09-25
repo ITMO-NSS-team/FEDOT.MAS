@@ -365,6 +365,28 @@ body.zoomed{zoom:1.18}
 .ans-winner.error{color:var(--warn); background:color-mix(in srgb, var(--warn) 12%, transparent)}
 .answer-actions{display:flex; gap:8px; padding:10px 14px; border-top:1px solid var(--line-soft)}
 .answer-actions .btn{flex:1 1 auto}
+.synthetic-box{display:flex; flex-direction:column; gap:8px; padding:10px 14px;
+  border-top:1px solid var(--line-soft); background:var(--bg-soft)}
+.synthetic-head{display:flex; align-items:flex-start; justify-content:space-between; gap:10px}
+.synthetic-head>div{display:flex; flex-direction:column; gap:2px}
+.synthetic-head b{font-size:12px; color:var(--text); font-weight:620}
+.synthetic-head span,.synthetic-head label,.synthetic-note{font-size:10.5px; color:var(--text-mute)}
+.synthetic-head label{display:flex; align-items:center; gap:5px; white-space:nowrap}
+.synthetic-head select{border:1px solid var(--line); border-radius:6px; background:var(--panel);
+  color:var(--text); font:inherit; padding:2px 4px}
+.synthetic-box>#btn-synthetic{width:100%}
+.synthetic-note:empty,.synthetic-list:empty{display:none}
+.synthetic-note.error{color:var(--warn)}
+.synthetic-list{display:flex; flex-direction:column; gap:6px; max-height:230px; overflow-y:auto}
+.synthetic-item{border:1px solid var(--line); border-radius:var(--r-sm); background:var(--panel);
+  padding:7px 8px; display:flex; flex-direction:column; gap:6px}
+.synthetic-text{font-size:11.5px; line-height:1.45; color:var(--text); white-space:pre-wrap; word-break:break-word}
+.synthetic-meta{display:flex; align-items:center; justify-content:space-between; gap:8px;
+  font-size:10px; color:var(--text-mute)}
+.synthetic-controls{display:flex; gap:5px}
+.synthetic-controls button{border:0; padding:0; background:transparent; color:var(--worker);
+  font:inherit; cursor:pointer}
+.synthetic-controls button[data-action="remove"]{color:var(--text-mute)}
 
 /* Markdown внутри ответа */
 .ans-text.md p{margin:0 0 7px}

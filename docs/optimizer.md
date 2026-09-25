@@ -201,6 +201,25 @@ Tasks **with** `expected` are scored more precisely (the judge sees the referenc
 
 You can mix both in the same trainset.
 
+### Synthetic test inputs
+
+The same evaluator model can create meaning-preserving query variants for robustness
+tests. It keeps numbers, constraints, file names, URLs, and the source language intact;
+it does not generate answers or score the variants automatically:
+
+```python
+judge = LLMJudge(model="openrouter/mistralai/mistral-small-2603")
+variants = await judge.generate_synthetic_examples(
+    "Compare the two designs and keep the budget below $10,000.",
+    count=5,
+)
+trainset.extend(Task(text) for text in variants)
+```
+
+Use `synthetic_temperature` in the `LLMJudge` constructor to control wording
+diversity (the default is `0.7`). One call accepts from 1 to 10 variants. Token use
+is included in the judge's `token_usage` counters.
+
 ## Custom Scorer
 
 By default, the optimizer uses `LLMJudge` — an LLM that scores pipeline output against your `criteria`. You can replace it with any callable matching the `Scorer` protocol:

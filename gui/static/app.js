@@ -104,7 +104,7 @@ const S = {
   k: 1, cx: 0, cy: 0, bbox: null, needFit: true, userAdjusted: false, group: null,
   backend: null, live: true, abort: null, liveTimer: null, custom: [], hidden: [],
   models: { gen: "", run: "", single: "", judge: "" }, mcpCustom: [],   // мета-агент, исполнение, судья
-  answer: null, baseline: null, judge: null, query: "",
+  answer: null, baseline: null, judge: null, query: "", syntheticExamples: [],
 };
 
 /* ─────────────────────────── Утилиты ─────────────────────────── */
@@ -805,6 +805,7 @@ function renderAnswer() {
                   : "Доступно в живом режиме: запустите gui/run.py";
   bj.title = live ? "Независимый судья сравнит оба ответа"
                   : "Доступно в живом режиме: запустите gui/run.py";
+  renderSyntheticExamples();
 }
 
 async function runBaseline() {
@@ -897,6 +898,106 @@ async function runJudge() {
     btn.textContent = "Оценить заново";
     if (S.preset && S.judge.winner !== "error") { S.preset.judge = S.judge; persistPreset(); }
     renderAnswer();
+  }
+}
+
+function normalizedSynthetic(entry) {
+  if (typeof entry === "string") return { query: entry, model: "" };
+  if (!entry || typeof entry !== "object") return null;
+  return { query: String(entry.query || ""), model: String(entry.model || "") };
+}
+
+function saveSyntheticExamples() {
+  if (!S.preset) return;
+  S.preset.syntheticExamples = S.syntheticExamples.slice();
+  persistPreset();
+}
+
+function renderSyntheticExamples() {
+  const host = $("synthetic-examples");
+  const button = $("btn-synthetic");
+  if (!host || !button) return;
+  const examples = (S.syntheticExamples || []).map(normalizedSynthetic)
+    .filter((item) => item && item.query.trim()).slice(0, 100);
+  S.syntheticExamples = examples;
+  host.innerHTML = examples.map((item, i) => `
+    <div class="synthetic-item">
+      <div class="synthetic-text">${esc(item.query)}</div>
+      <div class="synthetic-meta">
+        <span>${esc(item.model || "модель судьи")}</span>
+        <span class="synthetic-controls">
+          <button type="button" data-action="use" data-i="${i}">Подставить</button>
+          <button type="button" data-action="remove" data-i="${i}">Удалить</button>
+        </span>
+      </div>
+    </div>`).join("");
+  host.querySelectorAll("button[data-action]").forEach((control) => {
+    control.addEventListener("click", () => {
+      const i = Number(control.dataset.i);
+      if (!Number.isInteger(i) || !S.syntheticExamples[i]) return;
+      if (control.dataset.action === "remove") {
+        S.syntheticExamples.splice(i, 1);
+        saveSyntheticExamples();
+        renderSyntheticExamples();
+        return;
+      }
+      const query = S.syntheticExamples[i].query;
+      $("query").value = query;
+      S.query = query;
+      S.answer = null; S.baseline = null; S.judge = null;
+      $("synthetic-note").textContent = "Вариант подставлен. Запустите систему для нового теста.";
+      renderAnswer();
+      renderMode();
+    });
+  });
+  const ready = !!S.backend && !!S.preset && !!$("query").value.trim();
+  button.disabled = !ready;
+  button.title = ready
+    ? `Варианты создаст выбранная модель судьи: ${S.models.judge || "по умолчанию"}`
+    : "Выберите сценарий и заполните запрос";
+}
+
+async function generateSyntheticExamples() {
+  const query = $("query").value.trim();
+  if (!S.backend || !S.preset || !query) return;
+  const button = $("btn-synthetic");
+  const note = $("synthetic-note");
+  button.disabled = true;
+  button.textContent = "Переформулируем…";
+  note.classList.remove("error");
+  note.textContent = "";
+  try {
+    const response = await fetch("api/synthetic_examples", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, count: Number($("synthetic-count").value) || 1,
+                             model: S.models.judge }),
+    });
+    const data = await readJson(response, "синтетические примеры");
+    if (!response.ok || !data.ok) {
+      noteKeyNeeded(response.status);
+      throw new Error(data.error || `сервер ответил ${response.status}`);
+    }
+    const known = new Set(S.syntheticExamples.map((item) =>
+      (normalizedSynthetic(item)?.query || "").trim().replace(/\s+/g, " ").toLocaleLowerCase()));
+    let added = 0;
+    (data.examples || []).forEach((value) => {
+      const text = String(value || "").trim();
+      const key = text.replace(/\s+/g, " ").toLocaleLowerCase();
+      if (!text || known.has(key)) return;
+      known.add(key);
+      S.syntheticExamples.push({ query: text, model: data.model || S.models.judge });
+      added++;
+    });
+    saveSyntheticExamples();
+    note.textContent = added
+      ? `Добавлено: ${added}. Затрачено токенов: ${nfmt(data.tokens || 0)}.`
+      : "Модель не вернула новых уникальных вариантов.";
+  } catch (error) {
+    note.classList.add("error");
+    note.textContent = "Не удалось сгенерировать: " + (error.message || error);
+  } finally {
+    button.textContent = "Сгенерировать синтетический пример";
+    renderSyntheticExamples();
   }
 }
 
@@ -1086,6 +1187,10 @@ function loadPreset(p) {
   S.answer = p.answer ? { text: p.answer, meta: p.answerMeta || "" } : null;
   S.baseline = p.baseline || null;
   S.judge = p.judge || null;
+  S.syntheticExamples = (Array.isArray(p.syntheticExamples) ? p.syntheticExamples : [])
+    .map(normalizedSynthetic).filter((item) => item && item.query.trim()).slice(0, 100);
+  $("synthetic-note").textContent = "";
+  $("synthetic-note").classList.remove("error");
   renderSources(p);
   renderAnswer();
   $("scenario-title").textContent = p.title;
@@ -1280,7 +1385,10 @@ function fillModelSelect(id, key, models, selected) {
   if (!sel) return;
   sel.innerHTML = (models || []).map((m) =>
     `<option value="${esc(m.id)}"${m.id === selected ? " selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
-  sel.addEventListener("change", () => { S.models[key] = sel.value; });
+  sel.addEventListener("change", () => {
+    S.models[key] = sel.value;
+    if (key === "judge") renderSyntheticExamples();
+  });
 }
 
 function codexOnly() {
@@ -1595,6 +1703,7 @@ async function liveRun() {
           S.answer = { text: last || "(система не вернула текстового результата)",
                        meta: `${S.preset.kind === "mas" ? "MASConfig" : "MAWConfig"} · ${nfmt(ev.tokens || 0)} токенов · ${String(ev.elapsed).replace(".", ",")} с` };
           S.query = $("query").value;
+          S.preset.query = S.query;
           S.baseline = null; S.judge = null;
           renderAnswer();
           const prev = document.querySelector(".msg:last-child .msg-text");
@@ -1966,6 +2075,9 @@ function scenarioList() {
 /** Стартовый вид без сценариев: показываем, с чего начать, вместо пустого графа. */
 function showEmptyState() {
   S.preset = null; S.events = []; S.answer = null; S.baseline = null; S.judge = null;
+  S.syntheticExamples = [];
+  $("synthetic-note").textContent = "";
+  $("synthetic-note").classList.remove("error");
   $("scenario-title").textContent = "Сценариев пока нет";
   $("scenario-sub").textContent = "Нажмите «Добавить сценарий», опишите задачу — система соберётся под неё.";
   $("kind-badge").textContent = "";
@@ -1980,6 +2092,7 @@ function showEmptyState() {
   $("btn-run").disabled = true;
   $("btn-baseline").disabled = true;
   $("btn-judge").disabled = true;
+  renderSyntheticExamples();
   const gen = $("stat-gen-row"); if (gen) gen.classList.add("hidden");
   const data = $("data-block"); if (data) data.classList.add("hidden");
   renderEffort(null);
@@ -2127,6 +2240,8 @@ function init() {
   $("btn-expand").addEventListener("click", toggleInspectorWidth);
   $("btn-baseline").addEventListener("click", runBaseline);
   $("btn-judge").addEventListener("click", runJudge);
+  $("btn-synthetic").addEventListener("click", generateSyntheticExamples);
+  $("query").addEventListener("input", renderSyntheticExamples);
   $("p-play").addEventListener("click", () => (S.playing ? pause() : play()));
   $("p-restart").addEventListener("click", resetRun);
   $("p-speed").addEventListener("click", () => {

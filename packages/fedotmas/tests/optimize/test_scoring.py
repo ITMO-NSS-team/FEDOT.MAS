@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
-
-from fedotmas.optimize._scoring import LLMJudge, ScoringResult, _format_state
+from fedotmas.optimize._scoring import (
+    LLMJudge,
+    ScoringResult,
+    _format_state,
+    _unique_examples,
+)
 from fedotmas.optimize._state import Task
 
 
@@ -124,3 +129,49 @@ def test_llm_judge_max_state_chars():
     """max_state_chars parameter is stored."""
     judge = LLMJudge(max_state_chars=500)
     assert judge._max_state_chars == 500
+
+
+def test_unique_synthetic_examples_removes_source_empty_and_duplicates():
+    assert _unique_examples(
+        ["", "  Исходный запрос  ", "Новый запрос", " новый   запрос "],
+        "Исходный запрос",
+    ) == ["Новый запрос"]
+
+
+@pytest.mark.asyncio
+async def test_llm_judge_generates_synthetic_examples():
+    judge = LLMJudge(synthetic_temperature=0.65)
+
+    with patch("fedotmas.optimize._scoring.run_meta_agent_call") as mock_call:
+        from fedotmas.meta._adk_runner import LLMCallResult
+
+        mock_call.return_value = LLMCallResult(
+            raw_output={
+                "examples": [
+                    "Посчитай сумму 2 и 2.",
+                    "Сколько будет 2 + 2?",
+                    "Сколько будет 2 + 2?",
+                ]
+            },
+            prompt_tokens=30,
+            completion_tokens=20,
+            elapsed=0.2,
+        )
+        examples = await judge.generate_synthetic_examples(
+            "Сколько будет 2 + 2?", count=3
+        )
+
+    assert examples == ["Посчитай сумму 2 и 2."]
+    assert judge.token_usage == (30, 20)
+    call = mock_call.call_args.kwargs
+    assert call["agent_name"] == "synthetic_examples"
+    assert call["temperature"] == 0.65
+    assert json.loads(call["user_message"])["count"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query,count", [("", 1), ("task", 0), ("task", 11)])
+async def test_llm_judge_rejects_invalid_synthetic_request(query, count):
+    judge = LLMJudge()
+    with pytest.raises(ValueError):
+        await judge.generate_synthetic_examples(query, count=count)

@@ -26,23 +26,59 @@ from fedotmas import MAS, MAW, MASConfig, MAWConfig
 from fedotmas.common.codex_cli import codex_login_status, find_codex_cli
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp import get_server_descriptions, resolve_mcp_registry
+from fedotmas.optimize import LLMJudge
 from fedotmas.plugins import LoggingPlugin, UnknownToolRecoveryPlugin
 
 from . import security
 from .agent_names import AgentNames, latinize_mas
-from .config import (AGENT_MAX_OUTPUT_TOKENS, DEFAULT_MODEL, GENERATE_ATTEMPTS, JUDGE_MODEL, MODELS,
-                     PUBLIC_MODE, RU_HINT, SAFE_TOOLS, SCRAPING, SERVER_RUN_ID,
-                     SMITHERY_API_KEY, SMITHERY_DETAIL, SMITHERY_SEARCH, STATIC_DIR,
-                     WEB_SEARCH)
+from .config import (
+    AGENT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MODEL,
+    GENERATE_ATTEMPTS,
+    JUDGE_MODEL,
+    MODELS,
+    PUBLIC_MODE,
+    RU_HINT,
+    SAFE_TOOLS,
+    SCRAPING,
+    SERVER_RUN_ID,
+    SMITHERY_API_KEY,
+    SMITHERY_DETAIL,
+    SMITHERY_SEARCH,
+    STATIC_DIR,
+    WEB_SEARCH,
+)
 from .judge import _judge_impl
 from .llm import complete
-from .normalize import (_ensure_calculator, _ensure_data_tools, _ensure_dependent_after_parallel,
-                        _ensure_lookup_tools, _ensure_web_tool, _mcp_registry_for,
-                        _tools_hint, _with_data_source, sanitize_config)
-from .prompts import (BREAKDOWN_PROMPT, EFFORT_PROMPT, MAW_TEAM_SIZE_PROMPT,
-                      PREPARE_PROMPT, RETRY_HINT, TOOL_DESCRIPTIONS)
-from .schemas import (BaselineIn, EffortIn, ExportIn, GenerateIn, JudgeIn,
-                      PrepareIn, RunIn)
+from .normalize import (
+    _ensure_calculator,
+    _ensure_data_tools,
+    _ensure_dependent_after_parallel,
+    _ensure_lookup_tools,
+    _ensure_web_tool,
+    _mcp_registry_for,
+    _tools_hint,
+    _with_data_source,
+    sanitize_config,
+)
+from .prompts import (
+    BREAKDOWN_PROMPT,
+    EFFORT_PROMPT,
+    MAW_TEAM_SIZE_PROMPT,
+    PREPARE_PROMPT,
+    RETRY_HINT,
+    TOOL_DESCRIPTIONS,
+)
+from .schemas import (
+    BaselineIn,
+    EffortIn,
+    ExportIn,
+    GenerateIn,
+    JudgeIn,
+    PrepareIn,
+    RunIn,
+    SyntheticExamplesIn,
+)
 from .streaming import StreamPlugin, sse_stream
 
 _log = get_logger("gui.live")
@@ -562,6 +598,26 @@ def _slugify_mcp(name: str) -> str:
 @app.post("/api/judge")
 async def judge(body: JudgeIn) -> dict:
     return await _judge_impl(body)
+
+
+@app.post("/api/synthetic_examples")
+async def synthetic_examples(body: SyntheticExamplesIn) -> dict:
+    """Слегка переформулирует запросы моделью, выбранной для судьи качества."""
+    model = body.model or JUDGE_MODEL
+    quality_judge = LLMJudge(model=model)
+    try:
+        examples = await quality_judge.generate_synthetic_examples(
+            body.query, count=body.count
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    prompt_tokens, completion_tokens = quality_judge.token_usage
+    return {
+        "ok": True,
+        "examples": examples,
+        "model": model,
+        "tokens": prompt_tokens + completion_tokens,
+    }
 
 
 @app.post("/api/judge_stream")

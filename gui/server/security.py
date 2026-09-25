@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from fedotmas.common.codex_cli import is_codex_model
 from fedotmas.common.logging import get_logger
 
-from .config import ACCESS_TOKEN, DEFAULT_MODEL, MODELS, PUBLIC_MODE
+from .config import ACCESS_TOKEN, DEFAULT_MODEL, JUDGE_MODEL, MODELS, PUBLIC_MODE
 from .schemas import KeyIn
 
 _log = get_logger("gui.security")
@@ -25,7 +25,7 @@ OPEN_API = {"/api/status"}
 # Пути, которые тратят деньги на модели: без ключа пользователя их не пускаем.
 NEEDS_KEY = {"/api/generate", "/api/generate_stream", "/api/run", "/api/prepare",
              "/api/baseline", "/api/effort", "/api/effort_breakdown",
-             "/api/judge", "/api/judge_stream"}
+             "/api/judge", "/api/judge_stream", "/api/synthetic_examples"}
 
 # Ключ пользователя живёт в памяти процесса и подставляется в окружение — оттуда его
 # читают и FEDOT.MAS (resolve_model_config), и прямые вызовы клиента. Расчёт на одного
@@ -134,7 +134,10 @@ def install(app: FastAPI) -> None:
                 return JSONResponse({"error": "экспорт пресетов доступен только локально"},
                                     status_code=403)
         if path in NEEDS_KEY:
-            selected_model = DEFAULT_MODEL
+            selected_model = (JUDGE_MODEL
+                              if path in {"/api/judge", "/api/judge_stream",
+                                          "/api/synthetic_examples"}
+                              else DEFAULT_MODEL)
             try:
                 payload = json.loads((await request.body()) or b"{}")
                 selected_model = payload.get("model") or DEFAULT_MODEL
