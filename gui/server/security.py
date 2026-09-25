@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from fedotmas.common.codex_cli import is_codex_model
 from fedotmas.common.logging import get_logger
 
-from .config import ACCESS_TOKEN, DEFAULT_MODEL, PUBLIC_MODE
+from .config import ACCESS_TOKEN, DEFAULT_MODEL, MODELS, PUBLIC_MODE
 from .schemas import KeyIn
 
 _log = get_logger("gui.security")
@@ -42,6 +42,17 @@ def mask(key: str) -> str:
     """Ключ нигде не должен появляться целиком — ни в логах, ни в ответах API."""
     key = key.strip()
     return f"{key[:6]}…{key[-4:]}" if len(key) > 14 else "…"
+
+
+def _key_available(model: str) -> bool:
+    """Есть ли ключ, которым реально пойдёт запрос этой модели.
+
+    litellm читает для openrouter/* только OPENROUTER_API_KEY — наличие
+    OPENAI_API_KEY такую модель не оплатит, и наоборот.
+    """
+    if model.startswith("openrouter/"):
+        return bool(os.getenv("OPENROUTER_API_KEY"))
+    return bool(os.getenv("OPENAI_API_KEY"))
 
 
 # Имена, под которыми стенд открывают штатно. Туннель добавляет своё — его имя
@@ -122,14 +133,14 @@ def install(app: FastAPI) -> None:
                 # Пишет файл на диск рядом с кодом — наружу такое не отдаём.
                 return JSONResponse({"error": "экспорт пресетов доступен только локально"},
                                     status_code=403)
-        if path in NEEDS_KEY and not os.getenv("OPENAI_API_KEY"):
+        if path in NEEDS_KEY:
             selected_model = DEFAULT_MODEL
             try:
                 payload = json.loads((await request.body()) or b"{}")
                 selected_model = payload.get("model") or DEFAULT_MODEL
             except (json.JSONDecodeError, AttributeError, UnicodeDecodeError):
                 pass
-            if not is_codex_model(selected_model):
+            if not is_codex_model(selected_model) and not _key_available(selected_model):
                 return JSONResponse({"error": "не задан ключ провайдера"}, status_code=428)
         return await call_next(request)
 
@@ -150,15 +161,26 @@ async def set_key(body: KeyIn) -> dict:
     key = (body.key or "").strip()
     if not key:
         os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("OPENROUTER_API_KEY", None)
         _user_key_set = False
         return {"ok": True, "has_key": False}
-    base = (os.getenv("OPENAI_BASE_URL") or "").strip()
+    # Ключи OpenRouter начинаются с sk-or-: проверяем их на самом OpenRouter,
+    # моделью из списка стенда — DEFAULT_MODEL может оказаться codex-моделью,
+    # которой у провайдера нет.
+    openrouter = key.startswith("sk-or-")
+    if openrouter:
+        base = "https://openrouter.ai/api/v1"
+        probe = next((m["id"].removeprefix("openrouter/") for m in MODELS
+                      if m["id"].startswith("openrouter/")), "openai/gpt-4o")
+    else:
+        base = (os.getenv("OPENAI_BASE_URL") or "").strip()
+        probe = DEFAULT_MODEL
     try:
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(base_url=base or None, api_key=key, timeout=25)
         await client.chat.completions.create(
-            model=DEFAULT_MODEL, max_tokens=1,
+            model=probe, max_tokens=1,
             messages=[{"role": "user", "content": "ping"}])
     except Exception as exc:
         # В тексте ошибки провайдер иногда повторяет присланный ключ — вычищаем.
@@ -177,6 +199,9 @@ async def set_key(body: KeyIn) -> dict:
             human = note
         return {"ok": False, "error": human}
     os.environ["OPENAI_API_KEY"] = key
+    if openrouter:
+        # litellm оплачивает openrouter/* только из этой переменной
+        os.environ["OPENROUTER_API_KEY"] = key
     _user_key_set = True
     _log.info("Принят ключ пользователя {}", mask(key))
     return {"ok": True, "has_key": True, "masked": mask(key)}

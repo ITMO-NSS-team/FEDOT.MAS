@@ -25,9 +25,17 @@ def client(model: str) -> tuple:
     """Клиент OpenAI-совместимого API и имя модели.
 
     Ключ читается из окружения при каждом вызове: в публичном режиме его
-    подставляет туда пользователь уже после старта сервера.
+    подставляет туда пользователь уже после старта сервера. Модели
+    ``openrouter/...`` ходят на OpenRouter напрямую — префикс убираем,
+    остаток и есть имя модели у провайдера.
     """
     from openai import AsyncOpenAI
+
+    if model.startswith("openrouter/"):
+        return AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY"),
+        ), model.removeprefix("openrouter/")
 
     return AsyncOpenAI(base_url=os.getenv("OPENAI_BASE_URL"), api_key=os.getenv("OPENAI_API_KEY")), model
 
