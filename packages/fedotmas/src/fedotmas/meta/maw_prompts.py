@@ -68,6 +68,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 - Set `final_answer_agent` to the actual terminal answer-producing agent. The runtime applies any final submission format only to this agent; never copy a terminal-only contract into research, calculation, extraction, or verification instructions.
 - For meaningful semantic dependencies, generate a task-specific `output_contract` for the producer and matching `input_requirements` for its consumer. Preserve evidence and provenance; do not impose a universal artifact schema. Leave contracts absent when no downstream handoff needs validation.
+- Do not generate an `output_contract` for the terminal `final_answer_agent` unless its output is explicitly consumed downstream; the runtime final-answer format takes precedence for terminal output.
 - Contract shapes shown in examples are illustrative for those roles. Choose fields from the current task's dependencies and evidence needs.
 - A producer with an `output_contract` must return a JSON object containing every required field. It may include additional evidence, sources, assumptions, and uncertainty needed downstream; never reduce that artifact to a bare final answer.
 - If a dependent role must continue with the same selected entity, include those identity fields in both contracts. Preserve their values exactly or mark the dependency unresolved; do not silently substitute another paper, site, video, or entity.
@@ -462,6 +463,7 @@ ${available_models}
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 - Set `final_answer_agent` to the actual terminal answer-producing agent. The runtime applies final submission formatting only at that boundary.
 - Generate task-specific `output_contract` and matching `input_requirements` for meaningful handoffs. Preserve all useful evidence, provenance, and required entity identity fields. Do not use one universal schema.
+- Do not generate an `output_contract` for the terminal `final_answer_agent` unless its output is explicitly consumed downstream; the runtime final-answer format takes precedence for terminal output.
 - Contracted producer outputs are JSON objects that retain all required fields plus useful evidence and provenance, rather than short answer strings.
 - For evidence-complete verification, use `research_policy: "evidence_first"`. Use `"targeted_recovery"` only when the verifier may recover a specific missing claim; do not repeat full research.
 

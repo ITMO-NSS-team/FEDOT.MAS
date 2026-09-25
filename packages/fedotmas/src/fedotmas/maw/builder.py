@@ -26,7 +26,9 @@ from fedotmas.maw.handoffs import (
     EXECUTION_METADATA_KEY,
     append_execution_issue,
     describe_requirement,
+    missing_contract_fields,
     parse_artifact,
+    resolve_execution_issue,
     validate_output_contract,
 )
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
@@ -355,9 +357,24 @@ def _build_llm_agent(
                         "received": raw[:4000],
                     },
                 )
+            else:
+                resolve_execution_issue(
+                    callback_context.state,
+                    {
+                        "kind": "incomplete_handoff",
+                        "agent": cfg.name,
+                        "source_key": requirement.source_key,
+                    },
+                )
 
     async def after_agent(callback_context: CallbackContext) -> None:
-        if cfg.output_contract is None:
+        # A terminal answer is formatted for the caller, not handed to a
+        # downstream agent. Its final-answer contract takes precedence over a
+        # generated structured handoff contract.
+        if cfg.output_contract is None or (
+            final_answer_contract is not None
+            and cfg.name == final_answer_agent
+        ):
             return
         value = callback_context.state.get(cfg.output_key)
         missing = validate_output_contract(value, cfg.output_contract)
@@ -371,8 +388,35 @@ def _build_llm_agent(
                     "missing_fields": missing,
                 },
             )
+        else:
+            resolve_execution_issue(
+                callback_context.state,
+                {
+                    "kind": "incomplete_artifact",
+                    "agent": cfg.name,
+                    "output_key": cfg.output_key,
+                },
+            )
         artifact = parse_artifact(value)
         if artifact is not None:
+            for requirement in cfg.input_requirements:
+                required_fields = list(
+                    dict.fromkeys(
+                        [*requirement.required_fields, *requirement.identity_fields]
+                    )
+                )
+                _recovered, recovery_missing = missing_contract_fields(
+                    artifact, required_fields
+                )
+                if required_fields and not recovery_missing:
+                    resolve_execution_issue(
+                        callback_context.state,
+                        {
+                            "kind": "incomplete_handoff",
+                            "agent": cfg.name,
+                            "source_key": requirement.source_key,
+                        },
+                    )
             for requirement in cfg.input_requirements:
                 upstream = parse_artifact(
                     callback_context.state.get(requirement.source_key)

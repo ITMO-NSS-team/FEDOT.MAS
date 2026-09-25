@@ -14,12 +14,12 @@ from fedotmas.maw.models import (
     MAWConfig,
     MAWStepConfig,
 )
+from fedotmas.plugins import WebSearchLimitPlugin
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools import FunctionTool
-from fedotmas.plugins import WebSearchLimitPlugin
 from google.genai import types
 from pydantic import Field
 
@@ -303,6 +303,140 @@ async def test_legacy_maw_config_without_contracts_remains_buildable():
     assert agent.include_contents == "none"
     text = await agent.instruction(_context({"user_query": "legacy task"}))
     assert "FINAL ANSWER CONTRACT" not in text
+
+
+@pytest.mark.asyncio
+async def test_terminal_final_answer_skips_generated_output_contract(monkeypatch):
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(
+                name="answerer",
+                instruction="Answer the question.",
+                output_key="answer",
+                output_contract=ArtifactContract(required_fields=["answer"]),
+            )
+        ],
+        pipeline=MAWStepConfig(type="agent", agent_name="answerer"),
+        final_answer_agent="answerer",
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[types.Content(role="model", parts=[types.Part.from_text(text="<solution>42</solution>")])],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    agent = builder.build(
+        config,
+        autonomous=False,
+        final_answer_contract="Use <solution>...</solution> with only the answer.",
+    )
+
+    result = await run_pipeline(
+        agent, "Give the answer.", session_service=InMemorySessionService()
+    )
+
+    assert result.status == "completed"
+    assert result.state["answer"] == "<solution>42</solution>"
+    assert "handoff_issues" not in result.state.get("_fedotmas_execution", {})
+
+
+@pytest.mark.asyncio
+async def test_recovered_handoff_issue_is_resolved(monkeypatch):
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(
+                name="producer", instruction="Return incomplete evidence.", output_key="evidence"
+            ),
+            MAWAgentConfig(
+                name="recovery",
+                instruction="Recover the missing field.",
+                output_key="recovered",
+                input_requirements=[ArtifactRequirement(source_key="evidence", required_fields=["claim"])],
+                output_contract=ArtifactContract(required_fields=["claim"]),
+                research_policy="targeted_recovery",
+            ),
+        ],
+        pipeline=MAWStepConfig(
+            type="sequential",
+            children=[MAWStepConfig(type="agent", agent_name="producer"), MAWStepConfig(type="agent", agent_name="recovery")],
+        ),
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(role="model", parts=[types.Part.from_text(text='{"other": "x"}')]),
+            types.Content(role="model", parts=[types.Part.from_text(text='{"claim": "recovered"}')]),
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    result = await run_pipeline(
+        builder.build(config, autonomous=False), "Recover it.", session_service=InMemorySessionService()
+    )
+
+    issues = result.state["_fedotmas_execution"]["handoff_issues"]
+    assert issues[0]["kind"] == "incomplete_handoff"
+    assert issues[0]["resolved"] is True
+    assert result.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_unresolved_handoff_and_malformed_artifact_remain_incomplete(monkeypatch):
+    config = _contract_config().model_copy(
+        update={"pipeline": MAWStepConfig(type="agent", agent_name="paper_researcher")}
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[types.Content(role="model", parts=[types.Part.from_text(text='{"paper_identity":"x"}')])],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    result = await run_pipeline(builder.build(config, autonomous=False), "Find it.", session_service=InMemorySessionService())
+    assert result.status == "incomplete"
+    assert result.state["_fedotmas_execution"]["handoff_issues"][0]["resolved"] is False
+
+    malformed = _contract_config().model_copy(
+        update={"pipeline": MAWStepConfig(type="agent", agent_name="paper_researcher")}
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[types.Content(role="model", parts=[types.Part.from_text(text="not json")])],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    result = await run_pipeline(builder.build(malformed, autonomous=False), "Find it.", session_service=InMemorySessionService())
+    assert result.status == "incomplete"
+    assert result.state["_fedotmas_execution"]["handoff_issues"][0]["kind"] == "incomplete_artifact"
+
+
+@pytest.mark.asyncio
+async def test_later_loop_iteration_resolves_incomplete_artifact(monkeypatch):
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(
+                name="refiner",
+                instruction="Refine the artifact.",
+                output_key="artifact",
+                output_contract=ArtifactContract(required_fields=["claim", "evidence"]),
+            )
+        ],
+        pipeline=MAWStepConfig(
+            type="loop",
+            max_iterations=2,
+            children=[MAWStepConfig(type="agent", agent_name="refiner")],
+        ),
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(role="model", parts=[types.Part.from_text(text='{"claim":"x"}')]),
+            types.Content(role="model", parts=[types.Part.from_text(text='{"claim":"x","evidence":"source"}')]),
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    result = await run_pipeline(
+        builder.build(config, autonomous=False), "Refine it.", session_service=InMemorySessionService()
+    )
+
+    issue = result.state["_fedotmas_execution"]["handoff_issues"][0]
+    assert issue["resolved"] is True
+    assert result.status == "completed"
 
 
 class _ScriptedLlm(BaseLlm):

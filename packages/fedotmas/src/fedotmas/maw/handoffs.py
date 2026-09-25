@@ -80,5 +80,36 @@ def append_execution_issue(state: dict[str, Any], issue: dict[str, Any]) -> None
         metadata = {}
         state[EXECUTION_METADATA_KEY] = metadata
     issues = metadata.setdefault("handoff_issues", [])
-    if isinstance(issues, list) and issue not in issues:
-        issues.append(issue)
+    if not isinstance(issues, list):
+        return
+    identity = _issue_identity(issue)
+    for existing in issues:
+        if isinstance(existing, dict) and _issue_identity(existing) == identity:
+            existing.update(issue)
+            existing["resolved"] = False
+            return
+    issues.append({**issue, "resolved": False})
+
+
+def resolve_execution_issue(state: dict[str, Any], issue: dict[str, Any]) -> None:
+    """Mark the matching historical handoff issue resolved after revalidation."""
+    metadata = state.get(EXECUTION_METADATA_KEY)
+    issues = metadata.get("handoff_issues") if isinstance(metadata, dict) else None
+    if not isinstance(issues, list):
+        return
+    identity = _issue_identity(issue)
+    for existing in issues:
+        if isinstance(existing, dict) and _issue_identity(existing) == identity:
+            existing["resolved"] = True
+
+
+def _issue_identity(issue: dict[str, Any]) -> tuple[Any, ...]:
+    return tuple(issue.get(key) for key in ("kind", "agent", "source_key", "output_key"))
+
+
+def unresolved_execution_issues(state: dict[str, Any]) -> list[dict[str, Any]]:
+    metadata = state.get(EXECUTION_METADATA_KEY)
+    issues = metadata.get("handoff_issues") if isinstance(metadata, dict) else None
+    if not isinstance(issues, list):
+        return []
+    return [issue for issue in issues if isinstance(issue, dict) and issue.get("resolved") is not True]
