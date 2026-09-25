@@ -4,6 +4,7 @@ import asyncio
 import functools
 import os
 
+from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.mcp_tool import (
     McpToolset,
@@ -77,7 +78,9 @@ def create_toolset(
 
     filtered_diagnostics: set[str] = set()
 
-    def solving_tool_filter(tool: BaseTool) -> bool:
+    def solving_tool_filter(
+        tool: BaseTool, readonly_context: ReadonlyContext | None = None
+    ) -> bool:
         tool_name = getattr(tool, "name", "")
         visible = is_solving_tool(f"{name}__{tool_name}")
         if not visible:

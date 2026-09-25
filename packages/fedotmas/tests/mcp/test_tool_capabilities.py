@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from fedotmas.maw.builder import build
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.mcp import ToolCapability, create_toolset, tool_capability
 from fedotmas.mcp._config import StdioMCPServer
+from mcp import ListToolsResult, Tool
 
 
 def test_shared_capability_map_covers_research_tools():
@@ -28,7 +30,10 @@ def test_shared_capability_map_covers_research_tools():
 
 def test_bare_non_web_search_is_not_web_discovery():
     assert tool_capability("search") == ToolCapability.OTHER
-    assert tool_capability("search", description="Search the web for sources") == ToolCapability.DISCOVERY
+    assert (
+        tool_capability("search", description="Search the web for sources")
+        == ToolCapability.DISCOVERY
+    )
     assert tool_capability("search", server="pubchem") == ToolCapability.OTHER
 
 
@@ -52,11 +57,34 @@ def test_tavily_worker_toolset_exposes_search_and_filters_telemetry():
     toolset = agent.tools[0]
     tool_filter = toolset.tool_filter
 
-    assert tool_filter(SimpleNamespace(name="search")) is True
-    assert tool_filter(SimpleNamespace(name="telemetry")) is False
-    assert tool_filter(SimpleNamespace(name="websearch_tavily_telemetry")) is False
+    assert tool_filter(SimpleNamespace(name="search"), None) is True
+    assert tool_filter(SimpleNamespace(name="telemetry"), None) is False
+    assert (
+        tool_filter(SimpleNamespace(name="websearch_tavily_telemetry"), None) is False
+    )
     assert "telemetry" in toolset._fedotmas_filtered_diagnostic_tools
     assert "websearch_tavily_telemetry" in toolset._fedotmas_filtered_diagnostic_tools
+
+
+async def test_tavily_tools_load_through_adk_and_filter_telemetry(monkeypatch):
+    toolset = create_toolset(
+        "websearch-tavily",
+        registry={"websearch-tavily": StdioMCPServer(command="echo", args=())},
+    )
+    tools_response = ListToolsResult(
+        tools=[
+            Tool(name="search", inputSchema={"type": "object"}),
+            Tool(name="telemetry", inputSchema={"type": "object"}),
+        ]
+    )
+    monkeypatch.setattr(
+        toolset, "_execute_with_session", AsyncMock(return_value=tools_response)
+    )
+
+    tools = await toolset.get_tools()
+
+    assert [tool.name for tool in tools] == ["search"]
+    assert toolset._fedotmas_filtered_diagnostic_tools == {"telemetry"}
 
 
 def test_runtime_can_request_unfiltered_diagnostic_tools_internally():
