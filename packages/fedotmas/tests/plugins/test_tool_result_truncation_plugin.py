@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -30,6 +32,17 @@ class TestToolResultTruncationPlugin:
 
         assert changed is True
         assert len(json.dumps(value, ensure_ascii=False, default=str)) <= limit
+
+    def test_impossibly_small_state_budget_fails_explicitly(self):
+        state = {
+            "version": 1,
+            "research_id": "r",
+            "goal": "g",
+            "unresolved_questions": [f"{index}-" + "x" * 230 for index in range(30)],
+            "search_count": 4,
+        }
+        with pytest.raises(ValueError, match="too small for valid research_state"):
+            _truncate_total({"research_state": state}, 500)
 
     @pytest.mark.asyncio
     async def test_aggregate_limit_is_opt_in_for_other_callers(self):
@@ -287,6 +300,124 @@ class TestToolResultTruncationPlugin:
             "action": "continue_search",
             "searches_before": 3,
         }
+
+    @pytest.mark.asyncio
+    async def test_oversized_research_state_is_schema_compacted_and_stays_actionable(self):
+        plugin = ToolResultTruncationPlugin(
+            max_string_chars=6000,
+            max_total_chars=1000,
+            aggregate_tool_names={"*"},
+            max_agent_total_chars=1200,
+        )
+        state = {
+            "version": 1,
+            "research_id": "workstream-1",
+            "goal": "Find a date from an external source",
+            "unresolved_questions": ["Which document contains the date?"],
+            "required_fields": ["date"],
+            "filled_fields": [],
+            "search_count": 7,
+            "failed_attempt_count": 2,
+            "failed_strategy_counts": {"search": 2},
+            "remaining_budget": 5,
+            "confidence": 0.4,
+            "findings": [f"old finding {index} " + "x" * 220 for index in range(30)],
+            "evidence": [f"old evidence {index} " + "y" * 220 for index in range(30)],
+            "evidence_urls": [f"https://source.example/{index}" for index in range(30)],
+            "independent_sources": [f"source-{index}" for index in range(30)],
+            "search_intents": [{"terms": ["historic query"], "entities": []}] * 40,
+            "failed_approaches": ["old failed approach"] * 30,
+            "telemetry": {
+                "controller_calls": 9,
+                "recommendation_count": 4,
+                "followed_recommendations": 2,
+                "pending_recommendation": {
+                    "id": 4,
+                    "action": "continue_search",
+                    "searches_before": 7,
+                },
+                "recommendations": [{"reason": "old"}] * 40,
+                "intervention_outcomes": [{"followed": False}] * 40,
+            },
+        }
+        oversized = {"research_state": state, "old_evidence": "z" * 2500}
+        compacted, changed = _truncate_total(oversized, 1000)
+        serialized = json.dumps(compacted, ensure_ascii=False)
+        assert changed is True
+        assert len(serialized) <= 1000
+        retained = compacted["research_state"]
+        assert retained["goal"] == state["goal"]
+        assert retained["research_id"] == state["research_id"]
+        assert retained["unresolved_questions"] == state["unresolved_questions"]
+        assert retained["search_count"] == 7
+        assert retained["failed_attempt_count"] == 2
+        assert retained["remaining_budget"] == 5
+        assert retained["telemetry"]["pending_recommendation"] == {
+            "id": 4,
+            "action": "continue_search",
+            "searches_before": 7,
+        }
+        assert retained["telemetry"]["followed_recommendations"] == 2
+        assert retained["telemetry"]["recommendation_count"] == 4
+        nested, _ = _truncate_total(
+            {"results": [{"research_state": state}], "message": "current"}, 1000
+        )
+        assert len(json.dumps(nested, ensure_ascii=False)) <= 1000
+        assert nested["results"][0]["research_state"]["research_id"] == "workstream-1"
+
+        latest = await plugin.after_tool_callback(
+            tool=_tool("get_next_action"),
+            tool_args={},
+            tool_context=_tool_context(),
+            result=oversized,
+        )
+        assert latest is not None
+        assert len(json.dumps(latest, ensure_ascii=False)) <= 1000
+        contents = [
+            types.Content(
+                role="user",
+                parts=[types.Part.from_function_response(
+                    name="search",
+                    response={"url": f"https://source.example/{index}", "content": "q" * 900},
+                )],
+            )
+            for index in range(4)
+        ]
+        contents.append(types.Content(
+            role="user",
+            parts=[types.Part.from_function_response(name="get_next_action", response=latest)],
+        ))
+        request = LlmRequest(contents=contents)
+        await plugin.before_model_callback(
+            callback_context=SimpleNamespace(), llm_request=request
+        )
+        active = [
+            part.function_response.response
+            for content in request.contents
+            for part in content.parts or []
+            if part.function_response is not None
+        ]
+        assert sum(len(json.dumps(item, ensure_ascii=False)) for item in active) <= 1200
+        active_state = next(item["research_state"] for item in active if "research_state" in item)
+        assert active_state["telemetry"]["pending_recommendation"]["action"] == "continue_search"
+
+        root = Path(__file__).resolve().parents[4]
+        controller_path = (
+            root / "mcp-servers/research-controller/src/mcp_research_controller/controller.py"
+        )
+        spec = importlib.util.spec_from_file_location("research_controller_for_test", controller_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec is not None and spec.loader is not None
+        spec.loader.exec_module(module)
+        controller = module.ResearchController()
+        updated = controller.update_research_state(
+            goal=active_state["goal"],
+            research_id=active_state["research_id"],
+            research_state=active_state,
+            unresolved_questions=active_state["unresolved_questions"],
+            last_recommendation_followed=True,
+        )["research_state"]
+        assert controller.get_next_action(updated)["research_state"]["goal"] == state["goal"]
 
     @pytest.mark.asyncio
     async def test_truncates_nested_strings(self):

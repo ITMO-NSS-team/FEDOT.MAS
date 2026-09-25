@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from copy import deepcopy
 from typing import Any
 
@@ -106,6 +107,36 @@ class ToolResultTruncationPlugin(BasePlugin):
                 break
             if index != latest_state_response:
                 response.response = {}
+        if active_chars() > self.max_agent_total_chars and latest_state_response is not None:
+            # The newest controller snapshot outranks ordinary tool evidence. Compact
+            # that snapshot by schema, then spend any remaining room on the newest
+            # ordinary response. Never leave a pinned snapshot over the context cap.
+            state_response = responses[latest_state_response]
+            newest_response = (
+                deepcopy(responses[-1].response)
+                if latest_state_response != len(responses) - 1
+                else None
+            )
+            for index, response in enumerate(responses):
+                if index != latest_state_response:
+                    response.response = {}
+            state_response.response, _ = _truncate_total(
+                state_response.response,
+                self.max_agent_total_chars - 2 * (len(responses) - 1),
+            )
+            if newest_response is not None:
+                state_chars = len(
+                    json.dumps(state_response.response, ensure_ascii=False, default=str)
+                )
+                allowance = (
+                    self.max_agent_total_chars
+                    - state_chars
+                    - 2 * (len(responses) - 2)
+                )
+                if allowance > 2:
+                    responses[-1].response, _ = _truncate_total(
+                        newest_response, allowance
+                    )
 
     async def after_tool_callback(
         self,
@@ -192,6 +223,9 @@ def _truncate_total(value: Any, limit: int) -> tuple[Any, bool]:
         return value, False
     result = deepcopy(value)
     changed = False
+    if _has_research_state(result):
+        _compact_research_state_slots(result, limit)
+        changed = True
     while len(json.dumps(result, ensure_ascii=False, default=str)) > limit:
         lists = _ordinary_containers(result, list)
         nonempty = [items for items in lists if len(items) > 1]
@@ -209,7 +243,9 @@ def _truncate_total(value: Any, limit: int) -> tuple[Any, bool]:
             ]
             if not dictionaries:
                 if _has_research_state(result):
-                    return result, True
+                    _compact_research_state_slots(result, limit)
+                    changed = True
+                    continue
                 return (0 if limit == 1 else {}), True
             container = max(
                 dictionaries,
@@ -267,6 +303,153 @@ def _has_research_state(value: Any) -> bool:
     if isinstance(value, list):
         return any(_has_research_state(item) for item in value)
     return False
+
+
+def _compact_research_state_slots(value: Any, limit: int) -> None:
+    root = value
+
+    def visit(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, item in list(node.items()):
+                if str(key).casefold() == "research_state":
+                    original = node[key]
+                    node[key] = {}
+                    overhead = len(json.dumps(root, ensure_ascii=False, default=str))
+                    available = limit - overhead + 2
+                    if available > 0:
+                        node[key] = _compact_research_state(original, available)
+                    else:
+                        node[key] = original
+                else:
+                    visit(item)
+        elif isinstance(node, list):
+            for item in node:
+                visit(item)
+
+    visit(root)
+
+
+def _compact_research_state(value: Any, limit: int) -> dict[str, Any]:
+    """Keep controller continuation fields valid while dropping old history."""
+    if not isinstance(value, dict):
+        raise TypeError("research_state must be an object to preserve continuation state")
+
+    def bounded_text(item: Any, fallback: str = "") -> str:
+        if not isinstance(item, str):
+            return fallback
+        return " ".join(item.split())[:240]
+
+    def strings(item: Any) -> list[str]:
+        if not isinstance(item, list):
+            return []
+        seen = set()
+        result = []
+        for entry in item:
+            cleaned = bounded_text(entry)
+            key = cleaned.casefold()
+            if cleaned and key not in seen:
+                result.append(cleaned)
+                seen.add(key)
+        return result[-30:]
+
+    def count(item: Any) -> int:
+        return item if isinstance(item, int) and not isinstance(item, bool) and item >= 0 else 0
+
+    raw_intents = value.get("search_intents")
+    search_intents = []
+    if isinstance(raw_intents, list):
+        for profile in raw_intents:
+            if not isinstance(profile, dict):
+                continue
+            terms = strings(profile.get("terms"))
+            if terms:
+                search_intents.append(
+                    {"terms": terms, "entities": strings(profile.get("entities"))}
+                )
+
+    pending = value.get("telemetry")
+    pending = pending if isinstance(pending, dict) else {}
+    recommendation = pending.get("pending_recommendation")
+    if isinstance(recommendation, dict):
+        action = recommendation.get("action")
+        recommendation = (
+            {
+                "id": count(recommendation.get("id")),
+                "action": action,
+                "searches_before": count(recommendation.get("searches_before")),
+            }
+            if count(recommendation.get("id")) > 0
+            and action in {"continue_search", "change_strategy", "strategy_blocked", "synthesize"}
+            else None
+        )
+    else:
+        recommendation = None
+
+    result: dict[str, Any] = {
+        "version": 1,
+        "research_id": bounded_text(value.get("research_id"), "default") or "default",
+        "goal": bounded_text(value.get("goal"), "[goal unavailable]") or "[goal unavailable]",
+        "unresolved_questions": strings(value.get("unresolved_questions")),
+        "required_fields": strings(value.get("required_fields")),
+        "filled_fields": strings(value.get("filled_fields")),
+        "search_count": count(value.get("search_count")),
+        "failed_attempt_count": count(value.get("failed_attempt_count")),
+        "failed_strategy_counts": {
+            bounded_text(key): count(number)
+            for key, number in (value.get("failed_strategy_counts") or {}).items()
+            if isinstance(key, str) and bounded_text(key)
+        } if isinstance(value.get("failed_strategy_counts"), dict) else {},
+        "search_intents": search_intents[-2:],
+        "remaining_budget": value.get("remaining_budget")
+        if isinstance(value.get("remaining_budget"), int | float)
+        and not isinstance(value.get("remaining_budget"), bool)
+        and math.isfinite(value["remaining_budget"])
+        and value["remaining_budget"] >= 0 else None,
+        "confidence": value.get("confidence")
+        if isinstance(value.get("confidence"), int | float)
+        and not isinstance(value.get("confidence"), bool)
+        and math.isfinite(value["confidence"])
+        and 0 <= value["confidence"] <= 1 else None,
+        "telemetry": {
+            "controller_calls": count(pending.get("controller_calls")),
+            "recommendation_count": max(
+                count(pending.get("recommendation_count")),
+                count(recommendation.get("id")) if recommendation else 0,
+            ),
+            "strategy_blocked_events": count(pending.get("strategy_blocked_events")),
+            "followed_recommendations": count(pending.get("followed_recommendations")),
+            "unfollowed_recommendations": count(pending.get("unfollowed_recommendations")),
+            "unknown_follow_through": count(pending.get("unknown_follow_through")),
+            "pending_recommendation": recommendation,
+        },
+    }
+    # These fields can be useful to the next recommendation, but history and old
+    # evidence are evicted before unresolved work or identity/counters.
+    optional = (
+        ("evidence_urls", strings(value.get("evidence_urls"))[-3:]),
+        ("independent_sources", strings(value.get("independent_sources"))[-3:]),
+        ("findings", strings(value.get("findings"))[-3:]),
+        ("evidence", strings(value.get("evidence"))[-3:]),
+    )
+    for key, entries in optional:
+        if entries:
+            result[key] = entries
+    shrinkable = ("search_intents", "findings", "evidence", "evidence_urls", "independent_sources")
+    while len(json.dumps(result, ensure_ascii=False, default=str)) > limit:
+        shrunk = False
+        for field in shrinkable:
+            entries = result.get(field)
+            if isinstance(entries, list) and entries:
+                entries.pop(0)
+                if not entries:
+                    result.pop(field, None)
+                shrunk = True
+                break
+        if not shrunk:
+            raise ValueError(
+                "context character limit is too small for valid research_state continuation"
+            )
+    return result
 
 
 def _ordinary_containers(value: Any, kind: type) -> list[Any]:

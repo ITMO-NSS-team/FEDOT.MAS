@@ -16,6 +16,7 @@ from fedotmas.maw.models import (
     MAWConfig,
     MAWStepConfig,
 )
+from fedotmas.mcp.capabilities import ToolCapability, tool_capability
 from fedotmas.meta._result import MetaAgentResult
 from fedotmas.meta.maw_pipeline_stage import PipelineGenerator
 from fedotmas.meta.maw_pool_stage import PoolGenerator
@@ -146,6 +147,14 @@ class MAW(BaseMAS[MAWConfig]):
             ),
         )
         _normalize_generated_research_policies(
+            config,
+            preserved_names=(
+                {agent.name for agent in existing_agents.agents}
+                if existing_agents is not None
+                else set()
+            ),
+        )
+        _normalize_generated_research_modes(
             config,
             preserved_names=(
                 {agent.name for agent in existing_agents.agents}
@@ -509,3 +518,39 @@ def _normalize_generated_research_policies(
                 name,
             )
             agent.research_policy = "independent"
+
+
+def _normalize_generated_research_modes(
+    config: MAWConfig, *, preserved_names: set[str] | None = None
+) -> None:
+    """Infer capability-aware modes when generation omits or mislabels a role."""
+    preserved_names = preserved_names or set()
+    for agent in config.agents:
+        if agent.name in preserved_names:
+            continue
+        role = f"{agent.name} {agent.instruction}".casefold()
+        if re.search(r"\bsource[_ -]?finder\b", role):
+            agent.research_mode = "discovery_only"
+            continue
+        if re.search(r"\bstructured[_ -]?extractor\b", role):
+            agent.research_mode = "inspection_only"
+            continue
+        if "research_mode" in agent.model_fields_set:
+            continue
+        capabilities = {tool_capability(tool) for tool in agent.tools}
+        has_discovery = ToolCapability.DISCOVERY in capabilities
+        has_inspection = bool(
+            capabilities
+            & {
+                ToolCapability.URL_INSPECTION,
+                ToolCapability.DOCUMENT_INSPECTION,
+                ToolCapability.MEDIA_INSPECTION,
+                ToolCapability.BROWSER_NAVIGATION,
+            }
+        )
+        if has_discovery and has_inspection:
+            agent.research_mode = "mixed"
+        elif has_discovery:
+            agent.research_mode = "discovery_only"
+        elif has_inspection:
+            agent.research_mode = "inspection_only"

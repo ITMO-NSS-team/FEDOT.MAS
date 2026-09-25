@@ -14,7 +14,7 @@ from fedotmas.maw.models import (
     MAWConfig,
     MAWStepConfig,
 )
-from fedotmas.plugins import WebSearchLimitPlugin
+from fedotmas.plugins import ResearchTelemetry, WebSearchLimitPlugin
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
@@ -345,6 +345,25 @@ async def test_complete_evidence_first_verifier_does_not_search(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_verifier_with_missing_fields_uses_targeted_recovery_by_default():
+    verifier = _contract_config().agents[1].model_copy(
+        update={"research_policy": "independent"}
+    )
+    agent = builder._build_llm_agent(verifier, None, None, autonomous=False)
+    state = {
+        "paper_evidence": json.dumps(
+            {"paper_identity": "paper-A", "equation": "E=mc^2"}
+        )
+    }
+    context = _context(state)
+    context._invocation_context.agent.name = "verifier"
+
+    await agent.before_agent_callback(context)
+
+    assert state["__fedotmas_research_policies"]["verifier"] == "targeted_recovery"
+
+
+@pytest.mark.asyncio
 async def test_final_contract_is_added_only_to_configured_terminal_agent():
     config = MAWConfig(
         agents=[
@@ -496,6 +515,37 @@ async def test_inferred_final_answer_agent_is_persisted(monkeypatch):
     assert config.final_answer_agent == "answerer"
     assert result.state[config.agents[0].output_key] == "<solution>42</solution>"
     assert result.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_explicit_terminal_abstention_is_incomplete(monkeypatch):
+    config = MAWConfig(
+        agents=[MAWAgentConfig(name="answerer", instruction="Answer.", output_key="answer")],
+        pipeline=MAWStepConfig(type="agent", agent_name="answerer"),
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="<abstain>No supported record found.</abstain>")],
+            )
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+
+    result = await run_pipeline(
+        builder.build(config, autonomous=False),
+        "Find the record.",
+        session_service=InMemorySessionService(),
+    )
+
+    assert result.status == "incomplete"
+    assert result.state["__fedotmas_completion"] == {
+        "status": "abstained",
+        "reason": "No supported record found.",
+        "agent": "answerer",
+    }
 
 
 def test_ambiguous_terminal_cannot_infer_final_answer_agent():
@@ -860,32 +910,408 @@ def test_contract_repair_rejects_ambiguous_nested_value_mapping():
 
 
 @pytest.mark.asyncio
-async def test_pending_candidates_remove_broad_search_across_repeated_model_turns():
+async def test_builder_discovery_inspection_gate_transitions_through_model_callbacks():
     search = FunctionTool(func=lambda query: {"results": []})
     search.name = "searxng_search"
     search.description = "Search the web"
+    inspect = FunctionTool(func=lambda url: {"content": ""})
+    inspect.name = "markdown"
+    inspect.description = "Inspect a known page"
     cfg = MAWAgentConfig(name="researcher", instruction="Research", output_key="out")
-    agent = builder._build_llm_agent(cfg, [search], None, autonomous=False)
-    state = {"__fedotmas_research_gate": {"researcher": {
-        "gated": True,
-        "pending_urls": ["https://example.org/a", "https://example.org/b", "https://example.org/c"],
-    }}}
+    agent = builder._build_llm_agent(cfg, [search, inspect], None, autonomous=False)
+    state: dict = {}
     context = _context(state)
-    context.state = state
+    context._invocation_context.agent.name = "researcher"
+    telemetry = ResearchTelemetry()
+    await agent.before_agent_callback(context)
+    request = _research_request(search, inspect)
+    await agent.before_model_callback(context, request)
+    assert search.name in {
+        declaration.name
+        for group in request.config.tools or []
+        for declaration in group.function_declarations or []
+    }
+
+    args = {"query": "specific source"}
+    assert await agent.before_tool_callback(search, args, context) is None
+    await telemetry.before_tool_callback(tool=search, tool_args=args, tool_context=context)
+    await telemetry.after_tool_callback(
+        tool=search,
+        tool_args=args,
+        tool_context=context,
+        result={
+            "results": [
+                {
+                    "url": "https://example.org/source",
+                    "title": "Primary source",
+                    "snippet": "The exact requested record.",
+                }
+            ]
+        },
+    )
+
+    request = _research_request(search, inspect)
+    await agent.before_model_callback(context, request)
+    exposed = {
+        declaration.name
+        for group in request.config.tools or []
+        for declaration in group.function_declarations or []
+    }
+    assert search.name not in exposed
+    assert inspect.name in exposed
+    assert "Primary source" in request.config.system_instruction
+
+    blocked = await agent.before_tool_callback(
+        search, {"query": "another broad query"}, context
+    )
+    assert blocked["error_code"] == "INSPECT_CANDIDATES_FIRST"
+
+    inspect_args = {"url": "https://example.org/source"}
+    await telemetry.before_tool_callback(
+        tool=inspect, tool_args=inspect_args, tool_context=context
+    )
+    await telemetry.after_tool_callback(
+        tool=inspect,
+        tool_args=inspect_args,
+        tool_context=context,
+        result={"content": "The record reports value 17."},
+    )
+    request = _research_request(search, inspect)
+    await agent.before_model_callback(context, request)
+    assert search.name in {
+        declaration.name
+        for group in request.config.tools or []
+        for declaration in group.function_declarations or []
+    }
+    ledger = state["__fedotmas_research_candidates"]["researcher"]
+    assert ledger[0]["inspected"] is True
+    assert telemetry.snapshot()["researcher"]["candidate_urls_inspected"] == 1
+
+
+def _research_request(*tools):
+    return LlmRequest(
+        tools_dict={tool.name: tool for tool in tools},
+        config=types.GenerateContentConfig(
+            tools=[
+                types.Tool(
+                    function_declarations=[
+                        types.FunctionDeclaration(
+                            name=tool.name, description=tool.description
+                        )
+                        for tool in tools
+                    ]
+                )
+            ]
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_discovery_only_source_finder_does_not_wait_for_inspection():
+    telemetry = ResearchTelemetry()
+    search = FunctionTool(func=lambda query: {"results": []})
+    search.name = "searxng_search"
+    inspect = FunctionTool(func=lambda url: {"content": ""})
+    inspect.name = "markdown"
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(
+            name="source_finder",
+            instruction="Find and select candidate sources.",
+            output_key="sources",
+            research_mode="discovery_only",
+        ),
+        [search, inspect],
+        None,
+        autonomous=False,
+    )
+    state: dict = {}
+    context = _context(state)
+    context._invocation_context.agent.name = "source_finder"
+    await agent.before_agent_callback(context)
+    request = _research_request(search, inspect)
+    await agent.before_model_callback(context, request)
+    exposed = {
+        declaration.name
+        for group in request.config.tools or []
+        for declaration in group.function_declarations or []
+    }
+    assert search.name in exposed
+    assert inspect.name not in exposed
+    args = {"query": "candidate sources"}
+    assert await telemetry.before_tool_callback(
+        tool=search, tool_args=args, tool_context=context
+    ) is None
+    await telemetry.after_tool_callback(
+        tool=search,
+        tool_args=args,
+        tool_context=context,
+        result={"results": [{"url": "https://example.org/source", "title": "A source"}]},
+    )
+
+    assert "source_finder" not in state.get("__fedotmas_research_gate", {})
+    assert await telemetry.before_tool_callback(
+        tool=search,
+        tool_args={"query": "another source query"},
+        tool_context=context,
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_discovery_only_source_finder_hands_off_when_candidates_are_ready():
+    telemetry = ResearchTelemetry()
+    search = FunctionTool(func=lambda query: {"results": []})
+    search.name = "searxng_search"
+    search.description = "Search the web"
+    inspect = FunctionTool(func=lambda url: {"content": ""})
+    inspect.name = "markdown"
+    inspect.description = "Inspect a known URL"
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(
+            name="source_finder",
+            instruction="Find primary source candidates.",
+            output_key="sources",
+            research_mode="discovery_only",
+        ),
+        [search, inspect],
+        None,
+        autonomous=False,
+    )
+    state: dict = {}
+    context = _context(state)
+    context._invocation_context.agent.name = "source_finder"
+    await agent.before_agent_callback(context)
+    request = _research_request(search, inspect)
+    await agent.before_model_callback(context, request)
+    args = {"query": "exact record"}
+    assert await agent.before_tool_callback(search, args, context) is None
+    await telemetry.before_tool_callback(
+        tool=search, tool_args=args, tool_context=context
+    )
+    await telemetry.after_tool_callback(
+        tool=search,
+        tool_args=args,
+        tool_context=context,
+        result={
+            "results": [
+                {
+                    "url": f"https://example.org/source-{index}",
+                    "title": f"Source {index}",
+                    "snippet": "An exact record match.",
+                }
+                for index in range(3)
+            ]
+        },
+    )
+
+    request = _research_request(search, inspect)
+    await agent.before_model_callback(context, request)
+    exposed = {
+        declaration.name
+        for group in request.config.tools or []
+        for declaration in group.function_declarations or []
+    }
+    assert search.name not in exposed
+    assert inspect.name not in exposed
+    assert "Source 0" in request.config.system_instruction
+    blocked = await agent.before_tool_callback(search, {"query": "again"}, context)
+    assert blocked["error_code"] == "SOURCE_CANDIDATES_READY"
+    blocked_inspection = await agent.before_tool_callback(
+        inspect, {"url": "https://example.org/source-0"}, context
+    )
+    assert blocked_inspection["error_code"] == "DISCOVERY_ONLY_INSPECTION_DISABLED"
+
+
+@pytest.mark.asyncio
+async def test_same_turn_broad_discovery_fanout_is_capped_but_inspection_is_allowed():
+    search = FunctionTool(func=lambda query: {"results": []})
+    search.name = "searxng_search"
+    search.description = "Search the web"
+    inspect = FunctionTool(func=lambda url: {"content": ""})
+    inspect.name = "markdown"
+    inspect.description = "Inspect a known URL"
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(name="researcher", instruction="Research", output_key="out"),
+        [search, inspect],
+        None,
+        autonomous=False,
+    )
+    state: dict = {}
+    context = _context(state)
+    context._invocation_context.agent.name = "researcher"
+    await agent.before_agent_callback(context)
+    request = _research_request(search, inspect)
+    await agent.before_model_callback(context, request)
+
+    assert await agent.before_tool_callback(search, {"query": "first"}, context) is None
+    blocked = await agent.before_tool_callback(search, {"query": "second"}, context)
+    assert blocked["error_code"] == "DISCOVERY_FANOUT_LIMIT"
+    assert await agent.before_tool_callback(
+        inspect, {"url": "https://example.org/known"}, context
+    ) is None
+    assert "Per-turn research budget" in request.config.system_instruction
+
+    await agent.before_model_callback(context, _research_request(search, inspect))
+    assert await agent.before_tool_callback(search, {"query": "next turn"}, context) is None
+
+
+@pytest.mark.asyncio
+async def test_model_search_fanout_executes_only_one_call_per_response(monkeypatch):
+    executed: list[str] = []
+
+    def search(query: str) -> dict:
+        """Search broadly for candidate sources."""
+        executed.append(query)
+        return {"results": [{"url": f"https://example.org/{query}"}]}
+
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            id="search-1", name="search", args={"query": "first"}
+                        )
+                    ),
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            id="search-2", name="search", args={"query": "second"}
+                        )
+                    ),
+                ],
+            ),
+            types.Content(role="model", parts=[types.Part.from_text(text="done")]),
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(
+            name="researcher",
+            instruction="Research.",
+            output_key="answer",
+            research_mode="discovery_only",
+        ),
+        None,
+        None,
+        autonomous=False,
+    )
+    agent.tools = [FunctionTool(search)]
+
+    telemetry = ResearchTelemetry()
+    result = await run_pipeline(
+        agent,
+        "Find one useful source.",
+        session_service=InMemorySessionService(),
+        plugins=[telemetry],
+    )
+
+    assert executed == ["first"]
+    turns = result.state["_fedotmas_execution"]["turn_observability"]["researcher"]
+    turn = turns[0]
+    assert [call["tool"] for call in turn["tool_calls_selected"]] == ["search"]
+    assert [call["reason"] for call in turn["calls_blocked"]] == [
+        "DISCOVERY_FANOUT_LIMIT"
+    ]
+    assert turn["visible_tool_declarations"][0]["name"] == "search"
+    assert "Search broadly for candidate sources" in turn["visible_tool_declarations"][0]["description"]
+    assert "new_candidate" in turns[1]["semantic_progress_events"]
+
+
+@pytest.mark.asyncio
+async def test_repeated_no_progress_turns_hide_broad_discovery_and_are_recorded():
+    search = FunctionTool(func=lambda query: {"results": []})
+    search.name = "searxng_search"
+    search.description = "Search the web"
+    inspect = FunctionTool(func=lambda url: {"content": ""})
+    inspect.name = "markdown"
+    inspect.description = "Inspect a known URL"
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(name="researcher", instruction="Research", output_key="out"),
+        [search, inspect],
+        None,
+        autonomous=False,
+    )
+    state: dict = {}
+    context = _context(state)
+    context._invocation_context.agent.name = "researcher"
+    await agent.before_agent_callback(context)
     for _ in range(3):
-        request = LlmRequest(
-            tools_dict={search.name: search},
-            config=types.GenerateContentConfig(tools=[types.Tool(function_declarations=[
-                types.FunctionDeclaration(name=search.name, description=search.description)
-            ])]),
-        )
+        request = _research_request(search, inspect)
         await agent.before_model_callback(context, request)
-        declarations = [
-            declaration.name for group in request.config.tools or []
-            for declaration in group.function_declarations or []
-        ]
-        assert search.name not in declarations
-        assert "https://example.org/a" in request.config.system_instruction
+
+    trace = state["_fedotmas_execution"]["turn_observability"]["researcher"]
+    assert trace[-1]["no_progress_turns"] == 2
+    assert state["_fedotmas_execution"]["research_progress"]["researcher"]["no_progress_turns"] == 2
+    assert search.name not in {
+        declaration.name
+        for group in request.config.tools or []
+        for declaration in group.function_declarations or []
+    }
+    assert "repeated turns without semantic progress" in {
+        item["reason"] for item in trace[-1]["removed_tools"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_complete_evidence_verifier_cannot_broad_search():
+    search = FunctionTool(func=lambda query: {"results": []})
+    search.name = "searxng_search"
+    search.description = "Search the web"
+    verifier = builder._build_llm_agent(
+        MAWAgentConfig(
+            name="verifier",
+            instruction="Verify the claim using the supplied evidence.",
+            output_key="verification",
+            input_requirements=[
+                ArtifactRequirement(
+                    source_key="evidence", required_fields=["claim", "source"]
+                )
+            ],
+        ),
+        [search],
+        None,
+        autonomous=False,
+    )
+    state = {"evidence": '{"claim":"value is 17","source":"official record"}'}
+    context = _context(state)
+    context._invocation_context.agent.name = "verifier"
+    await verifier.before_agent_callback(context)
+    request = _research_request(search)
+    await verifier.before_model_callback(context, request)
+
+    assert search.name not in {
+        declaration.name
+        for group in request.config.tools or []
+        for declaration in group.function_declarations or []
+    }
+    blocked = await verifier.before_tool_callback(search, {"query": "broad query"}, context)
+    assert blocked["error_code"] == "EVIDENCE_FIRST_SEARCH_DISABLED"
+
+
+@pytest.mark.asyncio
+async def test_nested_repeated_identity_contract_preserves_each_orcid():
+    people = [
+        {"name": "Ada Example", "orcid": "0000-0001-1111-1111"},
+        {"name": "Lin Example", "orcid": "0000-0002-2222-2222"},
+    ]
+    contract = ArtifactContract(
+        required_fields=["people"], identity_fields=["people[].orcid"]
+    )
+    cfg = MAWAgentConfig(
+        name="producer",
+        instruction="Preserve the identity of each person.",
+        output_key="artifact",
+        output_contract=contract,
+    )
+    agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
+    state = {"artifact": json.dumps({"people": people})}
+
+    await agent.after_agent_callback(_context(state))
+
+    assert json.loads(state["artifact"]) == {"people": people}
+    assert "orcid" not in json.loads(state["artifact"])
+    assert not state.get("_fedotmas_execution", {}).get("handoff_issues")
 
 
 @pytest.mark.asyncio
@@ -895,7 +1321,7 @@ async def test_contract_repair_rejects_identity_copied_from_unrelated_field(monk
         responses=[
             types.Content(
                 role="model",
-                parts=[types.Part.from_text(text='{"paper_id":"paper-A"}')],
+                parts=[types.Part.from_text(text='{"paper_id":"paper-B"}')],
             )
         ],
     )

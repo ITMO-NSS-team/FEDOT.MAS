@@ -136,6 +136,7 @@ class MAWAgentConfig(BaseModel):
     max_llm_turns: int | None = None
     output_contract: ArtifactContract | None = None
     input_requirements: list[ArtifactRequirement] = []
+    research_mode: Literal["discovery_only", "mixed", "inspection_only"] = "mixed"
     research_policy: Literal["independent", "evidence_first", "targeted_recovery"] = (
         "independent"
     )

@@ -1372,7 +1372,7 @@ def main():
         "--split",
         type=str,
         default="validation",
-        help="Dataset split (default: validation[:1])",
+        help="Dataset split (default: validation)",
     )
     parser.add_argument(
         "--no-langfuse",

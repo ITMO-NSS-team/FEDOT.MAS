@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from collections import Counter
@@ -120,6 +121,8 @@ class ResearchController:
         evidence: list[str] | None = None,
         evidence_urls: list[str] | None = None,
         independent_sources: list[str] | None = None,
+        min_sources: int | None = None,
+        require_independent_sources: bool | None = None,
         sources_checked: list[str] | None = None,
         required_fields: list[str] | None = None,
         filled_fields: list[str] | None = None,
@@ -145,6 +148,16 @@ class ResearchController:
             raise ValueError("confidence must be between 0 and 1")
         if remaining_budget is not None and remaining_budget < 0:
             raise ValueError("remaining_budget must not be negative")
+        if min_sources is not None and (
+            not isinstance(min_sources, int)
+            or isinstance(min_sources, bool)
+            or min_sources < 1
+        ):
+            raise ValueError("min_sources must be an integer >= 1")
+        if require_independent_sources is not None and not isinstance(
+            require_independent_sources, bool
+        ):
+            raise ValueError("require_independent_sources must be a boolean")
 
         state = _load_state(research_state, goal=goal, research_id=state_id)
         telemetry = state["telemetry"]
@@ -160,6 +173,10 @@ class ResearchController:
             ("filled_fields", filled_fields),
         ):
             _merge(state[name], values)
+        if min_sources is not None:
+            state["min_sources"] = min_sources
+        if require_independent_sources is not None:
+            state["require_independent_sources"] = require_independent_sources
         if unresolved_questions is not None:
             state["unresolved_questions"] = _strings(unresolved_questions)
 
@@ -230,6 +247,8 @@ def _new_state(goal: str = "", research_id: str = "default") -> dict[str, Any]:
         **{name: [] for name in _LIST_FIELDS},
         "search_intents": [],
         "search_count": 0,
+        "min_sources": 1,
+        "require_independent_sources": False,
         "failed_attempt_count": 0,
         "failed_strategy_counts": {},
         "confidence": None,
@@ -253,15 +272,51 @@ def _load_state(
         raise TypeError("research_state must be a JSON object")
 
     state = _new_state()
-    state.update(deepcopy(snapshot))
-    if state["version"] != STATE_VERSION:
+    known_fields = set(state)
+    state.update(
+        {key: deepcopy(value) for key, value in snapshot.items() if key in known_fields}
+    )
+    if (
+        not isinstance(state["version"], int)
+        or isinstance(state["version"], bool)
+        or state["version"] != STATE_VERSION
+    ):
         raise ValueError("unsupported research_state version")
+    if not isinstance(state["goal"], str) or not _clean_text(state["goal"]):
+        raise ValueError("research_state goal must be a nonempty string")
+    if not isinstance(state["research_id"], str) or not _clean_text(
+        state["research_id"]
+    ):
+        raise ValueError("research_state research_id must be a nonempty string")
+    state["goal"] = _clean_text(state["goal"])
+    state["research_id"] = _clean_text(state["research_id"])
     if goal is not None and _key(state["goal"]) != _key(goal):
         raise ValueError(
             "research_id already belongs to a different goal; use a new id"
         )
     if research_id is not None and state["research_id"] != research_id:
         raise ValueError("research_state has a different research_id")
+
+    confidence = state.get("confidence")
+    if (
+        isinstance(confidence, int | float)
+        and not isinstance(confidence, bool)
+        and math.isfinite(confidence)
+        and 0 <= confidence <= 1
+    ):
+        state["confidence"] = float(confidence)
+    else:
+        state["confidence"] = None
+    budget = state.get("remaining_budget")
+    if (
+        isinstance(budget, int | float)
+        and not isinstance(budget, bool)
+        and math.isfinite(budget)
+        and budget >= 0
+    ):
+        state["remaining_budget"] = budget
+    else:
+        state["remaining_budget"] = None
 
     for name in _LIST_FIELDS:
         state[name] = _strings(state.get(name, []))
@@ -280,15 +335,26 @@ def _load_state(
         else []
     )
     state["search_count"] = _nonnegative_int(state.get("search_count"))
+    min_sources = state.get("min_sources", 1)
+    state["min_sources"] = (
+        min_sources
+        if isinstance(min_sources, int)
+        and not isinstance(min_sources, bool)
+        and min_sources >= 1
+        else 1
+    )
+    state["require_independent_sources"] = state.get(
+        "require_independent_sources"
+    ) is True
     state["failed_attempt_count"] = _nonnegative_int(
         state.get("failed_attempt_count")
     )
     strategies = state.get("failed_strategy_counts", {})
     state["failed_strategy_counts"] = (
         {
-            key: _nonnegative_int(value)
+            _clean_text(key): _nonnegative_int(value)
             for key, value in strategies.items()
-            if isinstance(key, str)
+            if isinstance(key, str) and _clean_text(key)
         }
         if isinstance(strategies, dict)
         else {}
@@ -368,10 +434,13 @@ def _evidence_is_sufficient(state: dict[str, Any]) -> bool:
         return False
     if set(state["required_fields"]) - set(state["filled_fields"]):
         return False
-    sources = set(state["independent_sources"])
-    if not sources:
-        sources = {_source_key(url) for url in state["evidence_urls"]} - {""}
-    return len(sources) >= 2 and len(set(state["evidence_urls"])) >= 2
+    if state["require_independent_sources"]:
+        sources = set(state["independent_sources"])
+    else:
+        sources = set(state["independent_sources"])
+        if not sources:
+            sources = {_source_key(url) for url in state["evidence_urls"]} - {""}
+    return len(sources) >= state["min_sources"]
 
 
 def _finish_recommendation(state: dict[str, Any], followed: bool | None) -> None:

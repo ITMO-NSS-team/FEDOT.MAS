@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from mcp_research_controller.controller import ResearchController
 
 
@@ -112,6 +113,46 @@ def test_malformed_recommendation_history_is_discarded_without_crashing():
     assert telemetry["intervention_outcomes"] == []
 
 
+@pytest.mark.parametrize("bad_goal", [{}, [], 1, None])
+def test_malformed_goal_is_rejected_as_value_error(bad_goal):
+    controller = ResearchController()
+    snapshot = _update(controller, unresolved_questions=["What remains unknown?"])
+    snapshot["goal"] = bad_goal
+
+    with pytest.raises(ValueError, match="goal"):
+        controller.get_next_action(snapshot)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("research_id", [], "research_id"),
+        ("version", True, "version"),
+        ("search_count", {}, ""),
+        ("remaining_budget", float("inf"), ""),
+        ("confidence", [], ""),
+        ("telemetry", [], ""),
+    ],
+)
+def test_malformed_scalar_state_is_safely_rejected_or_reset(field, value, message):
+    controller = ResearchController()
+    snapshot = _update(controller, unresolved_questions=["What remains unknown?"])
+    snapshot[field] = value
+
+    if message:
+        with pytest.raises(ValueError, match=message):
+            controller.get_next_action(snapshot)
+    else:
+        result = controller.get_next_action(snapshot)
+        state = result["research_state"]
+        if field == "search_count":
+            assert state[field] == 0
+        elif field == "remaining_budget" or field == "confidence":
+            assert state[field] is None
+        else:
+            assert isinstance(state[field], dict)
+
+
 def test_similar_queries_escalate_from_change_strategy_to_strategy_blocked():
     controller = ResearchController()
     snapshot = _update(
@@ -196,6 +237,37 @@ def test_high_confidence_does_not_override_missing_fields_or_sources():
 
     assert result["action"] == "continue_search"
     assert result["reason"] == "evidence_requirements_incomplete"
+
+
+def test_one_exact_source_is_sufficient_by_default():
+    controller = ResearchController()
+    snapshot = _update(
+        controller,
+        evidence=["The named official record gives the requested value."],
+        evidence_urls=["https://official.example/record/123"],
+        required_fields=["value"],
+        filled_fields=["value"],
+        unresolved_questions=[],
+    )
+
+    assert controller.get_next_action(snapshot)["action"] == "synthesize"
+
+
+def test_stronger_source_requirements_are_task_configurable():
+    controller = ResearchController()
+    snapshot = _update(
+        controller,
+        evidence=["One source supports the requested claim."],
+        evidence_urls=["https://primary.example/record"],
+        independent_sources=["primary.example"],
+        min_sources=2,
+        require_independent_sources=True,
+        required_fields=["claim"],
+        filled_fields=["claim"],
+        unresolved_questions=[],
+    )
+
+    assert controller.get_next_action(snapshot)["action"] == "continue_search"
 
 
 def test_telemetry_survives_json_round_trip_with_follow_through_and_search_counts():

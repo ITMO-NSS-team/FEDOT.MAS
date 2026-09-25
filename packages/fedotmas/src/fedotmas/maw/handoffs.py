@@ -8,6 +8,18 @@ from typing import Any
 from fedotmas.maw.models import ArtifactContract, ArtifactRequirement
 
 EXECUTION_METADATA_KEY = "_fedotmas_execution"
+ABSTENTION_STATE_KEY = "__fedotmas_completion"
+
+
+def is_explicit_abstention(value: Any) -> bool:
+    """Recognize the runtime's explicit terminal abstention protocol."""
+    if isinstance(value, str):
+        return value.strip().startswith("<abstain>") and "</abstain>" in value
+    if isinstance(value, dict):
+        return value.get("status") == "abstained" and isinstance(
+            value.get("reason"), str
+        )
+    return False
 
 
 def parse_artifact(value: Any) -> dict[str, Any] | None:
@@ -32,9 +44,48 @@ def missing_contract_fields(
     missing = [
         field
         for field in required_fields
-        if field not in artifact or _is_blank(artifact[field])
+        if not _field_is_present(artifact, field)
     ]
     return artifact, missing
+
+
+def field_values(value: Any, path: str) -> tuple[list[Any], bool]:
+    """Resolve a dotted path with ``[]`` list expansion, preserving every item."""
+    segments = path.split(".")
+    if not segments or any(not segment for segment in segments):
+        return [], False
+    current = [value]
+    for segment in segments:
+        repeated = segment.endswith("[]")
+        key = segment[:-2] if repeated else segment
+        if not key:
+            return [], False
+        next_values = []
+        for item in current:
+            if not isinstance(item, dict) or key not in item:
+                return [], False
+            found = item[key]
+            if repeated:
+                if not isinstance(found, list) or not found:
+                    return [], False
+                next_values.extend(found)
+            else:
+                next_values.append(found)
+        current = next_values
+    return current, bool(current)
+
+
+def field_value(value: Any, path: str) -> Any:
+    """Return a path value, keeping repeated identities as a list."""
+    values, valid = field_values(value, path)
+    if not valid:
+        return None
+    return values if "[]" in path else values[0]
+
+
+def _field_is_present(artifact: dict[str, Any], path: str) -> bool:
+    values, valid = field_values(artifact, path)
+    return valid and all(not _is_blank(item) for item in values)
 
 
 def _is_blank(value: Any) -> bool:
@@ -57,9 +108,9 @@ def describe_requirement(
     artifact, missing = missing_contract_fields(value, fields)
     identity = (
         {
-            key: artifact[key]
+            key: field_value(artifact, key)
             for key in requirement.identity_fields
-            if artifact is not None and key in artifact
+            if artifact is not None and _field_is_present(artifact, key)
         }
         if artifact is not None
         else None

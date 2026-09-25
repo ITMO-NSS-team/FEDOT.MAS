@@ -13,6 +13,12 @@ from google.adk.tools.tool_context import ToolContext
 
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp import strip_tool_name_prefix
+from fedotmas.mcp.capabilities import (
+    ToolCapability,
+    is_inspection_tool,
+    normalize_tool_name,
+    tool_capability,
+)
 from fedotmas.plugins._research_telemetry import ResearchTelemetry
 from fedotmas.plugins._tool_error_circuit_breaker import (
     DUPLICATE_TOOL_CALL,
@@ -21,17 +27,7 @@ from fedotmas.plugins._tool_error_circuit_breaker import (
 
 _log = get_logger("fedotmas.plugins.web_search_limit")
 
-DEFAULT_WEB_SEARCH_TOOL_NAMES = frozenset(
-    {
-        "search",
-        "web_search",
-        "web-search",
-        "websearch",
-        "google_search",
-        "searxng_search",
-    }
-)
-WEB_SEARCH_HINTS = (
+_WEB_SEARCH_DESCRIPTION_HINTS = (
     "web",
     "internet",
     "searxng",
@@ -40,7 +36,9 @@ WEB_SEARCH_HINTS = (
     "duckduckgo",
     "brave",
     "yahoo",
+    "tavily",
 )
+
 BUDGET_STATE_KEY = "_fedotmas_tool_budgets"
 
 
@@ -90,9 +88,8 @@ class WebSearchLimitPlugin(BasePlugin):
         self.dedupe_identical_calls = dedupe_identical_calls
         self.telemetry = telemetry
         self.budget_kind = budget_kind
-        self._tool_names = {
-            name.lower() for name in (tool_names or DEFAULT_WEB_SEARCH_TOOL_NAMES)
-        }
+        self._tool_names = {name.lower() for name in (tool_names or set())}
+        self._custom_tool_names = tool_names is not None
         self._same_url_exempt_tool_names = {
             name.lower() for name in (same_url_exempt_tool_names or set())
         }
@@ -345,14 +342,32 @@ class WebSearchLimitPlugin(BasePlugin):
         )
 
     def _is_web_search_tool(self, tool: BaseTool) -> bool:
-        # Through the prefix: the budget is configured with bare names, and a
-        # server declaring tool_name_prefix renames all of its tools.
         name = strip_tool_name_prefix(tool.name).lower()
-        if name in self._tool_names:
+        if self._custom_tool_names:
+            if name not in self._tool_names:
+                return False
             description = (tool.description or "").lower()
             if name == "search":
-                return any(hint in description for hint in WEB_SEARCH_HINTS)
+                return any(
+                    hint in description
+                    for hint in _WEB_SEARCH_DESCRIPTION_HINTS
+                )
             return True
+        capability = tool_capability(tool.name)
+        if self.budget_kind == "search":
+            if capability != ToolCapability.DISCOVERY:
+                return False
+            if normalize_tool_name(tool.name) == "search":
+                description = (tool.description or "").casefold()
+                return any(
+                    hint in description
+                    for hint in _WEB_SEARCH_DESCRIPTION_HINTS
+                )
+            return True
+        if self.budget_kind == "scraping":
+            return is_inspection_tool(tool.name)
+        if self.budget_kind in {"browser", "browser_agent"}:
+            return capability == ToolCapability.BROWSER_NAVIGATION
         return False
 
 

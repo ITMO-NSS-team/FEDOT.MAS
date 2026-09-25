@@ -27,9 +27,13 @@ from fedotmas.common.llm import make_llm
 from fedotmas.common.logging import get_logger
 from fedotmas.maw._validators import _find_terminal_node, agent_executes_in_loop
 from fedotmas.maw.handoffs import (
+    ABSTENTION_STATE_KEY,
     EXECUTION_METADATA_KEY,
     append_execution_issue,
     describe_requirement,
+    field_value,
+    field_values,
+    is_explicit_abstention,
     missing_contract_fields,
     parse_artifact,
     resolve_execution_issue,
@@ -37,7 +41,15 @@ from fedotmas.maw.handoffs import (
 )
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.mcp import MCPServerConfig, create_toolset
-from fedotmas.plugins._research_telemetry import RESEARCH_GATE_STATE_KEY
+from fedotmas.mcp.capabilities import ToolCapability, tool_capability
+from fedotmas.plugins._research_telemetry import (
+    RESEARCH_CANDIDATE_LEDGER_KEY,
+    RESEARCH_GATE_STATE_KEY,
+    RESEARCH_MODE_STATE_KEY,
+    RESEARCH_POLICY_STATE_KEY,
+    RESEARCH_PROGRESS_STATE_KEY,
+    RESEARCH_TURN_STATE_KEY,
+)
 
 type AgentTree = BaseAgent
 
@@ -90,6 +102,14 @@ AUTONOMY_CLOSING = (
     "Before you finish: do not close by asking the user for anything -- not a "
     "decision, not a document, not a reply. Whatever you would have offered to "
     "prepare next, either do it now or leave it out."
+)
+
+TERMINAL_COMPLETION_PROTOCOL = (
+    "COMPLETION PROTOCOL: If you establish a concrete answer supported by the "
+    "available evidence, produce the normal requested answer. If you cannot "
+    "establish a supported answer, emit exactly <abstain> followed by a concise "
+    "reason and </abstain>. Do not put an abstention inside a success wrapper, "
+    "and do not fabricate a solution."
 )
 
 
@@ -184,10 +204,12 @@ def _contract_instruction(cfg: MAWAgentConfig) -> str:
     identity = list(dict.fromkeys(contract.identity_fields))
     return (
         "\n\nRUNTIME HANDOFF CONTRACT (required for this nonterminal agent):\n"
-        "Return exactly one JSON object. Its exact required top-level keys are "
-        f"{json.dumps(required)}. Exact identity keys are {json.dumps(identity)}. "
-        "Preserve upstream identity values exactly and do not rename required "
-        "keys. Additional evidence and provenance fields are allowed."
+        "Return exactly one JSON object. Required field paths are "
+        f"{json.dumps(required)}. Identity paths are {json.dumps(identity)}. "
+        "A path containing [] refers to every record in that repeated list; keep "
+        "each identity inside its own record and never move one to the top level. "
+        "Preserve upstream identities and do not invent missing values. "
+        "Additional evidence and provenance fields are allowed."
     )
 
 
@@ -211,9 +233,9 @@ def _upstream_identity_values(
         if artifact is None:
             continue
         identity = {
-            field: artifact[field]
+            field: field_value(artifact, field)
             for field in requirement.identity_fields
-            if field in artifact
+            if not missing_contract_fields(artifact, [field])[1]
         }
         if identity:
             values[requirement.source_key] = identity
@@ -231,17 +253,15 @@ async def _repair_contract_once(
     llm = LLMRegistry.new_llm(model) if isinstance(model, str) else model
     prompt = (
         "Reformat the previous output to satisfy this handoff contract. Return "
-        "exactly one JSON object. Required top-level keys: "
+        "exactly one JSON object. Required field paths: "
         f"{json.dumps(list(dict.fromkeys([*cfg.output_contract.required_fields, *cfg.output_contract.identity_fields])))}. "
-        f"Identity keys to preserve exactly: {json.dumps(cfg.output_contract.identity_fields)}. "
+        f"Identity paths to preserve exactly: {json.dumps(cfg.output_contract.identity_fields)}. "
         "Exact upstream identity values: "
         f"{json.dumps(upstream_identity_values, ensure_ascii=False, default=str)}. "
         f"Keys currently missing or invalid: {json.dumps(missing)}.\n"
-        "Map only information explicitly present in the previous output. "
+        "Preserve repeated-list nesting and map only information explicitly present in the previous output. "
         "Do not invent facts, evidence, sources, or identity values. "
-        "If a required top-level value appears under one unambiguous nested key "
-        "with the same semantic name, you may copy that existing value upward. "
-        "Never replace a required top-level value that is already present and valid. "
+        "Never move an identity from a repeated record to a top-level field. "
         "If a required value is absent, leave it absent or null. Additional fields are allowed.\n"
         "Previous output:\n"
         f"{previous}"
@@ -311,6 +331,22 @@ def _repair_values_supported(
         for field, value in identity.items():
             upstream_by_field.setdefault(field, []).append(value)
     for field in fields:
+        source_values, source_path_valid = field_values(source, field)
+        result_values, result_path_valid = field_values(result, field)
+        is_identity = field in cfg.output_contract.identity_fields
+        if result_path_valid and source_path_valid:
+            if result_values != source_values:
+                invalid.append(field)
+            continue
+        if is_identity:
+            if not result_path_valid:
+                invalid.append(field)
+                continue
+            expected = upstream_by_field.get(field, [])
+            value = field_value(result, field)
+            if not expected or not any(value == item for item in expected):
+                invalid.append(field)
+            continue
         if field in source and not _is_blank(source[field]) and result.get(field) != source[field]:
             invalid.append(field)
             continue
@@ -383,20 +419,23 @@ def build(
     Pass ``autonomous=False`` when the tree is served to a person who can answer
     a clarifying question; see :func:`frame_instruction`.
     """
+    terminal = _find_terminal_node(config.pipeline)
+    final_answer_agent = config.final_answer_agent or (
+        terminal.agent_name if terminal.type == "agent" else None
+    )
     if final_answer_contract is not None:
-        final_answer_agent = config.final_answer_agent
         if final_answer_agent is None:
-            terminal = _find_terminal_node(config.pipeline)
-            if terminal.type != "agent" or terminal.agent_name is None:
-                raise ValueError(
-                    "Cannot infer final_answer_agent: the pipeline must end in one agent"
-                )
-            final_answer_agent = terminal.agent_name
+            raise ValueError(
+                "Cannot infer final_answer_agent: the pipeline must end in one agent"
+            )
         if agent_executes_in_loop(config.pipeline, final_answer_agent):
             raise ValueError(
                 "final_answer_agent cannot execute inside a loop when a "
                 "final_answer_contract is active; add a post-loop finalizer"
             )
+    if final_answer_agent is not None and not agent_executes_in_loop(
+        config.pipeline, final_answer_agent
+    ):
         config.final_answer_agent = final_answer_agent
     agents_by_name: dict[str, MAWAgentConfig] = {a.name: a for a in config.agents}
     # The same set MAWConfig validates against: what a step can actually produce.
@@ -551,9 +590,7 @@ def _build_llm_agent(
 
     model = _resolve_llm(cfg.model, worker_models)
     _log.debug("Built agent | name={} model={}", cfg.name, model)
-    instruction_text = (
-        frame_instruction(cfg.instruction) if autonomous else cfg.instruction
-    )
+    instruction_text = cfg.instruction
     terminal_boundary = (
         final_answer_contract is not None and cfg.name == final_answer_agent
     )
@@ -564,6 +601,35 @@ def _build_llm_agent(
             f"{instruction_text}\n\nFINAL ANSWER CONTRACT (terminal stage only):\n"
             f"{final_answer_contract}"
         )
+    if cfg.name == final_answer_agent:
+        instruction_text += f"\n\n{TERMINAL_COMPLETION_PROTOCOL}"
+    research_guidance = {
+        "discovery_only": (
+            "Research mode: discovery_only. Find and select a small set of the best "
+            "candidate sources, then hand off each source's identity, URL, title, "
+            "and concise relevance evidence. A single exact authoritative source "
+            "can be sufficient when the task asks for one. Do not inspect full "
+            "source contents; a downstream extractor owns that work. Once suitable "
+            "candidates are found, stop broad searching and hand them off."
+        ),
+        "mixed": (
+            "Research mode: mixed. Discover candidates, inspect at least one "
+            "relevant candidate, then search again only if a specific evidence gap "
+            "remains. Reuse the persistent candidate list instead of rediscovering "
+            "known sources."
+        ),
+        "inspection_only": (
+            "Research mode: inspection_only. Inspect the supplied source URLs and "
+            "identities and extract the requested evidence. Do not repeat broad "
+            "discovery. If a supplied source fails, report the failure and pass the "
+            "best honest incomplete result."
+        ),
+    }[cfg.research_mode]
+    research_agent = _is_research_agent(cfg)
+    if research_agent:
+        instruction_text += f"\n\n{research_guidance}"
+    if autonomous:
+        instruction_text = frame_instruction(instruction_text)
     # Decided on the final text: a reference anywhere in it, framing included,
     # has to reach the provider rather than ADK's plain-string path.
     instruction = (
@@ -585,6 +651,30 @@ def _build_llm_agent(
         )
 
     async def before_agent(callback_context: CallbackContext) -> None:
+        modes = callback_context.state.get(RESEARCH_MODE_STATE_KEY)
+        if not isinstance(modes, dict):
+            modes = {}
+        modes[cfg.name] = cfg.research_mode
+        callback_context.state[RESEARCH_MODE_STATE_KEY] = modes
+        effective_policy = cfg.research_policy
+        if (
+            cfg.input_requirements
+            and _is_verifier_role(cfg)
+            and not _requests_independent_research(cfg)
+        ):
+            has_missing_evidence = any(
+                describe_requirement(callback_context.state, item)[1]
+                for item in cfg.input_requirements
+            )
+            if not has_missing_evidence:
+                effective_policy = "evidence_first"
+            elif effective_policy != "evidence_first":
+                effective_policy = "targeted_recovery"
+        policies = callback_context.state.get(RESEARCH_POLICY_STATE_KEY)
+        if not isinstance(policies, dict):
+            policies = {}
+        policies[cfg.name] = effective_policy
+        callback_context.state[RESEARCH_POLICY_STATE_KEY] = policies
         for requirement in cfg.input_requirements:
             raw, missing, _identity = describe_requirement(
                 callback_context.state, requirement
@@ -612,10 +702,23 @@ def _build_llm_agent(
 
     async def after_agent(callback_context: CallbackContext) -> None:
         value = callback_context.state.get(cfg.output_key)
+        if cfg.name == final_answer_agent and is_explicit_abstention(value):
+            callback_context.state[ABSTENTION_STATE_KEY] = {
+                "status": "abstained",
+                "reason": _abstention_reason(value),
+                "agent": cfg.name,
+            }
+            return
         terminal_answer = terminal_boundary
         if terminal_answer:
             # This role may recover an input dependency, but its answer is
             # formatted for the caller and is never a structured handoff.
+            if is_explicit_abstention(value):
+                callback_context.state[ABSTENTION_STATE_KEY] = {
+                    "status": "abstained",
+                    "reason": _abstention_reason(value),
+                    "agent": cfg.name,
+                }
             return
         if cfg.output_contract is None:
             return
@@ -711,6 +814,23 @@ def _build_llm_agent(
             )
         artifact = parse_artifact(value)
         if artifact is not None:
+            contract_fields = (
+                [
+                    (field, "handoff_field")
+                    for field in cfg.output_contract.required_fields
+                ]
+                + [
+                    (field, "resolved_identity")
+                    for field in cfg.output_contract.identity_fields
+                ]
+                if cfg.output_contract is not None
+                else []
+            )
+            for field, kind in contract_fields:
+                if not missing_contract_fields(artifact, [field])[1]:
+                    _record_semantic_progress(
+                        callback_context.state, cfg.name, f"{kind}:{field}"
+                    )
             if cfg.research_policy == "targeted_recovery" and not missing:
                 _resolve_recovered_handoffs(callback_context.state, cfg, artifact)
             for requirement in cfg.input_requirements:
@@ -725,7 +845,8 @@ def _build_llm_agent(
                 mismatched = [
                     field
                     for field in shared_identity
-                    if field in upstream and artifact.get(field) != upstream[field]
+                    if not missing_contract_fields(upstream, [field])[1]
+                    and field_value(artifact, field) != field_value(upstream, field)
                 ]
                 if mismatched:
                     append_execution_issue(
@@ -738,7 +859,8 @@ def _build_llm_agent(
                         },
                     )
                 elif shared_identity and all(
-                    field in upstream and field in artifact
+                    not missing_contract_fields(upstream, [field])[1]
+                    and not missing_contract_fields(artifact, [field])[1]
                     for field in shared_identity
                 ):
                     resolve_execution_issue(
@@ -751,29 +873,103 @@ def _build_llm_agent(
                     )
 
     async def before_tool(tool, args, tool_context) -> dict | None:
-        if _is_discovery_tool(tool):
+        capability = tool_capability(tool.name)
+        blocked: tuple[str, str] | None = None
+        if cfg.research_mode == "discovery_only" and capability in {
+            ToolCapability.URL_INSPECTION,
+            ToolCapability.DOCUMENT_INSPECTION,
+            ToolCapability.MEDIA_INSPECTION,
+        }:
+            blocked = (
+                "DISCOVERY_ONLY_INSPECTION_DISABLED",
+                (
+                    "This source-finding role selects candidate sources and returns their "
+                    "identity, URLs, titles, and snippets. Pass full extraction to the "
+                    "downstream extractor."
+                ),
+            )
+        if capability == ToolCapability.DISCOVERY:
+            effective_policy = _effective_research_policy(tool_context.state, cfg)
             gate_root = tool_context.state.get(RESEARCH_GATE_STATE_KEY)
             gate = gate_root.get(cfg.name) if isinstance(gate_root, dict) else None
-            pending = gate.get("pending_urls", []) if isinstance(gate, dict) else []
-            if gate and gate.get("gated") and not _is_targeted_recovery_query(args, pending):
-                return {
-                    "isError": True,
-                    "error_code": "INSPECT_CANDIDATES_FIRST",
-                    "error": "Broad discovery is paused. Inspect one of these candidates first: "
-                    + json.dumps(pending),
-                }
-        if cfg.research_policy != "evidence_first":
-            return None
-        if _is_discovery_tool(tool):
+            if effective_policy == "evidence_first":
+                blocked = (
+                    "EVIDENCE_FIRST_SEARCH_DISABLED",
+                    (
+                        "This role is evidence-first. Verify using supplied evidence; "
+                        "mark missing claims unresolved."
+                    ),
+                )
+            elif cfg.research_mode == "inspection_only":
+                blocked = (
+                    "INSPECTION_ONLY_DISCOVERY_DISABLED",
+                    (
+                        "This role inspects supplied sources. Do not repeat broad discovery; "
+                        "report the missing source as unresolved."
+                    ),
+                )
+            elif cfg.research_mode == "mixed" and isinstance(gate, dict) and (
+                gate.get("phase") == "inspect" or gate.get("gated") is True
+            ):
+                candidates = _candidate_context(tool_context.state, cfg.name)
+                blocked = (
+                    "INSPECT_CANDIDATES_FIRST",
+                    "Discovery is paused. Inspect at least one pending candidate first: "
+                    + json.dumps(candidates, ensure_ascii=False),
+                )
+            candidates = _candidate_context(tool_context.state, cfg.name)
+            if cfg.research_mode == "discovery_only" and len(candidates) >= 3:
+                blocked = (
+                    "SOURCE_CANDIDATES_READY",
+                    (
+                        "Several candidate sources are available. Select the best small "
+                        "set and produce the source handoff now."
+                    ),
+                )
+            turns_root = tool_context.state.get(RESEARCH_TURN_STATE_KEY)
+            turns = turns_root.get(cfg.name) if isinstance(turns_root, dict) else None
+            if isinstance(turns, dict):
+                if turns.get("force_converge") is True:
+                    blocked = (
+                        "RESEARCH_CONVERGENCE_REQUIRED",
+                        (
+                            "Broad discovery is paused after repeated turns without new "
+                            "evidence. Change evidence method, inspect/select existing "
+                            "candidates, or provide the best honest incomplete handoff."
+                        ),
+                    )
+                elif turns.get("discovery_calls", 0) >= 1:
+                    blocked = (
+                        "DISCOVERY_FANOUT_LIMIT",
+                        (
+                            "Only one broad discovery call is allowed in this model turn. "
+                            "Use its results and inspect a candidate before another search."
+                        ),
+                    )
+                else:
+                    turns["discovery_calls"] = 1
+                    if isinstance(turns_root, dict):
+                        turns_root[cfg.name] = turns
+                        tool_context.state[RESEARCH_TURN_STATE_KEY] = turns_root
+        if blocked is not None:
+            _record_turn_tool_call(
+                tool_context.state,
+                cfg.name,
+                tool.name,
+                blocked_reason=blocked[0],
+                call_id=getattr(tool_context, "function_call_id", None),
+            )
             return {
                 "isError": True,
-                "error_code": "EVIDENCE_FIRST_SEARCH_DISABLED",
-                "error": (
-                    "This role is evidence-first. Use the supplied upstream evidence "
-                    "to verify the claim; if required evidence is absent, mark that "
-                    "claim unresolved."
-                ),
+                "error_code": blocked[0],
+                "error": blocked[1],
             }
+        _record_turn_tool_call(
+            tool_context.state,
+            cfg.name,
+            tool.name,
+            call_id=getattr(tool_context, "function_call_id", None),
+        )
         return None
 
     per_agent_limit = (
@@ -784,68 +980,6 @@ def _build_llm_agent(
         callback_context: CallbackContext, llm_request
     ) -> LlmResponse | None:
         state = callback_context.state
-        if cfg.research_policy == "evidence_first":
-            discovery_names = {
-                name
-                for name, tool in llm_request.tools_dict.items()
-                if _is_discovery_tool(tool)
-            }
-            if discovery_names:
-                retained = []
-                for group in llm_request.config.tools or []:
-                    declarations = group.function_declarations
-                    if declarations is None:
-                        retained.append(group)
-                        continue
-                    group.function_declarations = [
-                        declaration
-                        for declaration in declarations
-                        if declaration.name not in discovery_names
-                    ]
-                    if group.function_declarations:
-                        retained.append(group)
-                llm_request.config.tools = retained
-            llm_request.append_instructions(
-                [
-                    (
-                        "This role is evidence-first. Discovery search tools are not "
-                        "available. Verify against the supplied artifact; identify any "
-                        "missing evidence as unresolved."
-                    )
-                ]
-            )
-        gate_root = state.get(RESEARCH_GATE_STATE_KEY)
-        gate = gate_root.get(cfg.name) if isinstance(gate_root, dict) else None
-        if isinstance(gate, dict) and gate.get("gated"):
-            candidates = gate.get("pending_urls", [])
-            discovery_names = {
-                name
-                for name, tool in llm_request.tools_dict.items()
-                if _is_discovery_tool(tool)
-            }
-            if discovery_names:
-                retained = []
-                for group in llm_request.config.tools or []:
-                    declarations = group.function_declarations
-                    if declarations is None:
-                        retained.append(group)
-                        continue
-                    group.function_declarations = [
-                        declaration
-                        for declaration in declarations
-                        if declaration.name not in discovery_names
-                    ]
-                    if group.function_declarations:
-                        retained.append(group)
-                llm_request.config.tools = retained
-            llm_request.append_instructions(
-                [
-                    "Discovery is paused until at least one pending candidate has "
-                    "been inspected. Inspect one of these URLs, including a failed "
-                    "inspection, before searching again: "
-                    + json.dumps(candidates)
-                ]
-            )
         metadata = state.get(EXECUTION_METADATA_KEY)
         if not isinstance(metadata, dict):
             metadata = {}
@@ -873,8 +1007,178 @@ def _build_llm_agent(
                 turnComplete=True,
                 finishReason=genai_types.FinishReason.STOP,
             )
+        turn_index = used + 1
         if isinstance(turns, dict):
-            turns[cfg.name] = used + 1
+            turns[cfg.name] = turn_index
+        progress_root = state.get(RESEARCH_PROGRESS_STATE_KEY)
+        progress = progress_root.get(cfg.name) if isinstance(progress_root, dict) else None
+        if not isinstance(progress, dict):
+            progress = {"version": 0, "last_turn_version": 0, "no_progress_turns": 0}
+        version = progress.get("version", 0)
+        version = version if isinstance(version, int) and not isinstance(version, bool) else 0
+        previous_version = progress.get("last_turn_version", version)
+        previous_version = (
+            previous_version
+            if isinstance(previous_version, int) and not isinstance(previous_version, bool)
+            else version
+        )
+        no_progress = progress.get("no_progress_turns", 0)
+        no_progress = no_progress if isinstance(no_progress, int) and not isinstance(no_progress, bool) else 0
+        recorded_progress = progress.get("progress_events")
+        recorded_progress = recorded_progress if isinstance(recorded_progress, list) else []
+        progress_delta = max(0, version - previous_version)
+        semantic_progress_events = [
+            str(signal)[:160] for signal in recorded_progress[-progress_delta:]
+        ] if progress_delta else []
+        if turn_index > 1:
+            no_progress = no_progress + 1 if version <= previous_version else 0
+        else:
+            no_progress = 0
+        progress["last_turn_version"] = version
+        progress["no_progress_turns"] = no_progress
+        if not isinstance(progress_root, dict):
+            progress_root = {}
+        progress_root[cfg.name] = progress
+        state[RESEARCH_PROGRESS_STATE_KEY] = progress_root
+        if no_progress:
+            progress_metadata = metadata.setdefault("research_progress", {})
+            if isinstance(progress_metadata, dict):
+                progress_metadata[cfg.name] = {
+                    "no_progress_turns": no_progress,
+                    "version": version,
+                }
+
+        turn_root = state.get(RESEARCH_TURN_STATE_KEY)
+        if not isinstance(turn_root, dict):
+            turn_root = {}
+        turn_state = {
+            "turn_index": turn_index,
+            "discovery_calls": 0,
+            "force_converge": no_progress >= 2,
+        }
+        turn_root[cfg.name] = turn_state
+        state[RESEARCH_TURN_STATE_KEY] = turn_root
+
+        all_tool_names = set(llm_request.tools_dict)
+        removed: dict[str, str] = {}
+        for name, tool in llm_request.tools_dict.items():
+            if tool_capability(tool.name) == ToolCapability.DIAGNOSTIC:
+                removed[name] = "diagnostic/control tools are internal-only"
+        discovery_names = {
+            name
+            for name, tool in llm_request.tools_dict.items()
+            if tool_capability(tool.name) == ToolCapability.DISCOVERY
+        }
+        inspection_names = {
+            name
+            for name, tool in llm_request.tools_dict.items()
+            if tool_capability(tool.name)
+            in {
+                ToolCapability.URL_INSPECTION,
+                ToolCapability.DOCUMENT_INSPECTION,
+                ToolCapability.MEDIA_INSPECTION,
+            }
+        }
+        gate_root = state.get(RESEARCH_GATE_STATE_KEY)
+        gate = gate_root.get(cfg.name) if isinstance(gate_root, dict) else None
+        candidates = _candidate_context(state, cfg.name)
+        hide_discovery_reason = None
+        effective_policy = _effective_research_policy(state, cfg)
+        if effective_policy == "evidence_first":
+            hide_discovery_reason = "evidence_first policy"
+        elif cfg.research_mode == "inspection_only":
+            hide_discovery_reason = "inspection_only research mode"
+        elif cfg.research_mode == "mixed" and isinstance(gate, dict) and gate.get("phase") == "inspect":
+            hide_discovery_reason = "candidate inspection required"
+        elif cfg.research_mode == "discovery_only" and len(candidates) >= 3:
+            hide_discovery_reason = "candidate handoff ready"
+        elif turn_state["force_converge"]:
+            hide_discovery_reason = "repeated turns without semantic progress"
+        if hide_discovery_reason:
+            removed.update({name: hide_discovery_reason for name in discovery_names})
+        if cfg.research_mode == "discovery_only":
+            removed.update(
+                {
+                    name: "discovery_only source selection role"
+                    for name in inspection_names
+                }
+            )
+
+        surface_filter_names = set()
+        for toolset in tools:
+            filtered = getattr(toolset, "_fedotmas_filtered_diagnostic_tools", set())
+            if isinstance(filtered, set):
+                surface_filter_names.update(filtered)
+        for name in surface_filter_names:
+            removed[name] = "diagnostic/control tools are internal-only"
+        for name in all_tool_names:
+            if tool_capability(llm_request.tools_dict[name].name) == ToolCapability.DIAGNOSTIC:
+                removed[name] = "diagnostic/control tools are internal-only"
+        for name in discovery_names:
+            if hide_discovery_reason:
+                removed[name] = hide_discovery_reason
+        if removed:
+            declarations_removed = set(removed)
+            retained = []
+            for group in llm_request.config.tools or []:
+                declarations = group.function_declarations
+                if declarations is None:
+                    retained.append(group)
+                    continue
+                group.function_declarations = [
+                    declaration
+                    for declaration in declarations
+                    if declaration.name not in declarations_removed
+                ]
+                if group.function_declarations:
+                    retained.append(group)
+            llm_request.config.tools = retained
+
+        if effective_policy == "evidence_first":
+            llm_request.append_instructions(
+                ["This role is evidence-first. Verify against supplied evidence; identify missing evidence as unresolved."]
+            )
+        if cfg.research_mode == "mixed" and isinstance(gate, dict) and gate.get("phase") == "inspect":
+            llm_request.append_instructions(
+                ["Inspect at least one pending candidate before another broad search. Available candidates: " + json.dumps(candidates, ensure_ascii=False)]
+            )
+        if cfg.research_mode == "discovery_only" and len(candidates) >= 3:
+            llm_request.append_instructions(
+                ["Select the best small set from these candidates and return the source handoff now: " + json.dumps(candidates, ensure_ascii=False)]
+            )
+        elif candidates and research_agent:
+            llm_request.append_instructions(
+                ["Persistent candidate ledger (reuse these titles, snippets, and URLs; do not search for known candidates again): " + json.dumps(candidates, ensure_ascii=False)]
+            )
+        if research_agent or discovery_names:
+            llm_request.append_instructions(
+                ["Per-turn research budget: make at most one broad discovery call during this model turn. Known-URL inspections and computations are not subject to this limit."]
+            )
+        if turn_state["force_converge"] and (research_agent or discovery_names):
+            llm_request.append_instructions(
+                ["Several consecutive turns produced no semantic progress. Change strategy once, inspect/select existing evidence, or provide the best honest incomplete handoff. Do not repeat a low-value search."]
+            )
+
+        _record_turn_observability(
+            state,
+            cfg.name,
+            turn_index=turn_index,
+            visible_tools=sorted(
+                name for name in all_tool_names if name not in removed
+            ),
+            visible_tool_declarations=_visible_tool_declarations(
+                llm_request, removed
+            ),
+            removed_tools=[{"name": name, "reason": reason} for name, reason in sorted(removed.items())],
+            research_mode=cfg.research_mode,
+            gate_state=(gate.get("phase") if isinstance(gate, dict) else "discover"),
+            candidate_count=len(candidates),
+            candidate_ledger_summary=candidates[:4],
+            controller_recommendation=_controller_recommendation(state, cfg.name),
+            semantic_progress_version=version,
+            semantic_progress_events=semantic_progress_events,
+            no_progress_turns=no_progress,
+        )
         return None
 
     return LlmAgent(
@@ -897,29 +1201,218 @@ def _build_llm_agent(
 
 
 def _is_discovery_tool(tool: Any) -> bool:
-    name = tool.name.rsplit("__", 1)[-1].lower().replace("-", "_")
-    if name in {"search", "web_search", "websearch", "searxng_search", "google_search"}:
-        return name != "search" or any(
-            word in (tool.description or "").lower()
-            for word in ("web", "internet", "search", "query")
+    return tool_capability(tool.name) == ToolCapability.DISCOVERY
+
+
+def _is_research_agent(cfg: MAWAgentConfig) -> bool:
+    if "research_mode" in cfg.model_fields_set:
+        return True
+    if re.search(
+        r"\b(research\w*|source[_ -]?finder|structured[_ -]?extractor|verif\w*|fact[ -]?check\w*)\b",
+        f"{cfg.name} {cfg.instruction}".casefold(),
+    ):
+        return True
+    return any(
+        tool_capability(tool)
+        in {
+            ToolCapability.DISCOVERY,
+            ToolCapability.URL_INSPECTION,
+            ToolCapability.DOCUMENT_INSPECTION,
+            ToolCapability.MEDIA_INSPECTION,
+            ToolCapability.BROWSER_NAVIGATION,
+        }
+        for tool in cfg.tools
+    )
+
+
+def _is_verifier_role(cfg: MAWAgentConfig) -> bool:
+    text = f"{cfg.name} {cfg.instruction}".casefold()
+    return bool(re.search(r"\b(verif\w*|fact[ -]?check\w*)\b", text))
+
+
+def _requests_independent_research(cfg: MAWAgentConfig) -> bool:
+    return bool(
+        re.search(
+            r"\bindependent(?:ly)?\s+(?:research|search|gather|verify|evidence|sources?)\b",
+            cfg.instruction.casefold(),
         )
-    return name.endswith("_search") or name.startswith("search_")
+    )
 
 
-def _is_targeted_recovery_query(args: dict[str, Any], pending: list[str]) -> bool:
-    query = args.get("query")
-    if not isinstance(query, str):
+def _effective_research_policy(state: Any, cfg: MAWAgentConfig) -> str:
+    root = state.get(RESEARCH_POLICY_STATE_KEY) if hasattr(state, "get") else None
+    policy = root.get(cfg.name) if isinstance(root, dict) else None
+    return policy if policy in {"independent", "evidence_first", "targeted_recovery"} else cfg.research_policy
+
+
+def _candidate_context(state: Any, agent: str) -> list[dict[str, Any]]:
+    root = state.get(RESEARCH_CANDIDATE_LEDGER_KEY) if hasattr(state, "get") else None
+    ledger = root.get(agent) if isinstance(root, dict) else None
+    if not isinstance(ledger, list):
+        return []
+    selected = ledger[-8:]
+    return [
+        {
+            "url": item.get("url"),
+            "title": str(item.get("title") or "")[:160],
+            "snippet": str(item.get("snippet") or "")[:320],
+            "source_tool": str(item.get("source_tool") or "")[:60],
+            "inspected": item.get("inspected") is True,
+        }
+        for item in selected
+        if isinstance(item, dict) and isinstance(item.get("url"), str)
+    ]
+
+
+def _record_turn_observability(
+    state: dict[str, Any],
+    agent: str,
+    *,
+    turn_index: int,
+    visible_tools: list[str],
+    visible_tool_declarations: list[dict[str, Any]],
+    removed_tools: list[dict[str, str]],
+    research_mode: str,
+    gate_state: str,
+    candidate_count: int,
+    candidate_ledger_summary: list[dict[str, Any]],
+    controller_recommendation: str | None,
+    semantic_progress_version: int,
+    semantic_progress_events: list[str],
+    no_progress_turns: int,
+) -> None:
+    metadata = state.setdefault(EXECUTION_METADATA_KEY, {})
+    if not isinstance(metadata, dict):
+        return
+    traces = metadata.setdefault("turn_observability", {})
+    if not isinstance(traces, dict):
+        return
+    events = traces.setdefault(agent, [])
+    if not isinstance(events, list):
+        return
+    events.append(
+        {
+            "agent": agent,
+            "turn_index": turn_index,
+            "visible_tools": visible_tools[:80],
+            "visible_tool_declarations": visible_tool_declarations[:20],
+            "removed_tools": removed_tools[:80],
+            "research_mode": research_mode,
+            "discovery_gate_state": gate_state,
+            "candidate_count": candidate_count,
+            "candidate_ledger_summary": candidate_ledger_summary[:4],
+            "controller_recommendation": controller_recommendation,
+            "semantic_progress_version": semantic_progress_version,
+            "semantic_progress_events": semantic_progress_events[-8:],
+            "no_progress_turns": no_progress_turns,
+            "tool_calls_selected": [],
+            "calls_blocked": [],
+        }
+    )
+    del events[:-20]
+
+
+def _visible_tool_declarations(
+    llm_request: LlmRequest, removed: dict[str, str]
+) -> list[dict[str, Any]]:
+    declarations: list[dict[str, Any]] = []
+    for group in llm_request.config.tools or []:
+        for declaration in group.function_declarations or []:
+            name = str(declaration.name or "")
+            if name in removed:
+                continue
+            summary: dict[str, Any] = {
+                "name": name[:120],
+                "description": str(declaration.description or "")[:200],
+            }
+            parameters = getattr(declaration, "parameters", None)
+            if parameters is not None:
+                if hasattr(parameters, "model_dump"):
+                    parameters = parameters.model_dump(mode="json", exclude_none=True)
+                encoded = json.dumps(parameters, ensure_ascii=False, default=str)
+                summary["parameters"] = encoded[:600]
+                summary["parameters_truncated"] = len(encoded) > 600
+            declarations.append(summary)
+            if len(declarations) >= 20:
+                break
+        if len(declarations) >= 20:
+            break
+    return declarations
+
+
+def _record_turn_tool_call(
+    state: Any,
+    agent: str,
+    tool_name: str,
+    *,
+    blocked_reason: str | None = None,
+    call_id: str | None = None,
+) -> None:
+    metadata = state.get(EXECUTION_METADATA_KEY) if hasattr(state, "get") else None
+    traces = metadata.get("turn_observability") if isinstance(metadata, dict) else None
+    events = traces.get(agent) if isinstance(traces, dict) else None
+    if not isinstance(events, list) or not events:
+        return
+    event = events[-1]
+    target = "calls_blocked" if blocked_reason else "tool_calls_selected"
+    calls = event.setdefault(target, [])
+    if isinstance(calls, list) and len(calls) < 40:
+        record = {"tool": tool_name[:120]}
+        if isinstance(call_id, str):
+            record["call_id"] = call_id[:120]
+        if blocked_reason:
+            record["reason"] = blocked_reason
+        calls.append(record)
+
+
+def _record_semantic_progress(state: dict[str, Any], agent: str, signal: str) -> bool:
+    root = state.get(RESEARCH_PROGRESS_STATE_KEY)
+    if not isinstance(root, dict):
+        root = {}
+    progress = root.get(agent)
+    if not isinstance(progress, dict):
+        progress = {"version": 0, "progress_events": [], "seen_signals": []}
+    seen = progress.get("seen_signals")
+    seen = seen if isinstance(seen, list) else []
+    if signal in seen:
         return False
-    query = query.casefold()
-    for url in pending:
-        if not isinstance(url, str):
-            continue
-        from urllib.parse import urlsplit
+    seen.append(signal)
+    progress["seen_signals"] = seen[-80:]
+    progress["version"] = max(0, int(progress.get("version", 0))) + 1
+    events = progress.get("progress_events")
+    events = events if isinstance(events, list) else []
+    events.append(signal[:160])
+    progress["progress_events"] = events[-20:]
+    root[agent] = progress
+    state[RESEARCH_PROGRESS_STATE_KEY] = root
+    return True
 
-        host = (urlsplit(url).hostname or "").casefold().removeprefix("www.")
-        if host and host in query:
-            return True
-    return False
+
+def _controller_recommendation(state: dict[str, Any], agent: str) -> str | None:
+    metadata = state.get(EXECUTION_METADATA_KEY)
+    recommendations = (
+        metadata.get("controller_recommendations")
+        if isinstance(metadata, dict)
+        else None
+    )
+    if isinstance(recommendations, dict):
+        latest = recommendations.get(agent)
+        if latest in {"continue_search", "change_strategy", "strategy_blocked", "synthesize"}:
+            return latest
+    return None
+
+
+def _abstention_reason(value: Any) -> str:
+    if isinstance(value, dict):
+        reason = value.get("reason")
+        return str(reason)[:500] if isinstance(reason, str) else "No supported answer was established."
+    if isinstance(value, str):
+        text = value.strip()
+        start = text.find("<abstain>") + len("<abstain>")
+        end = text.find("</abstain>", start)
+        if end >= 0:
+            return text[start:end].strip()[:500]
+    return "No supported answer was established."
 
 
 def _inject_exit_loop(children: list[BaseAgent]) -> None:

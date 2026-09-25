@@ -6,6 +6,7 @@ import pytest
 from fedotmas.maw.maw import (
     _drop_generated_token_budgets,
     _normalize_generated_agent_names,
+    _normalize_generated_research_modes,
     _normalize_generated_research_policies,
 )
 from fedotmas.maw.models import (
@@ -166,6 +167,47 @@ def test_name_normalization_leaves_caller_supplied_names_untouched():
     normalized = _normalize_generated_agent_names(config, preserved_names={"2 caller"})
 
     assert [agent.name for agent in normalized.agents] == ["2 caller", "_2_caller"]
+
+
+def test_generated_research_modes_follow_capabilities_and_pipeline_roles():
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(
+                name="source_finder",
+                instruction="Select candidate sources.",
+                output_key="sources",
+                tools=["websearch-tavily"],
+            ),
+            MAWAgentConfig(
+                name="structured_extractor",
+                instruction="Extract fields from selected source URLs.",
+                output_key="extracted",
+                tools=["document", "youtube-transcript"],
+            ),
+            MAWAgentConfig(
+                name="general_researcher",
+                instruction="Research and inspect the requested claim.",
+                output_key="result",
+                tools=["websearch-searxng", "web-scraping"],
+            ),
+        ],
+        pipeline=MAWStepConfig(
+            type="sequential",
+            children=[
+                MAWStepConfig(type="agent", agent_name="source_finder"),
+                MAWStepConfig(type="agent", agent_name="structured_extractor"),
+                MAWStepConfig(type="agent", agent_name="general_researcher"),
+            ],
+        ),
+    )
+
+    _normalize_generated_research_modes(config)
+
+    assert [agent.research_mode for agent in config.agents] == [
+        "discovery_only",
+        "inspection_only",
+        "mixed",
+    ]
 
 
 class TestNonLeafWithoutChildren:

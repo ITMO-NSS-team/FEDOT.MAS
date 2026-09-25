@@ -15,7 +15,7 @@ from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
 from fedotmas.common.logging import get_logger
-from fedotmas.maw.handoffs import unresolved_execution_issues
+from fedotmas.maw.handoffs import ABSTENTION_STATE_KEY, unresolved_execution_issues
 
 _log = get_logger("fedotmas.core.runner")
 
@@ -195,7 +195,10 @@ async def run_pipeline(
         status = "timed_out"
     elif metadata.get("limited_agents"):
         status = "limited"
-    elif unresolved_execution_issues(final_session.state):
+    elif (
+        isinstance(final_session.state.get(ABSTENTION_STATE_KEY), dict)
+        and final_session.state[ABSTENTION_STATE_KEY].get("status") == "abstained"
+    ) or unresolved_execution_issues(final_session.state):
         status = "incomplete"
     else:
         status = "completed"

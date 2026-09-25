@@ -6,12 +6,15 @@ from unittest.mock import MagicMock
 
 import pytest
 from fedotmas.plugins._research_telemetry import ResearchTelemetry
+from fedotmas.plugins._tool_result_truncation import ToolResultTruncationPlugin
+from google.adk.models.llm_request import LlmRequest
 from google.genai import types
 
 
 def _context(agent: str = "researcher") -> MagicMock:
     context = MagicMock()
     context._invocation_context.agent.name = agent
+    context.state = {}
     return context
 
 
@@ -98,19 +101,20 @@ async def test_code_agent_usage_steps_and_execution_metrics_are_recorded():
 
 
 @pytest.mark.asyncio
-async def test_discovery_pauses_until_candidate_inspection_and_resumes_after_failure():
+async def test_discovery_gate_is_stateful_and_reopens_after_failed_candidate_inspection():
     telemetry = ResearchTelemetry()
+    context = _context()
     search = MagicMock(name="search")
     search.name = "search"
     args = {"query": "broad topic"}
     allowed = await telemetry.before_tool_callback(
-        tool=search, tool_args=args, tool_context=_context()
+        tool=search, tool_args=args, tool_context=context
     )
     assert allowed is None
     await telemetry.after_tool_callback(
         tool=search,
         tool_args=args,
-        tool_context=_context(),
+        tool_context=context,
         result={
             "results": [
                 {"url": f"https://example.org/{number}"} for number in range(4)
@@ -121,43 +125,43 @@ async def test_discovery_pauses_until_candidate_inspection_and_resumes_after_fai
     quoted_broad = await telemetry.before_tool_callback(
         tool=search,
         tool_args={"query": '"general topic"'},
-        tool_context=_context(),
+        tool_context=context,
     )
     assert quoted_broad["error_code"] == "INSPECT_CANDIDATES_FIRST"
     unrelated_site = await telemetry.before_tool_callback(
         tool=search,
         tool_args={"query": "site:unrelated.example example.org specific claim"},
-        tool_context=_context(),
+        tool_context=context,
     )
     assert unrelated_site["error_code"] == "INSPECT_CANDIDATES_FIRST"
     targeted = await telemetry.before_tool_callback(
         tool=search,
         tool_args={"query": 'site:example.org "specific claim"'},
-        tool_context=_context(),
+        tool_context=context,
     )
-    assert targeted is None
+    assert targeted["error_code"] == "INSPECT_CANDIDATES_FIRST"
     candidate_domain = await telemetry.before_tool_callback(
         tool=search,
         tool_args={"query": "example.org focused recovery"},
-        tool_context=_context(),
+        tool_context=context,
     )
-    assert candidate_domain is None
+    assert candidate_domain["error_code"] == "INSPECT_CANDIDATES_FIRST"
 
     inspect = MagicMock(name="markdown")
     inspect.name = "markdown"
     await telemetry.before_tool_callback(
         tool=inspect,
         tool_args={"url": "https://example.org/0"},
-        tool_context=_context(),
+        tool_context=context,
     )
     await telemetry.after_tool_callback(
         tool=inspect,
         tool_args={"url": "https://example.org/0"},
-        tool_context=_context(),
+        tool_context=context,
         result={"isError": True, "error": "source unavailable"},
     )
     resumed = await telemetry.before_tool_callback(
-        tool=search, tool_args=args, tool_context=_context()
+        tool=search, tool_args=args, tool_context=context
     )
     assert resumed is None
 
@@ -165,37 +169,41 @@ async def test_discovery_pauses_until_candidate_inspection_and_resumes_after_fai
     assert metrics["discovery_calls"] == 6
     assert metrics["candidate_urls_discovered"] == 4
     assert metrics["candidate_urls_inspected"] == 1
-    assert metrics["repeated_discovery_without_inspection"] == 2
+    assert metrics["repeated_discovery_without_inspection"] == 4
+    assert metrics["discovery_gated"] == 1
+    assert metrics["discovery_reopened"] == 1
 
 
 @pytest.mark.asyncio
 async def test_unrelated_scrape_does_not_count_as_candidate_inspection():
     telemetry = ResearchTelemetry()
+    context = _context()
     search = MagicMock(name="search")
     search.name = "search"
     await telemetry.before_tool_callback(
-        tool=search, tool_args={"query": "topic"}, tool_context=_context()
+        tool=search, tool_args={"query": "topic"}, tool_context=context
     )
     await telemetry.after_tool_callback(
         tool=search,
         tool_args={},
-        tool_context=_context(),
+        tool_context=context,
         result={"results": [{"url": "https://example.org/paper"}]},
     )
     scrape = MagicMock(name="markdown")
     scrape.name = "markdown"
     args = {"url": "https://unrelated.example/page"}
     await telemetry.before_tool_callback(
-        tool=scrape, tool_args=args, tool_context=_context()
+        tool=scrape, tool_args=args, tool_context=context
     )
     await telemetry.after_tool_callback(
         tool=scrape,
         tool_args=args,
-        tool_context=_context(),
+        tool_context=context,
         result={"content": "unrelated"},
     )
 
     assert telemetry.snapshot()["researcher"]["candidate_urls_inspected"] == 0
+    assert context.state["__fedotmas_research_gate"]["researcher"]["phase"] == "inspect"
 
 
 @pytest.mark.asyncio
@@ -285,9 +293,9 @@ async def test_research_telemetry_records_structured_outcomes_and_serializes():
 
     telemetry.circuit_blocked("researcher", "search")
     metrics = json.loads(json.dumps(telemetry.snapshot()))["researcher"]
-    assert metrics["attempted_calls"] == 7
+    assert metrics["attempted_calls"] == 6
     assert metrics["blocked_calls"] == 3
-    assert metrics["successful_calls"] == 4
+    assert metrics["successful_calls"] == 3
     assert metrics["failed_calls"] == 2
     assert metrics["search_calls"] == 4
     assert metrics["successful_searches"] == 2
@@ -297,7 +305,7 @@ async def test_research_telemetry_records_structured_outcomes_and_serializes():
     assert metrics["backend_errors"] == 1
     assert metrics["urls_discovered"] == 1
     assert metrics["urls_inspected"] == 1
-    assert metrics["scraping_extraction_calls"] == 3
+    assert metrics["scraping_extraction_calls"] == 2
     assert metrics["search_exhaustion"] == 1
 
 
@@ -423,3 +431,164 @@ async def test_event_diagnostics_match_parallel_tool_results_by_call_id():
         ("first", "blocked"),
         ("second", "attempted"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_youtube_candidate_inspection_reopens_mixed_discovery():
+    telemetry = ResearchTelemetry()
+    context = _context()
+    search = MagicMock(name="searxng_search")
+    search.name = "searxng_search"
+    await telemetry.before_tool_callback(
+        tool=search,
+        tool_args={"query": "named video"},
+        tool_context=context,
+    )
+    await telemetry.after_tool_callback(
+        tool=search,
+        tool_args={"query": "named video"},
+        tool_context=context,
+        result={
+            "results": [
+                {
+                    "url": "https://www.youtube.com/watch?v=video123&feature=shared",
+                    "title": "Target interview",
+                    "snippet": "The speaker explains the requested event.",
+                }
+            ]
+        },
+    )
+
+    info = MagicMock(name="get_video_info")
+    info.name = "get_video_info"
+    assert await telemetry.before_tool_callback(
+        tool=info,
+        tool_args={"video_id": "video123"},
+        tool_context=context,
+    ) is None
+    await telemetry.after_tool_callback(
+        tool=info,
+        tool_args={"video_id": "video123"},
+        tool_context=context,
+        result={"title": "Target interview", "duration": 120},
+    )
+
+    candidate = context.state["__fedotmas_research_candidates"]["researcher"][0]
+    assert candidate["inspected"] is True
+    assert context.state["__fedotmas_research_gate"]["researcher"]["phase"] == "discover"
+    assert telemetry.snapshot()["researcher"]["candidate_urls_inspected"] == 1
+
+
+@pytest.mark.asyncio
+async def test_inspection_of_supplied_document_source_counts_as_progress():
+    telemetry = ResearchTelemetry()
+    context = _context()
+    context.state["__fedotmas_research_modes"] = {
+        "researcher": "inspection_only"
+    }
+    tool = MagicMock(name="read_document")
+    tool.name = "read_document"
+    args = {"file_path": "/tmp/records.xml"}
+
+    await telemetry.before_tool_callback(
+        tool=tool, tool_args=args, tool_context=context
+    )
+    await telemetry.after_tool_callback(
+        tool=tool,
+        tool_args=args,
+        tool_context=context,
+        result={"content": "<record>evidence</record>"},
+    )
+
+    progress = context.state["__fedotmas_research_progress"]["researcher"]
+    assert progress["version"] == 1
+    assert progress["progress_events"] == ["source_inspected"]
+
+
+@pytest.mark.asyncio
+async def test_candidate_ledger_deduplicates_and_records_no_progress_searches():
+    telemetry = ResearchTelemetry()
+    context = _context()
+    search = MagicMock(name="search")
+    search.name = "search"
+    result = {
+        "results": [
+            {
+                "url": "https://example.org/source?utm_source=search",
+                "title": "The source",
+                "snippet": "A useful source excerpt.",
+            }
+        ]
+    }
+
+    for query in ("first search", "same-source again"):
+        await telemetry.before_tool_callback(
+            tool=search,
+            tool_args={"query": query},
+            tool_context=context,
+        )
+        await telemetry.after_tool_callback(
+            tool=search,
+            tool_args={"query": query},
+            tool_context=context,
+            result=result,
+        )
+
+    ledger = context.state["__fedotmas_research_candidates"]["researcher"]
+    progress = context.state["__fedotmas_research_progress"]["researcher"]
+    metrics = telemetry.snapshot()["researcher"]
+    assert len(ledger) == 1
+    assert ledger[0]["title"] == "The source"
+    assert progress["version"] == 1
+    assert metrics["discovery_calls_yielding_new_candidates"] == 1
+    assert metrics["searches_with_no_new_candidates"] == 1
+    assert metrics["repeated_query_search_no_new_evidence_events"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_candidate_ledger_survives_rolling_tool_result_compaction():
+    telemetry = ResearchTelemetry()
+    context = _context()
+    context.state["__fedotmas_research_modes"] = {"researcher": "discovery_only"}
+    search = MagicMock(name="search")
+    search.name = "search"
+    await telemetry.before_tool_callback(
+        tool=search,
+        tool_args={"query": "large result"},
+        tool_context=context,
+    )
+    await telemetry.after_tool_callback(
+        tool=search,
+        tool_args={"query": "large result"},
+        tool_context=context,
+        result={
+            "results": [
+                {
+                    "url": "https://example.org/source",
+                    "title": "Preserved title",
+                    "snippet": "Preserved evidence snippet",
+                }
+            ]
+        },
+    )
+    before = context.state["__fedotmas_research_candidates"]["researcher"]
+    contents = [
+        types.Content(
+            role="user",
+            parts=[
+                types.Part.from_function_response(
+                    name="search",
+                    response={"content": "old evidence " + "x" * 900},
+                )
+            ],
+        )
+        for _ in range(4)
+    ]
+    await ToolResultTruncationPlugin(max_agent_total_chars=700).before_model_callback(
+        callback_context=context,
+        llm_request=LlmRequest(contents=contents),
+    )
+
+    assert context.state["__fedotmas_research_candidates"]["researcher"] == before
+    assert before[0]["title"] == "Preserved title"
+    assert before[0]["snippet"] == "Preserved evidence snippet"

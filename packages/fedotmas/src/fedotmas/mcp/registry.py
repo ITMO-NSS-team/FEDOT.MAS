@@ -20,6 +20,7 @@ from fedotmas.mcp._config import (
     MCPServerConfig,
     StdioMCPServer,
 )
+from fedotmas.mcp.capabilities import is_solving_tool
 from fedotmas.mcp.discovery import discover_local_servers
 
 _log = get_logger("fedotmas.mcp.registry")
@@ -37,9 +38,12 @@ def get_mcp_servers() -> dict[str, MCPServerConfig]:
 
 
 def create_toolset(
-    name: str, registry: dict[str, MCPServerConfig] | None = None
+    name: str,
+    registry: dict[str, MCPServerConfig] | None = None,
+    *,
+    include_diagnostic: bool = False,
 ) -> McpToolset:
-    """Create an ADK ``McpToolset`` for the named server."""
+    """Create a toolset, hiding diagnostic tools from solving agents by default."""
     reg = registry if registry is not None else get_mcp_servers()
     if name not in reg:
         _log.error("Unknown MCP server: '{}' | available={}", name, sorted(reg))
@@ -71,10 +75,24 @@ def create_toolset(
         case _:
             raise TypeError(f"Unsupported MCP server type: {type(cfg)}")
 
-    return McpToolset(
+    filtered_diagnostics: set[str] = set()
+
+    def solving_tool_filter(tool: BaseTool) -> bool:
+        tool_name = getattr(tool, "name", "")
+        visible = is_solving_tool(tool_name)
+        if not visible:
+            filtered_diagnostics.add(tool_name)
+        return visible
+
+    toolset = McpToolset(
         connection_params=params,
+        tool_filter=None if include_diagnostic else solving_tool_filter,
         tool_name_prefix=cfg.tool_name_prefix,
     )
+    # Used only for bounded turn-observability records; the predicate itself
+    # owns filtering and the MCP server continues to expose its internal tool.
+    toolset._fedotmas_filtered_diagnostic_tools = filtered_diagnostics
+    return toolset
 
 
 async def list_server_tools(
@@ -82,6 +100,7 @@ async def list_server_tools(
     registry: dict[str, MCPServerConfig] | None = None,
     *,
     timeout: float | None = None,
+    include_diagnostic: bool = False,
 ) -> list[BaseTool]:
     """Connect to the named server and return the tools it advertises.
 
@@ -95,13 +114,15 @@ async def list_server_tools(
         reg = registry if registry is not None else get_mcp_servers()
         timeout = getattr(reg.get(name), "timeout", DEFAULT_MCP_TIMEOUT_S)
 
-    toolset = create_toolset(name, registry=registry)
+    toolset = create_toolset(
+        name, registry=registry, include_diagnostic=include_diagnostic
+    )
     try:
         return list(await asyncio.wait_for(toolset.get_tools(), timeout))
     finally:
         try:
             await toolset.close()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - closing must not mask tool listing
             _log.debug("Closing toolset for '{}' failed: {}", name, exc)
 
 
@@ -134,7 +155,7 @@ def strip_tool_name_prefix(tool_name: str) -> str:
     """
     try:
         registry = get_mcp_servers()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - installed use may lack a workspace root
         # Discovery raises without a workspace root -- the installed-as-a-
         # dependency shape.  On the per-tool-call path, so it must not raise.
         _log.debug(

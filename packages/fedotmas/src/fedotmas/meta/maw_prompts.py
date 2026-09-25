@@ -63,7 +63,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 - Research agents with access to `research-controller` SHOULD use it before expensive searches, after several searches or failures, and before final synthesis or handoff. Its state is operational telemetry: include `research_controller_state` as an additional output field when useful, but do not make it a blocking `required_fields` handoff requirement unless a downstream semantic task explicitly consumes it.
 - When using the controller after several searches or failed attempts, call `update_research_state` and then `get_next_action` with the returned snapshot before continuing. Before final synthesis or handoff, update state and call `get_next_action` again. Follow the machine-readable `action`: `continue_search` means target an unresolved requirement; `change_strategy` means switch approach; `strategy_blocked` means do not repeat that strategy, use another source/tool or synthesize current findings (it does not stop other research); `synthesize` means prepare a source-backed result and may include the latest `research_controller_state` as an additional handoff field. Do not rely on self-reported confidence alone when recording evidence sufficiency. The controller tracks state and recommends actions; it does not gather evidence.
 - `research_state` is caller-owned JSON, not MCP process memory. Use a stable, distinct `research_id` per workstream and pass each returned snapshot into the next controller call. After acting on a recommendation, send a state update with `last_recommendation_followed` set to true or false. Controller state, source URLs, uncertainty, notes, and supporting context are normally additional fields, not blocking semantic requirements.
-- A verifier first determines the requested value or entity type and expected namespace, unit, and format; checks whether upstream interpretation matches; then verifies candidate values against evidence.
+- A verifier first determines the requested value or entity type and expected namespace, unit, and format; checks whether upstream interpretation matches; then verifies candidate values against evidence. Use one exact authoritative source when the task permits it; do not require multiple sources by default. Set `min_sources` or independent-source requirements only when the task calls for them.
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 - Set `final_answer_agent` to the actual terminal answer-producing agent. The runtime applies any final submission format only to this agent; never copy a terminal-only contract into research, calculation, extraction, or verification instructions.
@@ -75,6 +75,9 @@ Choose models based on task complexity: use stronger models for critical/complex
 - A producer with an `output_contract` must return a JSON object containing every required field. It may include additional evidence, sources, assumptions, and uncertainty needed downstream; never reduce that artifact to a bare final answer.
 - If a dependent role must continue with the same selected entity, include those identity fields in both contracts. Preserve their values exactly or mark the dependency unresolved; do not silently substitute another paper, site, video, or entity.
 - Verifiers should use `research_policy: "evidence_first"` when upstream evidence is complete, or `"targeted_recovery"` when their role permits retrieving a specific missing claim. Avoid duplicating a full research pass.
+- Set `research_mode` by capability: `discovery_only` for source finders that select URLs and hand off titles/snippets/relevance; `inspection_only` for extractors that consume selected sources; `mixed` for a researcher that must discover and inspect. A source finder hands off a small useful candidate set as soon as it has a plausible match; downstream extractors do deep reading. One exact authoritative source can be sufficient.
+- Broad discovery is limited to one call per model turn. Use each result, retain candidate URLs, inspect known sources, and change the query or source method when a search adds no new evidence.
+- For XML, JSON, spreadsheets, or large structured files requiring filtering, joins, aggregation, or traversal, assign `code-agent` when execution materially helps. For large text documents use pageable `document.read_document` pages or `document.find_document` rather than repeating the first page.
 
 **IMPORTANT — syntax for state references in generated instructions:**
 Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output. Preserve literal markup only when it is part of the actual task content.
@@ -83,19 +86,20 @@ Use single curly braces around the state key name. In the examples below, angle 
 
 ## DESIGN PRINCIPLES
 
-1. **Let the task determine the team.** Do not optimize for the smallest possible team. One agent is appropriate for a genuinely atomic task; add agents when distinct evidence sources, modalities, tools, reasoning responsibilities, verification work, or independent research branches materially help.
-2. **Keep responsibilities distinct.** Avoid redundant agents with substantially overlapping work. Split materially different semantic stages when this reduces ambiguity or context mixing, such as source finding, domain interpretation, identifier resolution, and verification. When a task needs all of those stages, a sequential handoff could be `source_finder -> domain_interpreter -> identifier_resolver -> verifier`; include only the roles the task actually needs.
-3. **Check dependencies before using parallel.** Ask whether each branch can be solved without another branch's output. If agent A must determine an entity, identifier, date, value, search term, or other input required by agent B, put them in a sequential dependency and pass A's concise result through state. Use parallel only for genuinely independent branches.
-4. **Synthesize or verify parallel work.** After parallel research, use an agent that reads all branch outputs to synthesize or verify them when the task calls for it.
-5. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer). When the result comes from a loop, add a terminal answer agent after it.
-6. **Every agent** must have a unique `name` and a unique `output_key`.
-7. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
-8. **Instructions must be specific and actionable** — tell the agent exactly what to do.
-9. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
-10. **Keep final formatting at the boundary.** Designate `final_answer_agent`; do not place benchmark submission tags or bare-answer rules in intermediate instructions.
-11. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and this follow-up in a `sequential` node.
-12. **Route web work by task and cost.** Use `websearch-searxng` or `websearch-tavily` for discovery, `web-scraping` to inspect known ordinary static pages, and download/document tools for known documents. Reserve `browser-agent` for genuinely interactive or dynamic navigation, or when cheaper inspection fails; do not assign it to every research role. If one lightweight search provider returns empty or poor results, try another available provider instead of repeatedly retrying the same one.
-13. For numerical computation, spreadsheet or structured-file analysis, programmatic filtering, transformations, or multi-step calculations, assign `code-agent` to a suitable specialist only when execution materially helps. For document retrieval, prefer `document`; do not add `code-agent` to every research role by default.
+1. **Use the minimum sufficient semantic decomposition.** Keep a task in one agent when it is atomic. Add agents only when separation materially improves tool specialization, independent evidence gathering, context isolation, structured extraction, or verification.
+2. **Keep responsibilities distinct.** Avoid redundant agents and fragile handoff boundaries. Do not create separate agents merely to query two search providers; one researcher can try another provider if the first fails. Split materially different stages only when that separation reduces ambiguity or context mixing.
+3. **Separate source discovery from substantial extraction when useful.** Keep `source_finder -> structured_extractor` when deep structured extraction genuinely benefits from its own context. The source finder selects a small set of sources and hands off identity, URL, title, and concise relevance evidence; the extractor inspects those selected sources without repeating broad discovery. Do not force this decomposition for simple lookups.
+4. **Check dependencies before using parallel.** Ask whether each branch can be solved without another branch's output. If agent A must determine an entity, identifier, date, value, search term, or other input required by agent B, put them in a sequential dependency and pass A's concise result through state. Use parallel only for genuinely independent branches.
+5. **Synthesize or verify parallel work.** After parallel research, use an agent that reads all branch outputs to synthesize or verify them when the task calls for it.
+6. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer). When the result comes from a loop, add a terminal answer agent after it.
+7. **Every agent** must have a unique `name` and a unique `output_key`.
+8. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
+9. **Instructions must be specific and actionable** — tell the agent exactly what to do.
+10. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
+11. **Keep final formatting at the boundary.** Designate `final_answer_agent`; do not place benchmark submission tags or bare-answer rules in intermediate instructions.
+12. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and this follow-up in a `sequential` node.
+13. **Route web work by task and cost.** Use `websearch-searxng` or `websearch-tavily` for discovery, `web-scraping` to inspect known ordinary static pages, and download/document tools for known documents. Reserve `browser-agent` for genuinely interactive or dynamic navigation, or when cheaper inspection fails; do not assign it to every research role. If one lightweight search provider returns empty or poor results, try another available provider instead of repeatedly retrying the same one.
+14. For numerical computation, spreadsheet or structured-file analysis, programmatic filtering, transformations, or multi-step calculations, assign `code-agent` to a suitable specialist only when execution materially helps. For document retrieval, prefer `document`; do not add `code-agent` to every research role by default.
 
 ---
 
@@ -185,6 +189,9 @@ Use single curly braces around the state key name. In the examples below, angle 
 ```
 
 ### Example 4 — Independent sources with synthesis and verification
+Use this pattern only when the task itself needs independent corroboration. Do not
+create these branches only to query different providers, and do not require multiple
+sources when one exact authoritative source is sufficient.
 ```json
 {
   "agents": [
@@ -303,8 +310,8 @@ Choose models based on task complexity: use stronger models for critical/complex
 
 ## DESIGN PRINCIPLES
 
-1. **Let the task determine the team.** Do not optimize for the smallest possible team. One agent fits a genuinely atomic task; use additional agents when distinct evidence sources, modalities, tools, reasoning responsibilities, verification work, independent research branches, or semantic stages materially help.
-2. **Give each agent one clear responsibility.** Avoid redundant agents with substantially overlapping work. Split materially different stages when that reduces semantic ambiguity or context mixing, such as source finding, domain interpretation, identifier resolution, and verification. When a task needs all of those stages, a sequential handoff could be `source_finder -> domain_interpreter -> identifier_resolver -> verifier`; include only the roles the task actually needs.
+1. **Use the minimum sufficient semantic decomposition.** Keep atomic tasks in one agent. Add roles only when separation materially improves tool specialization, independent evidence gathering, context isolation, structured extraction, or verification.
+2. **Give each agent one clear responsibility.** Avoid redundant parallel agents whose outputs are both required downstream and avoid fragile handoff boundaries. Do not create separate agents merely to query different providers; one researcher can switch providers when needed. Add a source finder and extractor only when substantial extraction benefits from a separate role.
 3. **Keep instructions specific and actionable** — tell each agent exactly what to do.
 4. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 5. **Do NOT include output_key, state references, or curly-brace placeholders** — focus on WHAT each agent does, not how data flows between them. Data wiring is handled in a separate stage.
@@ -396,8 +403,10 @@ Choose models based on task complexity: use stronger models for critical/complex
 - Ensure all agent names are unique.
 - Assign MCP tools only when actually needed.
 - **ONLY use exact tool names from the AVAILABLE MCP TOOLS list. NEVER invent tool names.** If no listed tool fits, use `"tools": []`.
+- Use the minimum sufficient number of agents. A single agent can try a second search provider; do not create provider-specific duplicate workers. Keep a source finder followed by an extractor only when deep extraction materially benefits from that split.
 - Route web work by task and cost: use `websearch-searxng` or `websearch-tavily` for discovery, `web-scraping` to inspect known ordinary static pages, and download/document tools for known documents. Reserve `browser-agent` for genuinely interactive or dynamic navigation, or when cheaper inspection fails; do not assign it to every research role. If one lightweight search provider returns empty or poor results, try another available provider instead of repeatedly retrying the same one.
 - Do NOT include output_key or any curly-brace state references in instructions.
+- The pipeline stage will assign `research_mode`: source finders use `discovery_only`, structured extractors use `inspection_only`, and general researchers use `mixed`. Recommend those roles only when the task benefits from them.
 
 ---
 
@@ -484,6 +493,11 @@ ${available_models}
 - Do not generate an `output_contract` for the terminal `final_answer_agent` unless its output is explicitly consumed downstream; the runtime final-answer format takes precedence for terminal output.
 - Contracted producer outputs are JSON objects that retain all required fields plus useful evidence and provenance, rather than short answer strings.
 - For evidence-complete verification, use `research_policy: "evidence_first"`. Use `"targeted_recovery"` only when the verifier may recover a specific missing claim; do not repeat full research. For research, inspect promising discovered URLs before launching another broad discovery batch.
+- Set `research_mode` explicitly for research roles: `discovery_only` for source finders, `inspection_only` for extractors consuming selected sources, and `mixed` for roles that need both. A source finder should hand off a small set of candidates once it has a plausible match; one exact authoritative source can be enough.
+- Use at most one broad discovery call per model turn. Reuse the candidate ledger, inspect known sources, and switch strategy when a search yields no new evidence.
+- Do not impose a universal multiple-source evidence rule. Use one exact authoritative source when it answers the task; require more only when the task itself needs corroboration.
+- For repeated identities inside records, express the identity path as `people[].orcid` or the corresponding collection path. Keep each identity in its record; never promote one repeated identity to a top-level value.
+- For large local documents, use `document.read_document` with its continuation cursor or `document.find_document`. Use `code-agent` for XML/JSON/spreadsheets when filtering, joins, aggregation, or structured traversal materially benefits from execution.
 
 **IMPORTANT — syntax for state references in generated instructions:**
 Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output. Preserve literal markup only when it is part of the actual task content.
@@ -492,9 +506,9 @@ Use single curly braces around the state key name. In the examples below, angle 
 
 ## DESIGN PRINCIPLES
 
-1. **Let dependencies determine order.** Before using `parallel`, decide whether each branch can be solved without another branch's output. If agent A determines an entity, identifier, date, value, search term, or other information agent B needs, put A before B in a `sequential` node and pass the needed result through state; for example, `identifier_finder -> dependent_researcher -> verifier`.
+1. **Use the minimum sufficient semantic decomposition.** Keep atomic tasks in one agent. Add roles only when separation materially improves tool specialization, independent evidence gathering, context isolation, structured extraction, or verification.
 2. **Use parallel only for genuinely independent branches.** After parallel research, add synthesis or verification when appropriate; the follow-up must read all relevant branch outputs. One valid pattern is `[source_A_researcher, source_B_researcher] -> synthesizer/verifier` when the source branches do not need each other's results.
-3. **Keep responsibilities distinct.** Split materially different semantic stages when that reduces ambiguity or context mixing, such as source finding, domain interpretation, identifier resolution, and verification. When a task needs all of those stages, a sequential handoff could be `source_finder -> domain_interpreter -> identifier_resolver -> verifier`; include only the roles the task actually needs.
+3. **Keep responsibilities distinct without over-decomposing.** Use a source finder followed by an extractor when substantial extraction benefits from separate context. Do not make provider-specific search workers or require redundant parallel results downstream; one researcher can switch providers.
 4. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer) when a separate pool agent can answer after the loop.
 5. **Every agent** must have a unique `name` and a unique `output_key`.
 6. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
@@ -502,7 +516,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 8. Include final formatting only through the designated terminal answer stage, never in intermediate worker instructions.
 9. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and follow-up in a `sequential` node.
 10. **Route web work by task and cost.** Use `websearch-searxng` or `websearch-tavily` for discovery, `web-scraping` to inspect known ordinary static pages, and download/document tools for known documents. Reserve `browser-agent` for genuinely interactive or dynamic navigation, or when cheaper inspection fails; do not assign it to every research role. If one lightweight search provider returns empty or poor results, try another available provider instead of repeatedly retrying the same one.
-11. Use `code-agent` when iterative Python execution materially helps with calculations or structured files; keep it with the relevant specialist and use `document` for document retrieval.
+11. Use `code-agent` when iterative Python execution materially helps with calculations or structured files; keep it with the relevant specialist and use pageable `document` tools for document retrieval.
 
 ---
 
