@@ -42,3 +42,25 @@ async def test_generate_config_is_retained_on_maw():
 
     assert generated is config
     assert maw.generated_config is generated
+
+
+@pytest.mark.asyncio
+async def test_generate_config_preserves_explicit_discovery_only_with_video_tools():
+    config = MAWConfig.model_validate({
+        "agents": [{
+            "name": "source_finder",
+            "instruction": "Find and identify video sources",
+            "output_key": "sources",
+            "tools": ["websearch-tavily", "youtube-transcript"],
+            "research_mode": "discovery_only",
+        }],
+        "pipeline": {"type": "agent", "agent_name": "source_finder"},
+    })
+    with (
+        patch("fedotmas.core.base.setup_logging"),
+        patch("fedotmas.maw.maw.generate_pipeline_config", new=AsyncMock(return_value=MetaAgentResult(config=config))),
+    ):
+        maw = MAW(two_stage=False, mcp_servers=[])
+        generated = await maw.generate_config("Find a video source")
+
+    assert generated.agents[0].research_mode == "discovery_only"

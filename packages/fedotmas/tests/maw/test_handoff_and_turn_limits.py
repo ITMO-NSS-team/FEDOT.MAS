@@ -1595,3 +1595,43 @@ async def test_exhausted_search_budget_blocks_backend_and_bounds_retries(monkeyp
             for declaration in group.function_declarations or []
         ]
         assert "search" not in advertised
+
+
+@pytest.mark.asyncio
+async def test_sequential_extractor_uses_upstream_source_for_browser_and_recovery(monkeypatch):
+    finder_llm = _ScriptedLlm(
+        model="openai/finder",
+        responses=[types.Content(role="model", parts=[types.Part.from_text(text=json.dumps({"sources": [{"title": "Known source", "doi": "10.1234/abc"}]}))])],
+    )
+    extractor_llm = _ScriptedLlm(
+        model="openai/extractor",
+        responses=[
+            types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(id="browser-1", name="complete_browser_task", args={"task": "Open https://doi.org/10.1234/abc"}))]),
+            types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(id="search-1", name="searxng_search", args={"query": "find another copy of Known source DOI 10.1234/abc"}))]),
+            types.Content(role="model", parts=[types.Part.from_text(text='{"evidence":"recovered"}')]),
+        ],
+    )
+    llms = {"openai/finder": finder_llm, "openai/extractor": extractor_llm}
+    monkeypatch.setattr(builder, "_resolve_llm", lambda model, *_args: llms[model])
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(name="source_finder", instruction="Find the source", output_key="source_handoff", model="openai/finder"),
+            MAWAgentConfig(name="extractor", instruction="Inspect and extract evidence", output_key="evidence", model="openai/extractor", research_mode="inspection_only", research_policy="targeted_recovery", input_requirements=[ArtifactRequirement(source_key="source_handoff", required_fields=["sources"], identity_fields=["sources[].doi"])]),
+        ],
+        pipeline=MAWStepConfig(type="sequential", children=[MAWStepConfig(type="agent", agent_name="source_finder"), MAWStepConfig(type="agent", agent_name="extractor")]),
+    )
+    root = builder.build(config, autonomous=False)
+    opened: list[str] = []
+    searches: list[str] = []
+    browser = FunctionTool(func=lambda task: opened.append(task) or {"status": "ok"})
+    browser.name = "complete_browser_task"
+    search = FunctionTool(func=lambda query: searches.append(query) or {"results": []})
+    search.name = "searxng_search"
+    root.sub_agents[1].tools = [browser, search]
+
+    result = await run_pipeline(root, "Find evidence for this source", session_service=InMemorySessionService())
+
+    assert opened == ["Open https://doi.org/10.1234/abc"]
+    assert searches == ["find another copy of Known source DOI 10.1234/abc"]
+    ledger = result.state["__fedotmas_research_candidates"]["extractor"]
+    assert any(item["doi"] == "10.1234/abc" and item["url"] == "https://doi.org/10.1234/abc" for item in ledger)

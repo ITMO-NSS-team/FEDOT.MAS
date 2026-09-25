@@ -539,6 +539,14 @@ def _normalize_generated_research_modes(
                 ToolCapability.BROWSER_NAVIGATION,
             }
         )
+        if "research_mode" in agent.model_fields_set:
+            mode_is_coherent = (
+                (agent.research_mode == "discovery_only" and has_discovery)
+                or (agent.research_mode == "mixed" and has_discovery and has_inspection)
+                or (agent.research_mode == "inspection_only" and has_inspection)
+            )
+            if mode_is_coherent:
+                continue
         if has_discovery and has_inspection:
             agent.research_mode = "mixed"
         elif has_discovery:

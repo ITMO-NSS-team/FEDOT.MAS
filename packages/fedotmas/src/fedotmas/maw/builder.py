@@ -655,6 +655,7 @@ def _build_llm_agent(
         )
 
     async def before_agent(callback_context: CallbackContext) -> None:
+        _seed_upstream_candidates(callback_context.state, cfg)
         modes = callback_context.state.get(RESEARCH_MODE_STATE_KEY)
         if not isinstance(modes, dict):
             modes = {}
@@ -892,8 +893,6 @@ def _build_llm_agent(
                     "downstream extractor."
                 ),
             )
-        if cfg.research_mode == "discovery_only" and capability == ToolCapability.MEDIA_INSPECTION and normalize_tool_name(tool.name) == "get_video_info":
-            blocked = None
         if (
             cfg.research_mode == "discovery_only"
             and capability == ToolCapability.MEDIA_INSPECTION
@@ -1136,7 +1135,6 @@ def _build_llm_agent(
                     name: "discovery_only source selection role"
                     for name in inspection_names
                     if normalize_tool_name(llm_request.tools_dict[name].name) != "get_video_info"
-                    if normalize_tool_name(llm_request.tools_dict[name].name) not in {"get_video_info"}
                 }
             )
 
@@ -1297,10 +1295,74 @@ def _candidate_context(state: Any, agent: str) -> list[dict[str, Any]]:
             "inspection_status": str(item.get("inspection_status") or "uninspected")[:20],
             "inspection_tool": str(item.get("inspection_tool") or "")[:60],
             "inspection_error": str(item.get("inspection_error") or "")[:160],
+            "doi": str(item.get("doi") or "")[:160],
+            "identity": item.get("identity") if isinstance(item.get("identity"), dict) else {},
         }
         for item in selected
-        if isinstance(item, dict) and isinstance(item.get("url"), str)
+        if isinstance(item, dict)
+        and (isinstance(item.get("url"), str) or item.get("title") or item.get("doi"))
     ]
+
+
+def _seed_upstream_candidates(state: Any, cfg: MAWAgentConfig) -> None:
+    if not cfg.input_requirements or not hasattr(state, "get") or not hasattr(state, "__setitem__"):
+        return
+    root = state.get(RESEARCH_CANDIDATE_LEDGER_KEY)
+    if not isinstance(root, dict):
+        root = {}
+    ledger = root.get(cfg.name)
+    ledger = ledger if isinstance(ledger, list) else []
+    by_identity = {
+        (item.get("url"), item.get("doi"), item.get("title"))
+        for item in ledger if isinstance(item, dict)
+    }
+    for requirement in cfg.input_requirements:
+        artifact = parse_artifact(state.get(requirement.source_key))
+        if artifact is None:
+            continue
+        required_identity = {
+            field: field_value(artifact, field)
+            for field in requirement.identity_fields
+            if not missing_contract_fields(artifact, [field])[1]
+        }
+        for record in _artifact_records(artifact):
+            url = next((record.get(key) for key in ("url", "source_url", "link") if isinstance(record.get(key), str) and record[key].strip()), None)
+            doi = next((record.get(key) for key in ("doi", "DOI") if isinstance(record.get(key), str) and record[key].strip()), None)
+            title = next((record.get(key) for key in ("title", "name", "label") if isinstance(record.get(key), str) and record[key].strip()), None)
+            if not doi and not url and not title and required_identity:
+                doi = next((str(value) for key, value in required_identity.items() if "doi" in key.casefold() and isinstance(value, (str, int))), None)
+            if not url and doi:
+                url = f"https://doi.org/{doi.removeprefix('https://doi.org/')}"
+            if not (url or doi or title):
+                continue
+            key = (url, doi, title)
+            if key in by_identity:
+                continue
+            ledger.append({
+                "url": url,
+                "doi": doi,
+                "title": str(title or "")[:180],
+                "snippet": str(record.get("snippet") or record.get("description") or "")[:420],
+                "source_tool": "upstream_handoff",
+                "query": None,
+                "inspected": False,
+                "inspection_status": "uninspected",
+                "identity": {str(k)[:80]: str(v)[:160] for k, v in required_identity.items() if isinstance(v, (str, int, float))},
+            })
+            by_identity.add(key)
+    if ledger:
+        root[cfg.name] = ledger[-24:]
+        state[RESEARCH_CANDIDATE_LEDGER_KEY] = root
+
+
+def _artifact_records(value: Any):
+    if isinstance(value, dict):
+        yield value
+        for nested in value.values():
+            yield from _artifact_records(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _artifact_records(nested)
 
 
 def _record_turn_observability(
