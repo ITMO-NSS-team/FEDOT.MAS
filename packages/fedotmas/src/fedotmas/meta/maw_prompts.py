@@ -93,7 +93,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 9. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
 10. **Keep final formatting at the boundary.** Designate `final_answer_agent`; do not place benchmark submission tags or bare-answer rules in intermediate instructions.
 11. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and this follow-up in a `sequential` node.
-12. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
+12. **Route web work by task.** Use `websearch-searxng` or `websearch-tavily` for discovery, `web-scraping` to extract known static pages, and `browser-agent` only for interactive or multi-step browser navigation. If one lightweight search provider returns empty or poor results, try another available provider instead of repeatedly retrying the same one.
 13. For numerical computation, spreadsheet or structured-file analysis, programmatic filtering, transformations, or multi-step calculations, assign `code-agent` to a suitable specialist only when execution materially helps. For document retrieval, prefer `document`; do not add `code-agent` to every research role by default.
 
 ---
@@ -394,7 +394,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 - Ensure all agent names are unique.
 - Assign MCP tools only when actually needed.
 - **ONLY use exact tool names from the AVAILABLE MCP TOOLS list. NEVER invent tool names.** If no listed tool fits, use `"tools": []`.
-- For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
+- Route web work by task: use `websearch-searxng` or `websearch-tavily` for discovery, `web-scraping` to extract known static pages, and `browser-agent` only for interactive or multi-step browser navigation. If one lightweight search provider returns empty or poor results, try another available provider instead of repeatedly retrying the same one.
 - Do NOT include output_key or any curly-brace state references in instructions.
 
 ---
@@ -498,7 +498,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 7. **Instructions must include state references** using curly braces around the state key name, so agents can read concise upstream outputs.
 8. Include final formatting only through the designated terminal answer stage, never in intermediate worker instructions.
 9. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and follow-up in a `sequential` node.
-10. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
+10. **Route web work by task.** Use `websearch-searxng` or `websearch-tavily` for discovery, `web-scraping` to extract known static pages, and `browser-agent` only for interactive or multi-step browser navigation. If one lightweight search provider returns empty or poor results, try another available provider instead of repeatedly retrying the same one.
 11. Use `code-agent` when iterative Python execution materially helps with calculations or structured files; keep it with the relevant specialist and use `document` for document retrieval.
 
 ---

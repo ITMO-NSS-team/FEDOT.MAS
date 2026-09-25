@@ -104,6 +104,20 @@ def test_maw_prompts_route_material_computation_to_code_agent():
     )
 
 
+def test_maw_prompts_use_current_browser_and_search_routing():
+    for prompt in (
+        META_AGENT_SYSTEM_PROMPT.template,
+        POOL_AGENT_SYSTEM_PROMPT.template,
+        PIPELINE_AGENT_SYSTEM_PROMPT.template,
+    ):
+        assert "browser-agent" in prompt
+        assert "browser-usage" not in prompt
+        assert "websearch-searxng" in prompt
+        assert "websearch-tavily" in prompt
+        assert "web-scraping" in prompt
+        assert "empty or poor results" in prompt
+
+
 @pytest.mark.parametrize(
     "prompt_template",
     [META_AGENT_SYSTEM_PROMPT, POOL_AGENT_SYSTEM_PROMPT, PIPELINE_AGENT_SYSTEM_PROMPT],

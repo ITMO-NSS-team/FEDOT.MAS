@@ -74,10 +74,12 @@ def test_gaia_default_mcp_servers_include_web_task_tools_and_light_sandbox(
     assert "download" in servers
     assert "youtube-transcript" in servers
     assert "browser-agent" in servers
-    assert "code-agent" in servers
+    assert "code-agent" not in servers
+    assert "sandbox-light" in servers
     assert "research-controller" in servers
 
     registry = _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
+    assert "code-agent" not in registry
     assert "research-controller" in registry
     assert "get_next_action" in registry["research-controller"].description
 
@@ -115,6 +117,21 @@ def test_gaia_uses_full_sandbox_when_e2b_key_is_set(monkeypatch: pytest.MonkeyPa
 
     assert "sandbox" in servers
     assert "sandbox-light" not in servers
+    assert "code-agent" in servers
+
+
+def test_gaia_mcp_override_cannot_enable_code_agent_without_e2b(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(
+        "FEDOTMAS_GAIA_MCP_SERVERS", "download, sandbox, code-agent"
+    )
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+
+    assert _gaia_mcp_servers() == ["download", "sandbox-light"]
+    assert "code-agent" not in _gaia_mcp_registry(
+        ModelConfig(model="openai/gpt-4o")
+    )
 
 
 def test_gaia_passes_resolved_worker_settings_to_browser_agent(monkeypatch):

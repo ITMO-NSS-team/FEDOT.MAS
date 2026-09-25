@@ -50,7 +50,6 @@ GAIA_BASE_MCP_SERVERS = [
     "document",
     "media",
     "research-controller",
-    "code-agent",
 ]
 DEFAULT_GAIA_WORKER_MODEL = "openai/gpt-6-luna"
 DEFAULT_MEDIA_MODEL = "openai/gpt-6-luna"
@@ -196,7 +195,14 @@ def _gaia_mcp_servers() -> list[str] | str:
     if value is not None and value.strip().lower() == "all":
         return "all"
     if value is not None:
-        return [name.strip() for name in value.split(",") if name.strip()]
+        servers = [name.strip() for name in value.split(",") if name.strip()]
+        if not os.getenv("E2B_API_KEY"):
+            servers = [
+                "sandbox-light" if name == "sandbox" else name
+                for name in servers
+                if name != "code-agent"
+            ]
+        return servers
 
     provider_setting = os.getenv("FEDOTMAS_GAIA_SEARCH_PROVIDERS")
     if provider_setting is None:
@@ -232,6 +238,8 @@ def _gaia_mcp_servers() -> list[str] | str:
     sandbox = "sandbox" if os.getenv("E2B_API_KEY") else "sandbox-light"
     insertion_index = servers.index("youtube-transcript") + 1
     servers.insert(insertion_index, sandbox)
+    if os.getenv("E2B_API_KEY"):
+        servers.append("code-agent")
     return servers
 
 
@@ -249,6 +257,8 @@ def _gaia_mcp_registry(
 ) -> dict[str, MCPServerConfig]:
     """Pass the resolved GAIA worker settings to nested agents."""
     registry = dict(resolve_mcp_registry(_gaia_mcp_servers()))
+    if not os.getenv("E2B_API_KEY"):
+        registry.pop("code-agent", None)
     for name in ("browser-agent", "code-agent"):
         server = registry.get(name)
         if isinstance(server, StdioMCPServer):

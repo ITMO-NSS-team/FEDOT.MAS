@@ -26,7 +26,7 @@ class TestMaxOutputTokens:
     def test_default(self, monkeypatch):
         monkeypatch.delenv("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", raising=False)
 
-        assert _resolve_max_output_tokens() == 2048
+        assert _resolve_max_output_tokens() == 8192
 
     def test_disabled_with_zero(self, monkeypatch):
         monkeypatch.setenv("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", "0")
@@ -36,7 +36,7 @@ class TestMaxOutputTokens:
     def test_invalid_falls_back(self, monkeypatch):
         monkeypatch.setenv("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", "bad")
 
-        assert _resolve_max_output_tokens() == 2048
+        assert _resolve_max_output_tokens() == 8192
 
 
 # ---------------------------------------------------------------------------

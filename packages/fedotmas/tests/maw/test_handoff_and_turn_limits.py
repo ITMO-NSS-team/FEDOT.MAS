@@ -74,6 +74,58 @@ def _contract_config() -> MAWConfig:
     )
 
 
+def test_nonterminal_identity_consumer_must_propagate_identity():
+    config = _contract_config().model_copy(
+        deep=True,
+        update={
+            "pipeline": MAWStepConfig(
+                type="sequential",
+                children=[
+                    MAWStepConfig(type="agent", agent_name="paper_researcher"),
+                    MAWStepConfig(type="agent", agent_name="verifier"),
+                    MAWStepConfig(type="agent", agent_name="answerer"),
+                ],
+            ),
+            "agents": [
+                *[a.model_copy(deep=True) for a in _contract_config().agents],
+                MAWAgentConfig(
+                    name="answerer", instruction="Answer.", output_key="answer"
+                ),
+            ],
+            "final_answer_agent": "answerer",
+        },
+    )
+    config.agents[1].output_contract = None
+
+    with pytest.raises(ValueError, match="must include upstream identity fields"):
+        MAWConfig.model_validate(config.model_dump())
+
+
+@pytest.mark.parametrize("explicit", [True, False])
+def test_terminal_identity_consumer_may_use_external_answer_boundary(explicit):
+    config = _contract_config().model_copy(
+        deep=True,
+        update={
+            "final_answer_agent": "verifier" if explicit else None,
+        },
+    )
+    config.agents[1].output_contract = None
+
+    validated = MAWConfig.model_validate(config.model_dump())
+    assert validated.agents[1].input_requirements[0].identity_fields == [
+        "paper_identity"
+    ]
+
+
+def test_terminal_structured_identity_output_remains_valid():
+    config = _contract_config().model_copy(
+        update={"final_answer_agent": "verifier"}
+    )
+
+    validated = MAWConfig.model_validate(config.model_dump())
+    assert validated.agents[1].output_contract.identity_fields == ["paper_identity"]
+
+
 @pytest.mark.asyncio
 async def test_structured_handoff_is_preserved_with_entity_identity():
     config = _contract_config()

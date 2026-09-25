@@ -302,15 +302,18 @@ class MAWConfig(BaseModel):
                 seen_keys.add(a.output_key)
 
         validate_node_refs(self.pipeline, agent_names)
+        from fedotmas.maw._validators import _find_terminal_node
+
+        terminal = _find_terminal_node(self.pipeline)
+        inferred_final_answer_agent = (
+            terminal.agent_name if terminal.type == "agent" else None
+        )
         if self.final_answer_agent is not None:
             if self.final_answer_agent not in agent_names:
                 raise ValueError(
                     f"Unknown final_answer_agent '{self.final_answer_agent}'. "
                     f"Available: {sorted(agent_names)}"
                 )
-            from fedotmas.maw._validators import _find_terminal_node
-
-            terminal = _find_terminal_node(self.pipeline)
             if (
                 terminal.type != "agent"
                 or terminal.agent_name != self.final_answer_agent
@@ -330,6 +333,8 @@ class MAWConfig(BaseModel):
                 for requirement in agent.input_requirements
                 for field in requirement.identity_fields
             }
+            if agent.name == (self.final_answer_agent or inferred_final_answer_agent):
+                continue
             if required_identity and (
                 agent.output_contract is None
                 or not required_identity.issubset(agent.output_contract.identity_fields)

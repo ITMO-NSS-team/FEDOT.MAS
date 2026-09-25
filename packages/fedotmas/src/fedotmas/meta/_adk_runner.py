@@ -288,13 +288,13 @@ def _resolve_timeout(timeout_s: float | None) -> float | None:
 
 
 def _resolve_max_output_tokens() -> int | None:
-    value = os.getenv("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", "2048")
+    value = os.getenv("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", "8192")
     try:
         resolved = int(value)
     except ValueError:
         _log.warning(
-            "Invalid FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS={!r}; using 2048",
+            "Invalid FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS={!r}; using 8192",
             value,
         )
-        resolved = 2048
+        resolved = 8192
     return resolved if resolved > 0 else None
