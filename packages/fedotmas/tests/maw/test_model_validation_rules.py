@@ -223,6 +223,27 @@ def test_explicit_generated_modes_are_corrected_to_match_tools():
     assert [agent.research_mode for agent in config.agents] == ["discovery_only", "discovery_only", "inspection_only"]
 
 
+@pytest.mark.parametrize("mode", ["discovery_only", "inspection_only", "mixed"])
+def test_no_tool_final_agent_resets_generated_research_mode(mode):
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(
+                name="final_answer",
+                instruction="Synthesize the answer.",
+                output_key="answer",
+                tools=[],
+                research_mode=mode,
+            )
+        ],
+        pipeline=MAWStepConfig(type="agent", agent_name="final_answer"),
+        final_answer_agent="final_answer",
+    )
+
+    _normalize_generated_research_modes(config)
+
+    assert config.agents[0].research_mode == "mixed"
+
+
 class TestNonLeafWithoutChildren:
     """Rule 8: sequential/parallel/loop without children → ValidationError."""
 

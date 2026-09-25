@@ -553,8 +553,5 @@ def _normalize_generated_research_modes(
             agent.research_mode = "discovery_only"
         elif has_inspection:
             agent.research_mode = "inspection_only"
-        elif "research_mode" in agent.model_fields_set:
-            raise ValueError(
-                f"Generated agent '{agent.name}' declares research_mode="
-                f"'{agent.research_mode}' but has no discovery or inspection tools."
-            )
+        else:
+            agent.research_mode = "mixed"
