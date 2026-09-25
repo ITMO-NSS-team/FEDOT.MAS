@@ -67,6 +67,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 - Set `final_answer_agent` to the actual terminal answer-producing agent. The runtime applies any final submission format only to this agent; never copy a terminal-only contract into research, calculation, extraction, or verification instructions.
+- If a loop produces the final result, follow it with a separate terminal agent that reads the final loop state and converts it into the caller-facing answer. Loop participants produce internal drafts, critiques, decisions, or validated results. Never set `final_answer_agent` to an agent that executes inside a loop when an external final-answer format is expected.
 - For meaningful semantic dependencies, generate a task-specific `output_contract` for the producer and matching `input_requirements` for its consumer. Preserve evidence and provenance; do not impose a universal artifact schema. Leave contracts absent when no downstream handoff needs validation.
 - Do not generate an `output_contract` for the terminal `final_answer_agent` unless its output is explicitly consumed downstream; the runtime final-answer format takes precedence for terminal output.
 - Contract shapes shown in examples are illustrative for those roles. Choose fields from the current task's dependencies and evidence needs.
@@ -85,7 +86,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 2. **Keep responsibilities distinct.** Avoid redundant agents with substantially overlapping work. Split materially different semantic stages when this reduces ambiguity or context mixing, such as source finding, domain interpretation, identifier resolution, and verification. When a task needs all of those stages, a sequential handoff could be `source_finder -> domain_interpreter -> identifier_resolver -> verifier`; include only the roles the task actually needs.
 3. **Check dependencies before using parallel.** Ask whether each branch can be solved without another branch's output. If agent A must determine an entity, identifier, date, value, search term, or other input required by agent B, put them in a sequential dependency and pass A's concise result through state. Use parallel only for genuinely independent branches.
 4. **Synthesize or verify parallel work.** After parallel research, use an agent that reads all branch outputs to synthesize or verify them when the task calls for it.
-5. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer).
+5. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer). When the result comes from a loop, add a terminal answer agent after it.
 6. **Every agent** must have a unique `name` and a unique `output_key`.
 7. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 8. **Instructions must be specific and actionable** — tell the agent exactly what to do.
@@ -222,7 +223,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 }
 ```
 
-### Example 5 — Loop with critic
+### Example 5 — Loop with critic and terminal answer agent
 ```json
 {
   "agents": [
@@ -237,17 +238,29 @@ Use single curly braces around the state key name. In the examples below, angle 
       "instruction": "Review the draft: <draft>. If the quality is satisfactory, call exit_loop. Otherwise, provide specific feedback for improvement.",
       "output_key": "feedback",
       "model": "<model>"
+    },
+    {
+      "name": "answerer",
+      "instruction": "Read the final draft: <draft> and final critique: <feedback>. Return the validated result as the caller-facing answer.",
+      "output_key": "answer",
+      "model": "<model>"
     }
   ],
   "pipeline": {
-    "type": "loop",
-    "max_iterations": 3,
+    "type": "sequential",
     "children": [
-      {"type": "agent", "agent_name": "writer"},
-      {"type": "agent", "agent_name": "critic"}
+      {
+        "type": "loop",
+        "max_iterations": 3,
+        "children": [
+          {"type": "agent", "agent_name": "writer"},
+          {"type": "agent", "agent_name": "critic"}
+        ]
+      },
+      {"type": "agent", "agent_name": "answerer"}
     ]
   },
-  "final_answer_agent": "critic"
+  "final_answer_agent": "answerer"
 }
 ```
 
@@ -463,6 +476,7 @@ ${available_models}
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
 - Set `final_answer_agent` to the actual terminal answer-producing agent. The runtime applies final submission formatting only at that boundary.
+- If a loop produces the final result, follow it with a separate terminal agent that reads the final loop state and converts it into the caller-facing answer. Loop participants produce internal drafts, critiques, decisions, or validated results. Never set `final_answer_agent` to an agent that executes inside a loop when an external final-answer format is expected. If the pool lacks a separate terminal agent, use a non-loop pipeline instead.
 - Generate task-specific `output_contract` and matching `input_requirements` for meaningful handoffs. Preserve all useful evidence, provenance, and required entity identity fields. Do not use one universal schema.
 - Do not generate an `output_contract` for the terminal `final_answer_agent` unless its output is explicitly consumed downstream; the runtime final-answer format takes precedence for terminal output.
 - Contracted producer outputs are JSON objects that retain all required fields plus useful evidence and provenance, rather than short answer strings.
@@ -478,7 +492,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 1. **Let dependencies determine order.** Before using `parallel`, decide whether each branch can be solved without another branch's output. If agent A determines an entity, identifier, date, value, search term, or other information agent B needs, put A before B in a `sequential` node and pass the needed result through state; for example, `identifier_finder -> dependent_researcher -> verifier`.
 2. **Use parallel only for genuinely independent branches.** After parallel research, add synthesis or verification when appropriate; the follow-up must read all relevant branch outputs. One valid pattern is `[source_A_researcher, source_B_researcher] -> synthesizer/verifier` when the source branches do not need each other's results.
 3. **Keep responsibilities distinct.** Split materially different semantic stages when that reduces ambiguity or context mixing, such as source finding, domain interpretation, identifier resolution, and verification. When a task needs all of those stages, a sequential handoff could be `source_finder -> domain_interpreter -> identifier_resolver -> verifier`; include only the roles the task actually needs.
-4. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer).
+4. **Use loops** for iterative refinement with a critic (e.g., writer + reviewer) when a separate pool agent can answer after the loop.
 5. **Every agent** must have a unique `name` and a unique `output_key`.
 6. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 7. **Instructions must include state references** using curly braces around the state key name, so agents can read concise upstream outputs.
@@ -522,7 +536,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 }
 ```
 
-### Example 2 — Loop from pool [writer, critic]
+### Example 2 — Loop from pool [writer, critic, answerer]
 ```json
 {
   "agents": [
@@ -534,20 +548,32 @@ Use single curly braces around the state key name. In the examples below, angle 
     },
     {
       "name": "critic",
-      "instruction": "Review the draft: <draft>. If the quality is satisfactory, call exit_loop and return the final answer. Otherwise, provide specific feedback for improvement.",
+      "instruction": "Review the draft: <draft>. If the quality is satisfactory, call exit_loop and record the validation decision. Otherwise, provide specific feedback for improvement.",
       "output_key": "feedback",
+      "model": "<model>"
+    },
+    {
+      "name": "answerer",
+      "instruction": "Read the final draft: <draft> and final critique: <feedback>. Return the validated result as the caller-facing answer.",
+      "output_key": "answer",
       "model": "<model>"
     }
   ],
   "pipeline": {
-    "type": "loop",
-    "max_iterations": 3,
+    "type": "sequential",
     "children": [
-      {"type": "agent", "agent_name": "writer"},
-      {"type": "agent", "agent_name": "critic"}
+      {
+        "type": "loop",
+        "max_iterations": 3,
+        "children": [
+          {"type": "agent", "agent_name": "writer"},
+          {"type": "agent", "agent_name": "critic"}
+        ]
+      },
+      {"type": "agent", "agent_name": "answerer"}
     ]
   },
-  "final_answer_agent": "critic"
+  "final_answer_agent": "answerer"
 }
 ```
 

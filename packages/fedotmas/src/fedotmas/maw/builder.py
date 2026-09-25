@@ -22,7 +22,7 @@ from fedotmas._settings import (
 )
 from fedotmas.common.llm import make_llm
 from fedotmas.common.logging import get_logger
-from fedotmas.maw._validators import _find_terminal_node
+from fedotmas.maw._validators import _find_terminal_node, agent_executes_in_loop
 from fedotmas.maw.handoffs import (
     EXECUTION_METADATA_KEY,
     append_execution_issue,
@@ -186,13 +186,21 @@ def build(
     Pass ``autonomous=False`` when the tree is served to a person who can answer
     a clarifying question; see :func:`frame_instruction`.
     """
-    if final_answer_contract is not None and config.final_answer_agent is None:
-        terminal = _find_terminal_node(config.pipeline)
-        if terminal.type != "agent" or terminal.agent_name is None:
+    if final_answer_contract is not None:
+        final_answer_agent = config.final_answer_agent
+        if final_answer_agent is None:
+            terminal = _find_terminal_node(config.pipeline)
+            if terminal.type != "agent" or terminal.agent_name is None:
+                raise ValueError(
+                    "Cannot infer final_answer_agent: the pipeline must end in one agent"
+                )
+            final_answer_agent = terminal.agent_name
+        if agent_executes_in_loop(config.pipeline, final_answer_agent):
             raise ValueError(
-                "Cannot infer final_answer_agent: the pipeline must end in one agent"
+                "final_answer_agent cannot execute inside a loop when a "
+                "final_answer_contract is active; add a post-loop finalizer"
             )
-        config.final_answer_agent = terminal.agent_name
+        config.final_answer_agent = final_answer_agent
     agents_by_name: dict[str, MAWAgentConfig] = {a.name: a for a in config.agents}
     # The same set MAWConfig validates against: what a step can actually produce.
     state_keys = frozenset({"user_query"} | {a.output_key for a in config.agents})

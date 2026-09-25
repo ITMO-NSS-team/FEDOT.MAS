@@ -58,6 +58,16 @@ def _find_terminal_node(node: MAWStepConfig) -> MAWStepConfig:
     return node
 
 
+def agent_executes_in_loop(node: MAWStepConfig, name: str, in_loop: bool = False) -> bool:
+    """Whether any execution of the named agent occurs below a loop node."""
+    if node.type == "agent":
+        return in_loop and node.agent_name == name
+    return any(
+        agent_executes_in_loop(child, name, in_loop or node.type == "loop")
+        for child in node.children
+    )
+
+
 def warn_terminal_parallel(pipeline: MAWStepConfig) -> None:
     """Warn if the pipeline ends with a parallel node (no synthesizer)."""
     terminal = _find_terminal_node(pipeline)
