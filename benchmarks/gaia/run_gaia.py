@@ -207,12 +207,55 @@ def _env_list(name: str) -> list[str] | None:
 
 def _gaia_mcp_servers() -> list[str] | str:
     value = os.getenv("FEDOTMAS_GAIA_MCP_SERVERS")
-    if value is None:
-        sandbox = "sandbox" if os.getenv("E2B_API_KEY") else "sandbox-light"
-        return [*GAIA_BASE_MCP_SERVERS[:5], sandbox, *GAIA_BASE_MCP_SERVERS[5:]]
-    if value.strip().lower() == "all":
+    if value is not None and value.strip().lower() == "all":
         return "all"
-    return [name.strip() for name in value.split(",") if name.strip()]
+    if value is not None:
+        return [name.strip() for name in value.split(",") if name.strip()]
+
+    provider_setting = os.getenv("FEDOTMAS_GAIA_SEARCH_PROVIDERS")
+    if provider_setting is None:
+        providers = {"searxng"}
+        if _tavily_configured():
+            providers.add("tavily")
+    else:
+        requested = {
+            name.strip().lower() for name in provider_setting.split(",") if name.strip()
+        }
+        valid = {"searxng", "tavily"}
+        if requested and requested <= valid:
+            providers = requested
+        else:
+            _log.warning(
+                "Invalid FEDOTMAS_GAIA_SEARCH_PROVIDERS; using configured defaults"
+            )
+            providers = {"searxng"}
+            if _tavily_configured():
+                providers.add("tavily")
+
+    servers = list(GAIA_BASE_MCP_SERVERS)
+    servers.remove("websearch-searxng")
+    if "searxng" in providers:
+        servers.insert(0, "websearch-searxng")
+    if "tavily" in providers:
+        tavily_index = (
+            servers.index("websearch-searxng") + 1
+            if "websearch-searxng" in servers
+            else 0
+        )
+        servers.insert(tavily_index, "websearch-tavily")
+    sandbox = "sandbox" if os.getenv("E2B_API_KEY") else "sandbox-light"
+    insertion_index = servers.index("youtube-transcript") + 1
+    servers.insert(insertion_index, sandbox)
+    return servers
+
+
+def _tavily_configured() -> bool:
+    keys = [
+        key.strip()
+        for key in os.getenv("TAVILY_API_KEYS", "").split(",")
+        if key.strip()
+    ]
+    return bool(keys or os.getenv("TAVILY_API_KEY", "").strip())
 
 
 def _gaia_mcp_registry(

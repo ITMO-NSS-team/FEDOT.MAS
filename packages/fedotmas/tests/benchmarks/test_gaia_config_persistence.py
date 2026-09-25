@@ -56,6 +56,9 @@ def test_gaia_default_mcp_servers_include_web_task_tools_and_light_sandbox(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.delenv("FEDOTMAS_GAIA_MCP_SERVERS", raising=False)
+    monkeypatch.delenv("FEDOTMAS_GAIA_SEARCH_PROVIDERS", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEYS", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
 
     servers = _gaia_mcp_servers()
@@ -73,6 +76,31 @@ def test_gaia_default_mcp_servers_include_web_task_tools_and_light_sandbox(
     registry = _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
     assert "research-controller" in registry
     assert "get_next_action" in registry["research-controller"].description
+
+
+def test_gaia_adds_tavily_when_configured_and_supports_search_ab_modes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("FEDOTMAS_GAIA_MCP_SERVERS", raising=False)
+    monkeypatch.setenv("TAVILY_API_KEYS", " key-one, ,key-two ")
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FEDOTMAS_GAIA_SEARCH_PROVIDERS", raising=False)
+
+    defaults = _gaia_mcp_servers()
+    assert "websearch-searxng" in defaults
+    assert "websearch-tavily" in defaults
+    assert "websearch-tavily" in _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
+
+    for setting, expected in (
+        ("searxng", {"websearch-searxng"}),
+        ("tavily", {"websearch-tavily"}),
+        ("searxng,tavily", {"websearch-searxng", "websearch-tavily"}),
+    ):
+        monkeypatch.setenv("FEDOTMAS_GAIA_SEARCH_PROVIDERS", setting)
+        servers = _gaia_mcp_servers()
+        assert expected <= set(servers)
+        assert {"websearch-searxng", "websearch-tavily"} & set(servers) == expected
 
 
 def test_gaia_uses_full_sandbox_when_e2b_key_is_set(monkeypatch: pytest.MonkeyPatch):

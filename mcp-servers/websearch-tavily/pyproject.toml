@@ -1,0 +1,27 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-websearch-tavily"
+version = "0.1.0"
+description = "MCP server for Tavily web search with process-local API key rotation"
+requires-python = ">=3.12"
+dependencies = [
+  "fastmcp>=2.14.5",
+  "httpx>=0.27",
+  "pydantic>=2.12.5",
+  "python-dotenv>=1.2.1",
+]
+
+[project.scripts]
+mcp-websearch-tavily = "mcp_websearch_tavily.server:main"
+
+[tool.fedotmas.mcp]
+name = "websearch-tavily"
+description = """
+Web discovery through Tavily Search. Returns ranked, compact results with titles,
+URLs, and snippets. API keys rotate internally and are never exposed to agents.
+"""
+tags = [ "web", "search", "research" ]
+tool_name_prefix = "tavily"
