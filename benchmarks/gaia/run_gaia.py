@@ -183,7 +183,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _gaia_max_agent_llm_turns() -> int:
-    return _env_int("FEDOTMAS_GAIA_MAX_AGENT_LLM_TURNS", 12)
+    return _env_int("FEDOTMAS_GAIA_MAX_AGENT_LLM_TURNS", 20)
 
 
 def _env_list(name: str) -> list[str] | None:
@@ -593,11 +593,11 @@ def build_plugins(task, enable_langfuse: bool) -> list:
             name="fedotmas_gaia_agent_context_budget",
         ),
         WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 25),
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 40),
             telemetry=telemetry,
         ),
         WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 25),
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 40),
             tool_names=GAIA_WEB_SCRAPING_TOOL_NAMES,
             count_unique_urls=True,
             same_url_exempt_tool_names={"eval", "evaluate", "links", "status"},
@@ -607,7 +607,7 @@ def build_plugins(task, enable_langfuse: bool) -> list:
             name="fedotmas_gaia_web_tool_limit",
         ),
         WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_BROWSER_AGENT_LIMIT", 8),
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_BROWSER_AGENT_LIMIT", 3),
             tool_names={"complete_browser_task"},
             telemetry=telemetry,
             budget_kind="browser_agent",
@@ -728,8 +728,17 @@ def compute_token_summary(results: list) -> dict:
         "completion_tokens": code_agent_usage["completion_tokens"],
         "total_tokens": code_agent_usage["total_tokens"],
     }
+    nested_browser_tokens = {
+        "prompt_tokens": browser_usage["prompt_tokens"],
+        "completion_tokens": browser_usage["completion_tokens"],
+        "total_tokens": browser_usage["total_tokens"],
+    }
     combined_tokens = {
-        field: outer_worker_tokens[field] + nested_code_tokens[field]
+        field: (
+            outer_worker_tokens[field]
+            + nested_browser_tokens[field]
+            + nested_code_tokens[field]
+        )
         for field in outer_worker_tokens
     }
 
@@ -747,17 +756,20 @@ def compute_token_summary(results: list) -> dict:
         "browser_agent": browser_usage,
         "code_agent": code_agent_usage,
         "outer_worker_tokens": outer_worker_tokens,
+        "browser_agent_tokens": nested_browser_tokens,
         "code_agent_tokens": nested_code_tokens,
         "combined_tokens": combined_tokens,
         "grand_total": {
             "prompt_tokens": (
                 total_meta_prompt
                 + total_pipeline_prompt
+                + browser_usage["prompt_tokens"]
                 + code_agent_usage["prompt_tokens"]
             ),
             "completion_tokens": (
                 total_meta_completion
                 + total_pipeline_completion
+                + browser_usage["completion_tokens"]
                 + code_agent_usage["completion_tokens"]
             ),
             "total_tokens": (
@@ -765,6 +777,7 @@ def compute_token_summary(results: list) -> dict:
                 + total_meta_completion
                 + total_pipeline_prompt
                 + total_pipeline_completion
+                + browser_usage["total_tokens"]
                 + code_agent_usage["total_tokens"]
             ),
         },

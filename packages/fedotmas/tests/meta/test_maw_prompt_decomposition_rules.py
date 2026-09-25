@@ -116,12 +116,24 @@ def test_maw_prompts_use_current_browser_and_search_routing():
         assert "websearch-tavily" in prompt
         assert "web-scraping" in prompt
         assert "empty or poor results" in prompt
+        assert "do not assign it to every research role" in prompt
+        assert "download/document tools" in prompt
+
+
+def test_contract_prompts_keep_required_fields_minimal():
+    for prompt in (
+        META_AGENT_SYSTEM_PROMPT.template,
+        PIPELINE_AGENT_SYSTEM_PROMPT.template,
+    ):
+        lowered = prompt.casefold()
+        assert "keep `output_contract.required_fields` minimal" in lowered
+        assert "research_controller_state` as an additional output field" in lowered
 
 
 @pytest.mark.parametrize(
     "prompt_template",
-    [META_AGENT_SYSTEM_PROMPT, POOL_AGENT_SYSTEM_PROMPT, PIPELINE_AGENT_SYSTEM_PROMPT],
-    ids=["single-stage", "pool-stage", "pipeline-stage"],
+    [META_AGENT_SYSTEM_PROMPT, PIPELINE_AGENT_SYSTEM_PROMPT],
+    ids=["single-stage", "pipeline-stage"],
 )
 def test_research_prompts_require_snapshot_controller_loop(prompt_template):
     prompt = prompt_template.template.casefold()

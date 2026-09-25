@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from fedotmas.plugins import ToolResultTruncationPlugin
+from google.adk.models.llm_request import LlmRequest
+from google.genai import types
 
 
 def _tool(name: str = "markdown") -> MagicMock:
@@ -123,6 +126,82 @@ class TestToolResultTruncationPlugin:
         assert result["structuredContent"]["results"][0]["snippet"] == (
             "Decisive excerpt"
         )
+
+    @pytest.mark.asyncio
+    async def test_old_results_are_compacted_and_newest_payload_remains_active(self):
+        plugin = ToolResultTruncationPlugin(
+            max_string_chars=5000,
+            max_total_chars=3000,
+            aggregate_tool_names={"*"},
+            max_agent_total_chars=500,
+        )
+        contents = []
+        for number in range(12):
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_function_response(
+                            name="read_document",
+                            response={
+                                "url": f"https://example.org/{number}",
+                                "source_urls": [
+                                    f"https://example.org/{number}/source"
+                                ],
+                                "title": f"Source {number}",
+                                "content": "old evidence " + "x" * 2000,
+                            },
+                        )
+                    ],
+                )
+            )
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_function_response(
+                        name="search",
+                        response={
+                            "results": [
+                                {
+                                    "url": "https://example.org/latest",
+                                    "title": "Latest source",
+                                    "snippet": "TARGETED EVIDENCE",
+                                    "content": "TARGETED EVIDENCE " + "y" * 800,
+                                    "value": "latest payload",
+                                }
+                            ]
+                        },
+                    )
+                ],
+            )
+        )
+        request = LlmRequest(contents=contents)
+
+        await plugin.before_model_callback(
+            callback_context=SimpleNamespace(), llm_request=request
+        )
+
+        responses = [
+            part.function_response.response
+            for content in request.contents
+            for part in content.parts or []
+            if part.function_response is not None
+        ]
+        active_chars = sum(len(json.dumps(response)) for response in responses)
+        assert active_chars <= 500
+        assert responses[-1]["results"][0]["snippet"] == "TARGETED EVIDENCE"
+        assert responses[-1]["results"][0]["content"].startswith(
+            "TARGETED EVIDENCE"
+        )
+        assert responses[-1]["results"][0]["value"] == "latest payload"
+        compacted = [
+            response for response in responses[:-1] if response
+        ]
+        assert compacted
+        assert all("url" in response for response in compacted)
+        assert all("source_urls" in response for response in compacted)
+        assert all("content" not in response for response in compacted)
 
     @pytest.mark.asyncio
     async def test_truncates_nested_strings(self):

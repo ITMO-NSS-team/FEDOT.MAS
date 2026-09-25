@@ -33,11 +33,29 @@ SEARCH_TOOLS = frozenset(
     }
 )
 SCRAPING_TOOLS = frozenset(
-    {"goto", "markdown", "extract", "links", "eval", "evaluate", "screenshot", "status"}
+    {
+        "goto",
+        "markdown",
+        "extract",
+        "links",
+        "eval",
+        "evaluate",
+        "screenshot",
+        "status",
+        "download",
+        "read_document",
+        "extract_zip",
+        "list_zip_contents",
+    }
 )
 URL_INSPECTION_TOOLS = SCRAPING_TOOLS - {"status"}
 CONTROL_CODES = frozenset(
-    {DUPLICATE_TOOL_CALL, WEB_BUDGET_EXHAUSTED, TOOL_CIRCUIT_OPEN}
+    {
+        DUPLICATE_TOOL_CALL,
+        WEB_BUDGET_EXHAUSTED,
+        TOOL_CIRCUIT_OPEN,
+        "INSPECT_CANDIDATES_FIRST",
+    }
 )
 
 
@@ -51,6 +69,7 @@ class ResearchTelemetry(BasePlugin):
         self._query_fingerprints: dict[str, set[str]] = defaultdict(set)
         self._discovered: dict[str, set[str]] = defaultdict(set)
         self._inspected: dict[str, set[str]] = defaultdict(set)
+        self._discovery_since_inspection: dict[str, int] = defaultdict(int)
         self._calls: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self.max_call_diagnostics = 300
 
@@ -70,6 +89,10 @@ class ResearchTelemetry(BasePlugin):
             "backend_errors": 0,
             "urls_discovered": 0,
             "urls_inspected": 0,
+            "discovery_calls": 0,
+            "candidate_urls_discovered": 0,
+            "candidate_urls_inspected": 0,
+            "repeated_discovery_without_inspection": 0,
             "scraping_extraction_calls": 0,
             "search_exhaustion": 0,
             "scraping_exhaustion": 0,
@@ -127,10 +150,10 @@ class ResearchTelemetry(BasePlugin):
         tool: BaseTool,
         tool_args: dict[str, Any],
         tool_context: ToolContext,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         kind = _research_tool_kind(tool.name)
         if kind is None:
-            return
+            return None
         agent = tool_context._invocation_context.agent.name
         self.attempt(agent, kind, tool_args)
         calls = self._calls[agent]
@@ -139,7 +162,7 @@ class ResearchTelemetry(BasePlugin):
                 "agent": agent,
                 "tool": strip_tool_name_prefix(tool.name),
                 "query": _sanitize_query(tool_args.get("query")),
-                "url": _sanitize_url(tool_args.get("url")),
+                "url": _sanitize_url(tool_args.get("url") or tool_args.get("uri")),
                 "attempted": True,
                 "status": "attempted",
                 "error_category": None,
@@ -152,6 +175,37 @@ class ResearchTelemetry(BasePlugin):
         )
         if len(calls) > self.max_call_diagnostics:
             del calls[: len(calls) - self.max_call_diagnostics]
+        if kind == "search":
+            metrics = self._agents[agent]
+            metrics["discovery_calls"] += 1
+            pending = self._discovered[agent] - self._inspected[agent]
+            self._discovery_since_inspection[agent] += 1
+            query = tool_args.get("query")
+            query_text = query.casefold() if isinstance(query, str) else ""
+            targeted = (
+                '"' in query_text
+                or "site:" in query_text
+                or any(urlsplit(url).hostname and urlsplit(url).hostname in query_text for url in pending)
+            )
+            if (
+                len(pending) >= 3
+                and self._discovery_since_inspection[agent] >= 2
+                and not targeted
+            ):
+                metrics["repeated_discovery_without_inspection"] += 1
+                metrics["blocked_calls"] += 1
+                calls[-1]["status"] = "blocked"
+                calls[-1]["error_category"] = "inspect_candidates_first"
+                return {
+                    "isError": True,
+                    "error_code": "INSPECT_CANDIDATES_FIRST",
+                    "error": (
+                        "Several candidate URLs are already available. Inspect at "
+                        "least one candidate before another broad discovery call. "
+                        "A targeted recovery query is still allowed."
+                    ),
+                }
+        return None
 
     def record_blocked(
         self,
@@ -211,8 +265,10 @@ class ResearchTelemetry(BasePlugin):
         metrics["circuit_open_blocks"] += 1
 
     def inspected(self, agent: str, url: str) -> None:
-        self._inspected[agent].add(url)
+        self._inspected[agent].add(_sanitize_url(url) or url)
         self._agents[agent]["urls_inspected"] = len(self._inspected[agent])
+        self._agents[agent]["candidate_urls_inspected"] = len(self._inspected[agent])
+        self._discovery_since_inspection[agent] = 0
 
     async def after_tool_callback(
         self,
@@ -226,6 +282,16 @@ class ResearchTelemetry(BasePlugin):
         if kind is None:
             return
         agent = tool_context._invocation_context.agent.name
+        if kind == "scraping":
+            url = tool_args.get("url") or tool_args.get("uri")
+            if (
+                strip_tool_name_prefix(tool.name).lower() in URL_INSPECTION_TOOLS
+                and isinstance(url, str)
+                and url.strip()
+            ):
+                # An attempted inspection counts as inspection even if the source
+                # is unavailable; discovery can resume after failed candidates.
+                self.inspected(agent, url.strip())
         self._record_call_result(
             agent,
             tool.name,
@@ -333,13 +399,6 @@ class ResearchTelemetry(BasePlugin):
         if kind == "browser_agent":
             return
         if kind == "scraping":
-            url = tool_args.get("url")
-            if (
-                strip_tool_name_prefix(tool.name).lower() in URL_INSPECTION_TOOLS
-                and isinstance(url, str)
-                and url.strip()
-            ):
-                self.inspected(agent, url.strip())
             return
 
         payload = _search_payload(result)
@@ -352,8 +411,12 @@ class ResearchTelemetry(BasePlugin):
                 self._agents[agent]["zero_result_searches"] += 1
             for item in results:
                 if isinstance(item, dict) and isinstance(item.get("url"), str):
-                    self._discovered[agent].add(item["url"])
+                    url = item["url"]
+                    self._discovered[agent].add(_sanitize_url(url) or url)
             self._agents[agent]["urls_discovered"] = len(self._discovered[agent])
+            self._agents[agent]["candidate_urls_discovered"] = len(
+                self._discovered[agent]
+            )
 
     async def on_tool_error_callback(
         self,

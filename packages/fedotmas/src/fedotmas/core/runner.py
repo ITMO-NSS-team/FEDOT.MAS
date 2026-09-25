@@ -159,13 +159,6 @@ async def run_pipeline(
             failure = exc
 
     total_elapsed = time.monotonic() - pipeline_start
-    _log.info(
-        "Pipeline complete | total_elapsed={:.1f}s total_prompt={} total_completion={}",
-        total_elapsed,
-        usage.prompt,
-        usage.completion,
-    )
-
     # Re-fetch the session to get the fully-updated state.
     final_session = await session_service.get_session(
         app_name=effective_name,
@@ -179,6 +172,22 @@ async def run_pipeline(
     metadata = final_session.state.get("_fedotmas_execution", {})
     if not isinstance(metadata, dict):
         metadata = {}
+    repair_usage = metadata.get("contract_repair_tokens", {})
+    if isinstance(repair_usage, dict):
+        prompt_tokens = repair_usage.get("prompt_tokens", 0)
+        completion_tokens = repair_usage.get("completion_tokens", 0)
+        if isinstance(prompt_tokens, int) and not isinstance(prompt_tokens, bool):
+            usage.prompt += max(0, prompt_tokens)
+        if isinstance(completion_tokens, int) and not isinstance(
+            completion_tokens, bool
+        ):
+            usage.completion += max(0, completion_tokens)
+    _log.info(
+        "Pipeline complete | total_elapsed={:.1f}s total_prompt={} total_completion={}",
+        total_elapsed,
+        usage.prompt,
+        usage.completion,
+    )
     status: Literal["completed", "timed_out", "failed", "limited", "incomplete"]
     if failure is not None:
         status = "failed"

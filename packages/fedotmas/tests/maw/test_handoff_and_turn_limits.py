@@ -391,12 +391,9 @@ async def test_terminal_final_answer_skips_generated_output_contract(monkeypatch
     assert "handoff_issues" not in result.state.get("_fedotmas_execution", {})
 
 
-@pytest.mark.parametrize(
-    ("policy", "completed"),
-    [("targeted_recovery", True), ("evidence_first", False), ("independent", False)],
-)
+@pytest.mark.parametrize("policy", ["targeted_recovery", "evidence_first", "independent"])
 @pytest.mark.asyncio
-async def test_terminal_targeted_recovery_resolves_missing_handoff(monkeypatch, policy, completed):
+async def test_terminal_text_alone_does_not_resolve_missing_handoff(monkeypatch, policy):
     config = MAWConfig(
         agents=[
             MAWAgentConfig(name="producer", instruction="Return evidence.", output_key="evidence"),
@@ -431,9 +428,9 @@ async def test_terminal_targeted_recovery_resolves_missing_handoff(monkeypatch, 
 
     issue = result.state["_fedotmas_execution"]["handoff_issues"][0]
     assert issue["kind"] == "incomplete_handoff"
-    assert issue["resolved"] is completed
+    assert issue["resolved"] is False
     assert result.state["answer"] == "<solution>42</solution>"
-    assert result.status == ("completed" if completed else "incomplete")
+    assert result.status == "incomplete"
 
 
 @pytest.mark.asyncio
@@ -561,6 +558,7 @@ async def test_later_loop_iteration_resolves_incomplete_artifact(monkeypatch):
         model="openai/test",
         responses=[
             types.Content(role="model", parts=[types.Part.from_text(text='{"claim":"x"}')]),
+            types.Content(role="model", parts=[types.Part.from_text(text='{"claim":"x"}')]),
             types.Content(role="model", parts=[types.Part.from_text(text='{"claim":"x","evidence":"source"}')]),
         ],
     )
@@ -617,6 +615,89 @@ class _ScriptedLlm(BaseLlm):
         del stream
         self.requests.append(llm_request)
         yield LlmResponse(content=self.responses.pop(0))
+
+
+@pytest.mark.asyncio
+async def test_contract_failure_gets_one_tools_free_format_repair(monkeypatch):
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part.from_text(
+                        text='{"claim":"supported","source":"Source already cited",'
+                        '"paper_id":"paper-A"}'
+                    )
+                ],
+            )
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    cfg = MAWAgentConfig(
+        name="producer",
+        instruction="Find the claim.",
+        output_key="artifact",
+        output_contract=ArtifactContract(
+            required_fields=["claim", "source"], identity_fields=["paper_id"]
+        ),
+    )
+    agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
+    state = {
+        "artifact": '{"claim":"supported","paper_id":"paper-A",'
+        '"provenance":"Source already cited"}'
+    }
+
+    instruction = agent.instruction
+    assert "exactly one JSON object" in instruction
+    assert '"claim", "source"' in instruction
+    await agent.after_agent_callback(_context(state))
+
+    assert json.loads(state["artifact"]) == {
+        "claim": "supported",
+        "source": "Source already cited",
+        "paper_id": "paper-A",
+    }
+    assert len(llm.requests) == 1
+    assert not llm.requests[0].config.tools
+    assert "Do not invent facts" in llm.requests[0].contents[0].parts[0].text
+    assert state["_fedotmas_execution"]["contract_repairs"]["producer"] == [
+        {"status": "initial_contract_failure", "missing_fields": ["source"]},
+        {"status": "format_repair_succeeded"},
+    ]
+    assert not state["_fedotmas_execution"].get("handoff_issues")
+
+
+@pytest.mark.asyncio
+async def test_contract_repair_keeps_missing_semantics_incomplete(monkeypatch):
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(
+                role="model", parts=[types.Part.from_text(text='{"claim":"x"}')]
+            )
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    cfg = MAWAgentConfig(
+        name="producer",
+        instruction="Find the claim.",
+        output_key="artifact",
+        output_contract=ArtifactContract(required_fields=["claim", "evidence"]),
+    )
+    agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
+    state = {"artifact": '{"claim":"x"}'}
+
+    await agent.after_agent_callback(_context(state))
+
+    assert len(llm.requests) == 1
+    assert state["_fedotmas_execution"]["handoff_issues"][0]["kind"] == (
+        "incomplete_artifact"
+    )
+    assert state["_fedotmas_execution"]["contract_repairs"]["producer"][-1] == {
+        "status": "repair_missing_semantic_fields",
+        "missing_fields": ["evidence"],
+    }
 
 
 @pytest.mark.asyncio

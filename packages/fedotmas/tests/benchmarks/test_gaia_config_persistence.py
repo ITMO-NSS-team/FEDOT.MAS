@@ -182,10 +182,10 @@ def test_gaia_research_budget_defaults(monkeypatch: pytest.MonkeyPatch):
         for plugin in plugins
         if hasattr(plugin, "budget_kind")
     }
-    assert _gaia_max_agent_llm_turns() == 12
-    assert budgets["search"] == 25
-    assert budgets["scraping"] == 25
-    assert budgets["browser_agent"] == 8
+    assert _gaia_max_agent_llm_turns() == 20
+    assert budgets["search"] == 40
+    assert budgets["scraping"] == 40
+    assert budgets["browser_agent"] == 3
 
 
 @pytest.mark.asyncio
@@ -273,7 +273,11 @@ def test_gaia_diagnostics_aggregate_browser_tokens_separately():
         "steps": 7,
         "usage_missing": 0,
     }
-    assert summary["grand_total"]["prompt_tokens"] == 25
+    assert summary["grand_total"] == {
+        "prompt_tokens": 165,
+        "completion_tokens": 30,
+        "total_tokens": 195,
+    }
 
 
 def test_gaia_reports_nested_code_agent_tokens_separately():
@@ -306,6 +310,11 @@ def test_gaia_reports_nested_code_agent_tokens_separately():
         "total_tokens": 40,
     }
     assert summary["combined_tokens"]["total_tokens"] == 160
+    assert summary["grand_total"] == {
+        "prompt_tokens": 130,
+        "completion_tokens": 30,
+        "total_tokens": 160,
+    }
     assert summary["code_agent"]["llm_invocations"] == 2
     assert summary["code_agent"]["steps"] == 3
     assert summary["code_agent"]["cost_usd"] == 0.005

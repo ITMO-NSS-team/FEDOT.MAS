@@ -4,6 +4,8 @@ import json
 from copy import deepcopy
 from typing import Any
 
+from google.adk.agents.callback_context import CallbackContext
+from google.adk.models.llm_request import LlmRequest
 from google.adk.plugins import BasePlugin
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
@@ -39,15 +41,60 @@ class ToolResultTruncationPlugin(BasePlugin):
             name.lower() for name in (aggregate_tool_names or set())
         }
         self.max_agent_total_chars = max_agent_total_chars
-        self._agent_chars: dict[tuple[str, str], int] = {}
 
-    async def before_run_callback(self, *, invocation_context) -> None:
-        session_id = invocation_context.session.id
-        self._agent_chars = {
-            key: chars
-            for key, chars in self._agent_chars.items()
-            if key[0] != session_id
-        }
+    async def before_model_callback(
+        self, *, callback_context: CallbackContext, llm_request: LlmRequest
+    ) -> None:
+        """Roll older tool evidence out of active context while retaining metadata."""
+        del callback_context
+        if self.max_agent_total_chars is None:
+            return
+        responses = [
+            part.function_response
+            for content in llm_request.contents
+            for part in content.parts or []
+            if part.function_response is not None
+            and isinstance(part.function_response.response, dict)
+        ]
+        if not responses:
+            return
+
+        def active_chars() -> int:
+            return sum(
+                len(json.dumps(item.response, ensure_ascii=False, default=str))
+                for item in responses
+            )
+
+        if active_chars() <= self.max_agent_total_chars:
+            return
+
+        # Compact older responses, preserving source identifiers and URLs.
+        for response in responses[:-1]:
+            response.response = _compact_metadata(response.response)
+        # Reserve most active context for the newest payload while keeping some
+        # compact source metadata for older evidence.
+        metadata_limit = max(1, self.max_agent_total_chars // 3)
+        for response in responses[:-1]:
+            older_chars = sum(
+                len(json.dumps(item.response, ensure_ascii=False, default=str))
+                for item in responses[:-1]
+            )
+            if older_chars <= metadata_limit:
+                break
+            response.response = {}
+        newest = responses[-1]
+        if active_chars() > self.max_agent_total_chars:
+            older_chars = active_chars() - len(
+                json.dumps(newest.response, ensure_ascii=False, default=str)
+            )
+            newest.response, _ = _truncate_total(
+                newest.response,
+                max(1, self.max_agent_total_chars - older_chars - 10),
+            )
+        for response in responses[:-1]:
+            if active_chars() <= self.max_agent_total_chars:
+                break
+            response.response = {}
 
     async def after_tool_callback(
         self,
@@ -60,7 +107,6 @@ class ToolResultTruncationPlugin(BasePlugin):
         truncated, changed = _truncate_value(result, self.max_string_chars)
         total_limit = self.max_total_chars
         agent_name = tool_context._invocation_context.agent.name  # ty: ignore[unresolved-attribute]
-        session_id = tool_context._invocation_context.session.id
         aggregate = (
             "*" in self.aggregate_tool_names
             or strip_tool_name_prefix(tool.name).lower() in self.aggregate_tool_names
@@ -68,38 +114,13 @@ class ToolResultTruncationPlugin(BasePlugin):
                 self.max_agent_total_chars is not None and not self.aggregate_tool_names
             )
         )
-        agent_key = (session_id, agent_name)
-        remaining_agent = (
-            self.max_agent_total_chars - self._agent_chars.get(agent_key, 0)
-            if self.max_agent_total_chars is not None
-            else None
-        )
-        if aggregate and (total_limit is not None or remaining_agent is not None):
-            per_result_limit = total_limit or self.max_string_chars
-            if remaining_agent is not None:
-                per_result_limit = min(per_result_limit, max(0, remaining_agent - 250))
-            if per_result_limit >= 500:
-                truncated, total_changed = _truncate_total(
-                    truncated, per_result_limit - 250
-                )
-            elif remaining_agent is not None:
-                truncated = _compact_metadata(truncated)
-                truncated, _ = _truncate_total(
-                    truncated, min(self.max_string_chars, max(250, remaining_agent))
-                )
-                total_changed = True
+        if aggregate:
+            result_limit = total_limit or self.max_string_chars
+            truncated, total_changed = _truncate_total(
+                truncated, max(1, result_limit - 250)
+            )
             changed = changed or total_changed
-        if not changed and remaining_agent is None:
-            return None
         if not changed:
-            if aggregate and self.max_agent_total_chars is not None:
-                serialized_size = len(
-                    json.dumps(truncated, ensure_ascii=False, default=str)
-                )
-                self._agent_chars[agent_key] = min(
-                    self.max_agent_total_chars,
-                    self._agent_chars.get(agent_key, 0) + serialized_size,
-                )
             return None
         _log.warning(
             "Tool result truncated | agent={} tool={} max_string_chars={}",
@@ -119,20 +140,7 @@ class ToolResultTruncationPlugin(BasePlugin):
                 "Use targeted find, section extraction, table extraction, or chunked "
                 "read before giving a final answer."
             ),
-            **(
-                {"agent_evidence_char_budget": self.max_agent_total_chars}
-                if self.max_agent_total_chars is not None
-                else {}
-            ),
         }
-        if aggregate and self.max_agent_total_chars is not None:
-            serialized_size = len(
-                json.dumps(compact_result, ensure_ascii=False, default=str)
-            )
-            self._agent_chars[agent_key] = min(
-                self.max_agent_total_chars,
-                self._agent_chars.get(agent_key, 0) + serialized_size,
-            )
         return compact_result
 
 
@@ -172,14 +180,37 @@ def _truncate_total(value: Any, limit: int) -> tuple[Any, bool]:
     changed = False
     while len(json.dumps(result, ensure_ascii=False, default=str)) > limit:
         lists = _containers(result, list)
-        nonempty = [items for items in lists if items]
+        nonempty = [items for items in lists if len(items) > 1]
         if nonempty:
             max(nonempty, key=lambda items: len(json.dumps(items, default=str))).pop()
             changed = True
             continue
         strings = _string_slots(result)
         if not strings:
-            return {}, True
+            dictionaries = [
+                item for item in _containers(result, dict) if len(item) > 1
+            ]
+            if not dictionaries:
+                return {}, True
+            container = max(
+                dictionaries,
+                key=lambda item: len(json.dumps(item, ensure_ascii=False, default=str)),
+            )
+            keep = {
+                "value",
+                "result",
+                "content",
+                "stdout",
+                "output",
+                "evidence",
+                "data",
+                "snippet",
+                "text",
+            }
+            removable = [key for key in container if str(key).lower() not in keep]
+            del container[removable[-1] if removable else next(reversed(container))]
+            changed = True
+            continue
         container, key = max(strings, key=lambda slot: len(slot[0][slot[1]]))
         excess = len(json.dumps(result, ensure_ascii=False, default=str)) - limit
         old = container[key]
@@ -215,6 +246,9 @@ def _compact_metadata(value: Any) -> dict[str, Any]:
     """Keep source and evidence metadata when this agent's text budget is spent."""
     keep = {
         "url",
+        "uri",
+        "source_url",
+        "source_urls",
         "source",
         "source_id",
         "id",
@@ -240,6 +274,12 @@ def _compact_metadata(value: Any) -> dict[str, Any]:
                     nested, (str, int, float, bool, type(None))
                 ):
                     selected[key] = nested[:400] if isinstance(nested, str) else nested
+                elif key.lower() in keep and isinstance(nested, list):
+                    selected[key] = [
+                        item[:300] if isinstance(item, str) else item
+                        for item in nested[:3]
+                        if isinstance(item, str | int | float | bool | type(None))
+                    ]
                 elif isinstance(nested, dict):
                     nested_selected = compact(nested)
                     if nested_selected:

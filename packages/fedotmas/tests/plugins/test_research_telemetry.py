@@ -98,6 +98,63 @@ async def test_code_agent_usage_steps_and_execution_metrics_are_recorded():
 
 
 @pytest.mark.asyncio
+async def test_discovery_pauses_until_candidate_inspection_and_resumes_after_failure():
+    telemetry = ResearchTelemetry()
+    search = MagicMock(name="search")
+    search.name = "search"
+    args = {"query": "broad topic"}
+    allowed = await telemetry.before_tool_callback(
+        tool=search, tool_args=args, tool_context=_context()
+    )
+    assert allowed is None
+    await telemetry.after_tool_callback(
+        tool=search,
+        tool_args=args,
+        tool_context=_context(),
+        result={
+            "results": [
+                {"url": f"https://example.org/{number}"} for number in range(4)
+            ]
+        },
+    )
+
+    blocked = await telemetry.before_tool_callback(
+        tool=search, tool_args=args, tool_context=_context()
+    )
+    assert blocked["error_code"] == "INSPECT_CANDIDATES_FIRST"
+    targeted = await telemetry.before_tool_callback(
+        tool=search,
+        tool_args={"query": 'site:example.org "specific claim"'},
+        tool_context=_context(),
+    )
+    assert targeted is None
+
+    inspect = MagicMock(name="markdown")
+    inspect.name = "markdown"
+    await telemetry.before_tool_callback(
+        tool=inspect,
+        tool_args={"url": "https://example.org/0"},
+        tool_context=_context(),
+    )
+    await telemetry.after_tool_callback(
+        tool=inspect,
+        tool_args={"url": "https://example.org/0"},
+        tool_context=_context(),
+        result={"isError": True, "error": "source unavailable"},
+    )
+    resumed = await telemetry.before_tool_callback(
+        tool=search, tool_args=args, tool_context=_context()
+    )
+    assert resumed is None
+
+    metrics = telemetry.snapshot()["researcher"]
+    assert metrics["discovery_calls"] == 4
+    assert metrics["candidate_urls_discovered"] == 4
+    assert metrics["candidate_urls_inspected"] == 1
+    assert metrics["repeated_discovery_without_inspection"] == 1
+
+
+@pytest.mark.asyncio
 async def test_research_telemetry_records_structured_outcomes_and_serializes():
     telemetry = ResearchTelemetry()
     tool = MagicMock(name="search")
@@ -166,7 +223,7 @@ async def test_research_telemetry_records_structured_outcomes_and_serializes():
             result=result,
         )
         if result.get("isError"):
-            assert telemetry.snapshot()["researcher"]["urls_inspected"] == 0
+            assert telemetry.snapshot()["researcher"]["urls_inspected"] == 1
 
     status_tool = MagicMock(name="status")
     status_tool.name = "status"

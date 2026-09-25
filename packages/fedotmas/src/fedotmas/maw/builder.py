@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import re
 from typing import Any, cast
 
@@ -8,7 +9,9 @@ from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgen
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.readonly_context import ReadonlyContext
+from google.adk.models import LLMRegistry
 from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.exit_loop_tool import exit_loop
 from google.adk.utils.instructions_utils import inject_session_state
@@ -170,6 +173,118 @@ def _instruction_provider(
         return await inject_session_state(text, readonly_context)
 
     return provide
+
+
+def _contract_instruction(cfg: MAWAgentConfig) -> str:
+    contract = cfg.output_contract
+    if contract is None:
+        return ""
+    required = list(dict.fromkeys(contract.required_fields))
+    identity = list(dict.fromkeys(contract.identity_fields))
+    return (
+        "\n\nRUNTIME HANDOFF CONTRACT (required for this nonterminal agent):\n"
+        "Return exactly one JSON object. Its exact required top-level keys are "
+        f"{json.dumps(required)}. Exact identity keys are {json.dumps(identity)}. "
+        "Preserve upstream identity values exactly and do not rename required "
+        "keys. Additional evidence and provenance fields are allowed."
+    )
+
+
+def _record_contract_repair(state: dict[str, Any], agent: str, event: dict) -> None:
+    metadata = state.get(EXECUTION_METADATA_KEY)
+    if not isinstance(metadata, dict):
+        metadata = {}
+        state[EXECUTION_METADATA_KEY] = metadata
+    repairs = metadata.setdefault("contract_repairs", {})
+    if not isinstance(repairs, dict):
+        return
+    repairs.setdefault(agent, []).append(event)
+
+
+def _upstream_identity_values(
+    state: dict[str, Any], cfg: MAWAgentConfig
+) -> dict[str, dict[str, Any]]:
+    values = {}
+    for requirement in cfg.input_requirements:
+        artifact = parse_artifact(state.get(requirement.source_key))
+        if artifact is None:
+            continue
+        identity = {
+            field: artifact[field]
+            for field in requirement.identity_fields
+            if field in artifact
+        }
+        if identity:
+            values[requirement.source_key] = identity
+    return values
+
+
+def _upstream_identity_values(
+    state: dict[str, Any], cfg: MAWAgentConfig
+) -> dict[str, dict[str, Any]]:
+    values = {}
+    for requirement in cfg.input_requirements:
+        artifact = parse_artifact(state.get(requirement.source_key))
+        if artifact is None:
+            continue
+        identity = {
+            field: artifact[field]
+            for field in requirement.identity_fields
+            if field in artifact
+        }
+        if identity:
+            values[requirement.source_key] = identity
+    return values
+
+
+async def _repair_contract_once(
+    model: str | BaseLlm,
+    cfg: MAWAgentConfig,
+    previous: Any,
+    missing: list[str],
+    upstream_identity_values: dict[str, Any],
+) -> tuple[Any, dict[str, int]]:
+    """Make one tools-free formatting repair using only the existing artifact."""
+    llm = LLMRegistry.new_llm(model) if isinstance(model, str) else model
+    prompt = (
+        "Reformat the previous output to satisfy this handoff contract. Return "
+        "exactly one JSON object. Required top-level keys: "
+        f"{json.dumps(list(dict.fromkeys([*cfg.output_contract.required_fields, *cfg.output_contract.identity_fields])))}. "
+        f"Identity keys to preserve exactly: {json.dumps(cfg.output_contract.identity_fields)}. "
+        "Exact upstream identity values: "
+        f"{json.dumps(upstream_identity_values, ensure_ascii=False, default=str)}. "
+        f"Keys currently missing or invalid: {json.dumps(missing)}.\n"
+        "Map only information explicitly present in the previous output. Do not "
+        "invent facts, evidence, sources, or identity values. If a required value "
+        "is absent, leave it absent or null. Additional fields are allowed.\n"
+        "Previous output:\n"
+        f"{previous}"
+    )
+    request = LlmRequest(
+        contents=[
+            genai_types.Content(
+                role="user", parts=[genai_types.Part.from_text(text=prompt)]
+            )
+        ],
+        config=genai_types.GenerateContentConfig(
+            temperature=0,
+            max_output_tokens=cfg.max_output_tokens or 8192,
+        ),
+    )
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    async for response in llm.generate_content_async(request):
+        if response.usage_metadata is not None:
+            usage["prompt_tokens"] = (
+                response.usage_metadata.prompt_token_count or 0
+            )
+            usage["completion_tokens"] = (
+                response.usage_metadata.candidates_token_count or 0
+            )
+        parts = response.content.parts if response.content else []
+        text = "".join(part.text or "" for part in parts if part.text)
+        if text:
+            return text, usage
+    return None, usage
 
 
 def build(
@@ -357,6 +472,11 @@ def _build_llm_agent(
     instruction_text = (
         frame_instruction(cfg.instruction) if autonomous else cfg.instruction
     )
+    terminal_boundary = (
+        final_answer_contract is not None and cfg.name == final_answer_agent
+    )
+    if cfg.output_contract is not None and not terminal_boundary:
+        instruction_text += _contract_instruction(cfg)
     if final_answer_contract:
         instruction_text = (
             f"{instruction_text}\n\nFINAL ANSWER CONTRACT (terminal stage only):\n"
@@ -410,22 +530,72 @@ def _build_llm_agent(
 
     async def after_agent(callback_context: CallbackContext) -> None:
         value = callback_context.state.get(cfg.output_key)
-        terminal_answer = (
-            final_answer_contract is not None and cfg.name == final_answer_agent
-        )
+        terminal_answer = terminal_boundary
         if terminal_answer:
             # This role may recover an input dependency, but its answer is
             # formatted for the caller and is never a structured handoff.
-            if (
-                cfg.research_policy == "targeted_recovery"
-                and value is not None
-                and str(value).strip()
-            ):
-                _resolve_recovered_handoffs(callback_context.state, cfg, None)
             return
         if cfg.output_contract is None:
             return
         missing = validate_output_contract(value, cfg.output_contract)
+        if missing:
+            _record_contract_repair(
+                callback_context.state,
+                cfg.name,
+                {"status": "initial_contract_failure", "missing_fields": missing},
+            )
+            repaired = None
+            repaired_missing = missing
+            if not _is_blank(value):
+                try:
+                    repaired, usage = await _repair_contract_once(
+                        model,
+                        cfg,
+                        value,
+                        missing,
+                        _upstream_identity_values(callback_context.state, cfg),
+                    )
+                    metadata = callback_context.state.setdefault(
+                        EXECUTION_METADATA_KEY, {}
+                    )
+                    repair_tokens = metadata.setdefault(
+                        "contract_repair_tokens",
+                        {"prompt_tokens": 0, "completion_tokens": 0},
+                    )
+                    if isinstance(repair_tokens, dict):
+                        for key, count in usage.items():
+                            repair_tokens[key] = repair_tokens.get(key, 0) + count
+                    repaired_missing = validate_output_contract(
+                        repaired, cfg.output_contract
+                    )
+                except Exception as exc:  # noqa: BLE001 - one bounded repair is best-effort
+                    _record_contract_repair(
+                        callback_context.state,
+                        cfg.name,
+                        {"status": "repair_failed", "error": str(exc)[:300]},
+                    )
+                    _log.warning(
+                        "Contract repair failed | agent={} error={}", cfg.name, exc
+                    )
+            if repaired is not None and not repaired_missing:
+                callback_context.state[cfg.output_key] = repaired
+                value = repaired
+                missing = []
+                _record_contract_repair(
+                    callback_context.state,
+                    cfg.name,
+                    {"status": "format_repair_succeeded"},
+                )
+            else:
+                _record_contract_repair(
+                    callback_context.state,
+                    cfg.name,
+                    {
+                        "status": "repair_missing_semantic_fields",
+                        "missing_fields": repaired_missing or missing,
+                    },
+                )
+                missing = repaired_missing or missing
         if missing:
             append_execution_issue(
                 callback_context.state,

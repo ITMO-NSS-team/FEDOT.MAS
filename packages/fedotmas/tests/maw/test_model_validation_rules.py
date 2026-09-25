@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from fedotmas.maw.maw import (
     _drop_generated_token_budgets,
+    _normalize_generated_agent_names,
 )
 from fedotmas.maw.models import (
     AgentPoolConfig,
@@ -71,7 +72,7 @@ class TestAutoInferType:
     """Rules 4-5: MAWStepConfig auto-infers type from fields."""
 
     def test_infer_agent_type(self):
-        step = MAWStepConfig(**{"agent_name": "x", "type": "agent"})
+        step = MAWStepConfig(agent_name="x", type="agent")
         assert step.type == "agent"
 
     def test_infer_agent_type_from_agent_name(self):
@@ -106,6 +107,63 @@ class TestSingleAgentAutoFill:
     def test_single_agent_auto_fill(self, single_agent_data):
         config = MAWConfig.model_validate(single_agent_data)
         assert config.pipeline.agent_name == "solver"
+
+
+def test_generated_names_normalize_and_update_pipeline_and_terminal_refs():
+    config = MAWConfig.model_validate(
+        {
+            "agents": [
+                {"name": "2 scout", "instruction": "x", "output_key": "a"},
+                {"name": "2-scout", "instruction": "y", "output_key": "b"},
+                {"name": "final answer!", "instruction": "z", "output_key": "c"},
+            ],
+            "final_answer_agent": "final answer!",
+            "pipeline": {
+                "type": "sequential",
+                "children": [
+                    {"type": "agent", "agent_name": "2 scout"},
+                    {"type": "agent", "agent_name": "2-scout"},
+                    {"type": "agent", "agent_name": "final answer!"},
+                ],
+            },
+        }
+    )
+
+    normalized = _normalize_generated_agent_names(config)
+
+    assert [agent.name for agent in normalized.agents] == [
+        "_2_scout",
+        "_2_scout_2",
+        "final_answer_",
+    ]
+    assert normalized.final_answer_agent == "final_answer_"
+    assert [node.agent_name for node in normalized.pipeline.children] == [
+        "_2_scout",
+        "_2_scout_2",
+        "final_answer_",
+    ]
+
+
+def test_name_normalization_leaves_caller_supplied_names_untouched():
+    config = MAWConfig.model_validate(
+        {
+            "agents": [
+                {"name": "2 caller", "instruction": "x", "output_key": "caller"},
+                {"name": "2-caller", "instruction": "y", "output_key": "generated"},
+            ],
+            "pipeline": {
+                "type": "sequential",
+                "children": [
+                    {"type": "agent", "agent_name": "2 caller"},
+                    {"type": "agent", "agent_name": "2-caller"},
+                ],
+            },
+        }
+    )
+
+    normalized = _normalize_generated_agent_names(config, preserved_names={"2 caller"})
+
+    assert [agent.name for agent in normalized.agents] == ["2 caller", "_2_caller"]
 
 
 class TestNonLeafWithoutChildren:

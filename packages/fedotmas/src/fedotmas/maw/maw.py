@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import keyword
+import re
 from typing import Literal
 
 from google.adk.agents.base_agent import BaseAgent
@@ -8,7 +10,12 @@ from fedotmas._settings import resolve_model_config, validate_model_name
 from fedotmas.common.logging import get_logger
 from fedotmas.core.base import BaseMAS
 from fedotmas.maw.builder import _STATE_REF_RE, build
-from fedotmas.maw.models import AgentPoolConfig, MAWAgentConfig, MAWConfig
+from fedotmas.maw.models import (
+    AgentPoolConfig,
+    MAWAgentConfig,
+    MAWConfig,
+    MAWStepConfig,
+)
 from fedotmas.meta._result import MetaAgentResult
 from fedotmas.meta.maw_pipeline_stage import PipelineGenerator
 from fedotmas.meta.maw_pool_stage import PoolGenerator
@@ -130,6 +137,14 @@ class MAW(BaseMAS[MAWConfig]):
         _drop_generated_token_budgets(config)
         if existing_agents is not None:
             config = _restore_external_agents(config, existing_agents)
+        config = _normalize_generated_agent_names(
+            config,
+            preserved_names=(
+                {agent.name for agent in existing_agents.agents}
+                if existing_agents is not None
+                else set()
+            ),
+        )
         self._generated_config = config
         _log.info(
             "Config generated | agents={} pipeline_type={}",
@@ -348,6 +363,63 @@ def _restore_external_agents(config: MAWConfig, pool: AgentPoolConfig) -> MAWCon
         len(config.agents) - len(reused),
     )
     return config.model_copy(update={"agents": agents})
+
+
+def _normalize_generated_agent_names(
+    config: MAWConfig, *, preserved_names: set[str] | None = None
+) -> MAWConfig:
+    """Make generated names valid ADK identifiers and update direct references."""
+    preserved_names = preserved_names or set()
+    replacements: dict[str, str] = {}
+    used: set[str] = set(preserved_names)
+    for agent in config.agents:
+        if agent.name in preserved_names:
+            replacements[agent.name] = agent.name
+            continue
+        base = re.sub(r"[^A-Za-z0-9_]", "_", agent.name)
+        if not base or base[0].isdigit():
+            base = f"_{base}"
+        if keyword.iskeyword(base):
+            base = f"{base}_agent"
+        candidate = base
+        suffix = 2
+        while candidate in used:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        used.add(candidate)
+        replacements[agent.name] = candidate
+
+    if all(old == new for old, new in replacements.items()):
+        return config
+
+    def rename_node(node: MAWStepConfig) -> MAWStepConfig:
+        if node.type == "agent":
+            replacement = replacements.get(node.agent_name or "")
+            return (
+                node.model_copy(update={"agent_name": replacement})
+                if replacement is not None
+                else node
+            )
+        return node.model_copy(
+            update={"children": [rename_node(child) for child in node.children]}
+        )
+
+    agents = [
+        agent.model_copy(update={"name": replacements[agent.name]})
+        for agent in config.agents
+    ]
+    final_answer_agent = config.final_answer_agent
+    if final_answer_agent is not None:
+        final_answer_agent = replacements[final_answer_agent]
+    _log.warning(
+        "Normalized generated agent names for ADK: {}",
+        {old: new for old, new in replacements.items() if old != new},
+    )
+    return MAWConfig(
+        agents=agents,
+        pipeline=rename_node(config.pipeline),
+        final_answer_agent=final_answer_agent,
+    )
 
 
 def _drop_generated_token_budgets(config: MAWConfig) -> None:
