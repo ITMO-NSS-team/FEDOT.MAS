@@ -71,6 +71,7 @@ def test_gaia_default_mcp_servers_include_web_task_tools_and_light_sandbox(
     assert "download" in servers
     assert "youtube-transcript" in servers
     assert "browser-agent" in servers
+    assert "code-agent" in servers
     assert "research-controller" in servers
 
     registry = _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
@@ -129,6 +130,13 @@ def test_gaia_passes_resolved_worker_settings_to_browser_agent(monkeypatch):
         browser.env["FEDOTMAS_GAIA_WORKER_BASE_URL"] == "https://openrouter.ai/api/v1"
     )
     assert browser.env["FEDOTMAS_GAIA_WORKER_API_KEY"] == "worker-key"
+    code_agent = _gaia_mcp_registry(worker)["code-agent"]
+    assert code_agent.env["FEDOTMAS_GAIA_WORKER_MODEL"] == "openai/gpt-6-luna"
+    assert code_agent.env["FEDOTMAS_GAIA_WORKER_API_KEY"] == "worker-key"
+    assert (
+        code_agent.env["FEDOTMAS_GAIA_WORKER_BASE_URL"]
+        == "https://openrouter.ai/api/v1"
+    )
 
 
 def test_gaia_mcp_server_override_is_preserved(monkeypatch: pytest.MonkeyPatch):
@@ -224,6 +232,41 @@ def test_gaia_diagnostics_aggregate_browser_tokens_separately():
         "usage_missing": 0,
     }
     assert summary["grand_total"]["prompt_tokens"] == 25
+
+
+def test_gaia_reports_nested_code_agent_tokens_separately():
+    summary = compute_token_summary(
+        [
+            {
+                "tokens": {"pipeline_prompt": 100, "pipeline_completion": 20},
+                "research_telemetry": {
+                    "analyst": {
+                        "code_agent_prompt_tokens": 30,
+                        "code_agent_completion_tokens": 10,
+                        "code_agent_total_tokens": 40,
+                        "code_agent_llm_invocations": 2,
+                        "code_agent_steps": 3,
+                        "code_agent_cost_usd": 0.005,
+                    }
+                },
+            }
+        ]
+    )
+
+    assert summary["outer_worker_tokens"] == {
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+    }
+    assert summary["code_agent_tokens"] == {
+        "prompt_tokens": 30,
+        "completion_tokens": 10,
+        "total_tokens": 40,
+    }
+    assert summary["combined_tokens"]["total_tokens"] == 160
+    assert summary["code_agent"]["llm_invocations"] == 2
+    assert summary["code_agent"]["steps"] == 3
+    assert summary["code_agent"]["cost_usd"] == 0.005
 
 
 class _FakeMAW:

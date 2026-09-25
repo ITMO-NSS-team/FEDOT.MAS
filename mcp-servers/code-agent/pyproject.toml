@@ -1,0 +1,31 @@
+[build-system]
+build-backend = "uv_build"
+requires = ["uv-build>=0.10.3,<0.11"]
+
+[project]
+name = "mcp-code-agent"
+version = "0.1.0"
+description = "Bounded high-level code and data analysis MCP for GAIA"
+requires-python = ">=3.12"
+dependencies = [
+  "e2b-code-interpreter>=1",
+  "fastmcp>=2.14.5",
+  "httpx>=0.27",
+  "pydantic>=2.12.5",
+  "python-dotenv>=1",
+]
+
+[project.scripts]
+mcp-code-agent = "mcp_code_agent.server:main"
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.pytest]
+ini_options.asyncio_mode = "auto"
+
+[tool.fedotmas.mcp]
+name = "code-agent"
+description = "Bounded iterative Python analysis of explicitly supplied CSV, XLSX, JSON, text, ZIP, or PDF files. Use when calculations or structured file processing materially help; use document for retrieval and reading."
+tags = ["code", "data", "analysis", "gaia"]
+timeout = 180

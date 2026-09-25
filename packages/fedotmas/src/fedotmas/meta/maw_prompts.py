@@ -85,6 +85,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 9. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
 10. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and this follow-up in a `sequential` node.
 11. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
+12. For numerical computation, spreadsheet or structured-file analysis, programmatic filtering, transformations, or multi-step calculations, assign `code-agent` to a suitable specialist only when execution materially helps. For document retrieval, prefer `document`; do not add `code-agent` to every research role by default.
 
 ---
 
@@ -278,6 +279,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 4. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 5. **Do NOT include output_key, state references, or curly-brace placeholders** — focus on WHAT each agent does, not how data flows between them. Data wiring is handled in a separate stage.
 6. **Research handoffs.** Ask research roles to return concise evidence packets with resolved entities or identifiers, decisive findings, source URLs, supporting evidence, and unresolved uncertainty. When `research-controller` is available, require research roles to use it before expensive searches, after several searches or failures, and before final synthesis or handoff. They must carry its returned `research_state` snapshot in the evidence packet, follow its structured action, and never repeat a `strategy_blocked` approach; that signal does not stop other research. Ask verifier roles to check the requested type, namespace, unit, and format before checking values.
+7. For numerical computation, spreadsheets, structured-file analysis, programmatic filtering, transformations, or multi-step calculations, use `code-agent` for a specialist only when Python execution materially helps. For document retrieval, prefer `document`; do not assign `code-agent` to every research role by default.
 
 ---
 
@@ -461,6 +463,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 7. **Instructions must include state references** using curly braces around the state key name, so agents can read concise upstream outputs.
 8. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and follow-up in a `sequential` node.
 9. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
+10. Use `code-agent` when iterative Python execution materially helps with calculations or structured files; keep it with the relevant specialist and use `document` for document retrieval.
 
 ---
 

@@ -50,6 +50,52 @@ async def test_browser_usage_is_recorded_even_for_mcp_errors():
 
 
 @pytest.mark.asyncio
+async def test_code_agent_usage_steps_and_execution_metrics_are_recorded():
+    telemetry = ResearchTelemetry()
+    tool = MagicMock()
+    tool.name = "solve_with_code"
+    await telemetry.before_tool_callback(
+        tool=tool,
+        tool_args={"task": "filter rows", "files": ["data.csv"]},
+        tool_context=_context(),
+    )
+    await telemetry.after_tool_callback(
+        tool=tool,
+        tool_args={},
+        tool_context=_context(),
+        result={
+            "status": "completed",
+            "steps_taken": 2,
+            "usage": {
+                "available": True,
+                "llm_invocations": 3,
+                "prompt_tokens": 90,
+                "completion_tokens": 20,
+                "total_tokens": 110,
+                "cost_usd": 0.004,
+            },
+            "telemetry": {
+                "duration_seconds": 4.5,
+                "execution_failures": 1,
+                "timeouts": 0,
+                "files_accessed": 1,
+            },
+        },
+    )
+
+    metrics = telemetry.snapshot()["researcher"]
+    assert metrics["code_agent_calls"] == 1
+    assert metrics["code_agent_completed_calls"] == 1
+    assert metrics["code_agent_steps"] == 2
+    assert metrics["code_agent_execution_failures"] == 1
+    assert metrics["code_agent_files_accessed"] == 1
+    assert metrics["code_agent_llm_invocations"] == 3
+    assert metrics["code_agent_total_tokens"] == 110
+    assert metrics["code_agent_cost_usd"] == 0.004
+    assert metrics["code_agent_duration_seconds"] == 4.5
+
+
+@pytest.mark.asyncio
 async def test_research_telemetry_records_structured_outcomes_and_serializes():
     telemetry = ResearchTelemetry()
     tool = MagicMock(name="search")

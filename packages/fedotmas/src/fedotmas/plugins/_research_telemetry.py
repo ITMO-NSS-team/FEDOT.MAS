@@ -76,6 +76,22 @@ class ResearchTelemetry(BasePlugin):
             "browser_agent_llm_invocations": 0,
             "browser_agent_steps": 0,
             "browser_agent_usage_missing": 0,
+            "code_agent_calls": 0,
+            "code_agent_completed_calls": 0,
+            "code_agent_incomplete_calls": 0,
+            "code_agent_blocked_calls": 0,
+            "code_agent_failed_calls": 0,
+            "code_agent_steps": 0,
+            "code_agent_execution_failures": 0,
+            "code_agent_timeouts": 0,
+            "code_agent_files_accessed": 0,
+            "code_agent_prompt_tokens": 0,
+            "code_agent_completion_tokens": 0,
+            "code_agent_total_tokens": 0,
+            "code_agent_llm_invocations": 0,
+            "code_agent_cost_usd": 0.0,
+            "code_agent_usage_missing": 0,
+            "code_agent_duration_seconds": 0.0,
             "prompt_tokens": 0,
             "completion_tokens": 0,
         }
@@ -95,6 +111,8 @@ class ResearchTelemetry(BasePlugin):
                 metrics["unique_queries"] = len(self._queries[agent])
         elif kind == "browser_agent":
             metrics["browser_agent_calls"] += 1
+        elif kind == "code_agent":
+            metrics["code_agent_calls"] += 1
         else:
             metrics["scraping_extraction_calls"] += 1
 
@@ -179,6 +197,61 @@ class ResearchTelemetry(BasePlugin):
                 metrics["browser_agent_steps"] += steps
             if any(usage.get(field) is None for field in fields):
                 metrics["browser_agent_usage_missing"] += 1
+        elif kind == "code_agent":
+            payload = _code_agent_payload(result)
+            if payload is not None:
+                metrics = self._agents[agent]
+                usage = payload.get("usage", {})
+                if isinstance(usage, dict):
+                    for field in (
+                        "prompt_tokens",
+                        "completion_tokens",
+                        "total_tokens",
+                        "llm_invocations",
+                    ):
+                        value = usage.get(field)
+                        if (
+                            isinstance(value, int)
+                            and not isinstance(value, bool)
+                            and value >= 0
+                        ):
+                            metrics[f"code_agent_{field}"] += value
+                    cost = usage.get("cost_usd")
+                    if isinstance(cost, int | float) and not isinstance(cost, bool):
+                        metrics["code_agent_cost_usd"] += cost
+                    if usage.get("available") is not True:
+                        metrics["code_agent_usage_missing"] += 1
+                telemetry = payload.get("telemetry", {})
+                if isinstance(telemetry, dict):
+                    for source, target in (
+                        ("execution_failures", "code_agent_execution_failures"),
+                        ("timeouts", "code_agent_timeouts"),
+                        ("files_accessed", "code_agent_files_accessed"),
+                    ):
+                        value = telemetry.get(source)
+                        if isinstance(value, int) and not isinstance(value, bool):
+                            metrics[target] += value
+                    duration = telemetry.get("duration_seconds")
+                    if isinstance(duration, int | float) and not isinstance(
+                        duration, bool
+                    ):
+                        metrics["code_agent_duration_seconds"] += duration
+                steps = payload.get("steps_taken")
+                if isinstance(steps, int) and not isinstance(steps, bool):
+                    metrics["code_agent_steps"] += steps
+                status = payload.get("status")
+                if status in {
+                    "completed",
+                    "incomplete",
+                    "blocked",
+                    "failed",
+                }:
+                    metrics[f"code_agent_{status}_calls"] += 1
+                    if status == "failed":
+                        metrics["failed_calls"] += 1
+                        return
+                    if status == "blocked":
+                        metrics["blocked_calls"] += 1
         if (
             result.get("isError") is True
             or result.get("is_error") is True
@@ -229,6 +302,8 @@ class ResearchTelemetry(BasePlugin):
         if kind is not None:
             metrics = self._agents[tool_context._invocation_context.agent.name]
             metrics["failed_calls"] += 1
+            if kind == "code_agent":
+                metrics["code_agent_failed_calls"] += 1
             if kind == "search":
                 metrics["backend_errors"] += 1
 
@@ -279,6 +354,8 @@ def _research_tool_kind(name: str) -> str | None:
     normalized = strip_tool_name_prefix(name).lower()
     if normalized == "complete_browser_task":
         return "browser_agent"
+    if normalized == "solve_with_code":
+        return "code_agent"
     if normalized in SEARCH_TOOLS:
         return "search"
     short_name = normalized.rsplit("_", 1)[-1]
@@ -306,6 +383,30 @@ def _browser_payload(result: dict[str, Any]) -> dict[str, Any] | None:
                 continue
             if isinstance(value, dict):
                 found = _browser_payload(value)
+                if found is not None:
+                    return found
+    return None
+
+
+def _code_agent_payload(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Find the compact code-agent result across MCP SDK result wrappers."""
+    if isinstance(result.get("usage"), dict) and isinstance(result.get("status"), str):
+        return result
+    for key in ("structuredContent", "structured_content", "result"):
+        value = result.get(key)
+        if isinstance(value, dict):
+            found = _code_agent_payload(value)
+            if found is not None:
+                return found
+    content = result.get("content")
+    for item in content if isinstance(content, list) else []:
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            try:
+                value = json.loads(item["text"])
+            except ValueError:
+                continue
+            if isinstance(value, dict):
+                found = _code_agent_payload(value)
                 if found is not None:
                     return found
     return None

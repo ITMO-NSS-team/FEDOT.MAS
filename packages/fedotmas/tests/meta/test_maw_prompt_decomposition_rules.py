@@ -91,6 +91,19 @@ def test_two_stage_prompts_share_task_driven_decomposition_rules():
     )
 
 
+def test_maw_prompts_route_material_computation_to_code_agent():
+    for prompt in (
+        META_AGENT_SYSTEM_PROMPT.template,
+        POOL_AGENT_SYSTEM_PROMPT.template,
+        PIPELINE_AGENT_SYSTEM_PROMPT.template,
+    ):
+        assert "code-agent" in prompt
+        assert "document" in prompt
+    assert "do not add `code-agent` to every research role by default" in (
+        META_AGENT_SYSTEM_PROMPT.template.casefold()
+    )
+
+
 @pytest.mark.parametrize(
     "prompt_template",
     [META_AGENT_SYSTEM_PROMPT, POOL_AGENT_SYSTEM_PROMPT, PIPELINE_AGENT_SYSTEM_PROMPT],

@@ -50,6 +50,7 @@ GAIA_BASE_MCP_SERVERS = [
     "document",
     "media",
     "research-controller",
+    "code-agent",
 ]
 DEFAULT_GAIA_WORKER_MODEL = "openai/gpt-6-luna"
 DEFAULT_MEDIA_MODEL = "openai/gpt-6-luna"
@@ -261,16 +262,17 @@ def _tavily_configured() -> bool:
 def _gaia_mcp_registry(
     worker_model: ModelConfig,
 ) -> dict[str, MCPServerConfig]:
-    """Give Browser-Use the same resolved provider settings as GAIA workers."""
+    """Pass the resolved GAIA worker settings to nested agents."""
     registry = dict(resolve_mcp_registry(_gaia_mcp_servers()))
-    browser = registry.get("browser-agent")
-    if isinstance(browser, StdioMCPServer):
-        env = {**browser.env, "FEDOTMAS_GAIA_WORKER_MODEL": worker_model.model}
-        if worker_model.api_key:
-            env["FEDOTMAS_GAIA_WORKER_API_KEY"] = worker_model.api_key
-        if worker_model.api_base:
-            env["FEDOTMAS_GAIA_WORKER_BASE_URL"] = worker_model.api_base
-        registry["browser-agent"] = replace(browser, env=env)
+    for name in ("browser-agent", "code-agent"):
+        server = registry.get(name)
+        if isinstance(server, StdioMCPServer):
+            env = {**server.env, "FEDOTMAS_GAIA_WORKER_MODEL": worker_model.model}
+            if worker_model.api_key:
+                env["FEDOTMAS_GAIA_WORKER_API_KEY"] = worker_model.api_key
+            if worker_model.api_base:
+                env["FEDOTMAS_GAIA_WORKER_BASE_URL"] = worker_model.api_base
+            registry[name] = replace(server, env=env)
     return registry
 
 
@@ -700,16 +702,45 @@ def compute_token_summary(results: list) -> dict:
             "usage_missing",
         )
     }
+    code_agent_usage = {
+        field: 0
+        for field in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "llm_invocations",
+            "steps",
+            "usage_missing",
+        )
+    }
+    code_agent_usage["cost_usd"] = 0.0
 
     for result in results:
         for metrics in result.get("research_telemetry", {}).values():
             for field in browser_usage:
                 browser_usage[field] += metrics.get(f"browser_agent_{field}", 0)
+            for field in code_agent_usage:
+                code_agent_usage[field] += metrics.get(f"code_agent_{field}", 0)
         tokens = result.get("tokens", {})
         total_meta_prompt += tokens.get("meta_prompt", 0)
         total_meta_completion += tokens.get("meta_completion", 0)
         total_pipeline_prompt += tokens.get("pipeline_prompt", 0)
         total_pipeline_completion += tokens.get("pipeline_completion", 0)
+
+    outer_worker_tokens = {
+        "prompt_tokens": total_pipeline_prompt,
+        "completion_tokens": total_pipeline_completion,
+        "total_tokens": total_pipeline_prompt + total_pipeline_completion,
+    }
+    nested_code_tokens = {
+        "prompt_tokens": code_agent_usage["prompt_tokens"],
+        "completion_tokens": code_agent_usage["completion_tokens"],
+        "total_tokens": code_agent_usage["total_tokens"],
+    }
+    combined_tokens = {
+        field: outer_worker_tokens[field] + nested_code_tokens[field]
+        for field in outer_worker_tokens
+    }
 
     return {
         "meta_agent": {
@@ -723,14 +754,27 @@ def compute_token_summary(results: list) -> dict:
             "total_tokens": total_pipeline_prompt + total_pipeline_completion,
         },
         "browser_agent": browser_usage,
+        "code_agent": code_agent_usage,
+        "outer_worker_tokens": outer_worker_tokens,
+        "code_agent_tokens": nested_code_tokens,
+        "combined_tokens": combined_tokens,
         "grand_total": {
-            "prompt_tokens": total_meta_prompt + total_pipeline_prompt,
-            "completion_tokens": total_meta_completion + total_pipeline_completion,
+            "prompt_tokens": (
+                total_meta_prompt
+                + total_pipeline_prompt
+                + code_agent_usage["prompt_tokens"]
+            ),
+            "completion_tokens": (
+                total_meta_completion
+                + total_pipeline_completion
+                + code_agent_usage["completion_tokens"]
+            ),
             "total_tokens": (
                 total_meta_prompt
                 + total_meta_completion
                 + total_pipeline_prompt
                 + total_pipeline_completion
+                + code_agent_usage["total_tokens"]
             ),
         },
     }
@@ -769,6 +813,13 @@ def print_token_summary(token_summary: dict) -> None:
     print(
         f"Pipeline:    {pipe['total_tokens']:>10,}  (prompt: {pipe['prompt_tokens']:,}, completion: {pipe['completion_tokens']:,})"
     )
+    combined = token_summary.get("combined_tokens")
+    if combined:
+        code = token_summary.get("code_agent_tokens", {})
+        print(
+            f"Code-agent:  {code.get('total_tokens', 0):>10,}  "
+            f"(nested tokens; combined worker: {combined['total_tokens']:,})"
+        )
     print(
         f"Grand total: {grand['total_tokens']:>10,}  (prompt: {grand['prompt_tokens']:,}, completion: {grand['completion_tokens']:,})"
     )
