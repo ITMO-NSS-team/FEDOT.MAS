@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import time
 from collections import defaultdict
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from google.adk.plugins import BasePlugin
 from google.adk.runners import InvocationContext
@@ -48,6 +51,8 @@ class ResearchTelemetry(BasePlugin):
         self._query_fingerprints: dict[str, set[str]] = defaultdict(set)
         self._discovered: dict[str, set[str]] = defaultdict(set)
         self._inspected: dict[str, set[str]] = defaultdict(set)
+        self._calls: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self.max_call_diagnostics = 300
 
     @staticmethod
     def _new_agent() -> dict[str, Any]:
@@ -128,6 +133,60 @@ class ResearchTelemetry(BasePlugin):
             return
         agent = tool_context._invocation_context.agent.name
         self.attempt(agent, kind, tool_args)
+        calls = self._calls[agent]
+        calls.append(
+            {
+                "agent": agent,
+                "tool": strip_tool_name_prefix(tool.name),
+                "query": _sanitize_query(tool_args.get("query")),
+                "url": _sanitize_url(tool_args.get("url")),
+                "attempted": True,
+                "status": "attempted",
+                "error_category": None,
+                "started": time.monotonic(),
+                "elapsed_ms": None,
+                "result_chars": None,
+                "result_count": None,
+                "_call_id": _tool_call_id(tool_context),
+            }
+        )
+        if len(calls) > self.max_call_diagnostics:
+            del calls[: len(calls) - self.max_call_diagnostics]
+
+    def record_blocked(
+        self,
+        agent: str,
+        tool_name: str,
+        args: dict[str, Any],
+        *,
+        category: str,
+        budget: dict[str, Any] | None = None,
+        call_id: str | None = None,
+    ) -> None:
+        call_id = call_id if isinstance(call_id, str) else None
+        item = self._pending_call(agent, tool_name, args, call_id=call_id)
+        if item is not None:
+            item["status"] = "blocked"
+            item["error_category"] = category
+            item["elapsed_ms"] = max(
+                0,
+                int((time.monotonic() - item.pop("started", time.monotonic())) * 1000),
+            )
+            if budget is not None:
+                item["budget"] = dict(budget)
+
+    def record_budget(
+        self,
+        agent: str,
+        tool_name: str,
+        args: dict[str, Any],
+        budget: dict[str, Any],
+        call_id: str | None = None,
+    ) -> None:
+        call_id = call_id if isinstance(call_id, str) else None
+        item = self._pending_call(agent, tool_name, args, call_id=call_id)
+        if item is not None:
+            item["budget"] = dict(budget)
 
     def duplicate(self, agent: str) -> None:
         metrics = self._agents[agent]
@@ -167,6 +226,13 @@ class ResearchTelemetry(BasePlugin):
         if kind is None:
             return
         agent = tool_context._invocation_context.agent.name
+        self._record_call_result(
+            agent,
+            tool.name,
+            tool_args,
+            result,
+            call_id=_tool_call_id(tool_context),
+        )
         if (
             isinstance(result.get("error_code"), str)
             and result["error_code"] in CONTROL_CODES
@@ -297,22 +363,42 @@ class ResearchTelemetry(BasePlugin):
         tool_context: ToolContext,
         error: Exception,
     ) -> None:
-        del tool_args, error
         kind = _research_tool_kind(tool.name)
         if kind is not None:
-            metrics = self._agents[tool_context._invocation_context.agent.name]
+            agent = tool_context._invocation_context.agent.name
+            metrics = self._agents[agent]
             metrics["failed_calls"] += 1
             if kind == "code_agent":
                 metrics["code_agent_failed_calls"] += 1
             if kind == "search":
                 metrics["backend_errors"] += 1
+            item = self._pending_call(
+                agent,
+                tool.name,
+                tool_args,
+                call_id=_tool_call_id(tool_context),
+            )
+            if item is not None:
+                item["status"] = "executed_error"
+                item["error_category"] = _error_category(str(error))
 
     async def on_event_callback(
         self, *, invocation_context: InvocationContext, event: Any
     ) -> None:
+        agent = event.author or invocation_context.agent.name
+        content = getattr(event, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            response_part = getattr(part, "function_response", None)
+            if response_part is not None and isinstance(response_part.response, dict):
+                self._record_call_result(
+                    agent,
+                    response_part.name or "",
+                    {},
+                    response_part.response,
+                    call_id=response_part.id,
+                )
         if event.partial or not event.usage_metadata:
             return
-        agent = event.author or invocation_context.agent.name
         metrics = self._agents[agent]
         metrics["prompt_tokens"] += event.usage_metadata.prompt_token_count or 0
         metrics["completion_tokens"] += event.usage_metadata.candidates_token_count or 0
@@ -320,10 +406,91 @@ class ResearchTelemetry(BasePlugin):
     def snapshot(self) -> dict[str, dict[str, Any]]:
         snapshot = {agent: dict(metrics) for agent, metrics in self._agents.items()}
         for agent, metrics in snapshot.items():
+            metrics["tool_calls"] = [
+                {
+                    key: value
+                    for key, value in call.items()
+                    if key not in {"started", "_call_id"}
+                }
+                for call in self._calls[agent]
+            ]
             metrics["_query_fingerprints"] = sorted(self._query_fingerprints[agent])
             metrics["_discovered_urls"] = sorted(self._discovered[agent])
             metrics["_inspected_urls"] = sorted(self._inspected[agent])
         return snapshot
+
+    def _pending_call(
+        self,
+        agent: str,
+        tool_name: str,
+        args: dict[str, Any],
+        *,
+        call_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        name = strip_tool_name_prefix(tool_name)
+        candidates = []
+        for item in reversed(self._calls[agent]):
+            if item.get("status") != "attempted" or item.get("tool") != name:
+                continue
+            if call_id is not None and item.get("_call_id") != call_id:
+                continue
+            if args.get("query") and item.get("query") != _sanitize_query(
+                args.get("query")
+            ):
+                continue
+            if args.get("url") and item.get("url") != _sanitize_url(args.get("url")):
+                continue
+            candidates.append(item)
+        ambiguous = (
+            call_id is None
+            and not (args.get("query") or args.get("url"))
+            and len(candidates) > 1
+        )
+        if not candidates or ambiguous:
+            return None
+        return candidates[0]
+
+    def _record_call_result(
+        self,
+        agent: str,
+        tool_name: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+        *,
+        call_id: str | None = None,
+    ) -> None:
+        item = self._pending_call(agent, tool_name, args, call_id=call_id)
+        if item is None:
+            return
+        started = item.pop("started", time.monotonic())
+        item["elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+        item["result_chars"] = len(json.dumps(result, ensure_ascii=False, default=str))
+        item["result_count"] = _result_count(result)
+        code = result.get("error_code")
+        error = str(result.get("error", result.get("message", "")))
+        is_error = (
+            result.get("isError") is True
+            or result.get("is_error") is True
+            or bool(error)
+        )
+        if item.get("tool", "").lower() == "complete_browser_task":
+            browser_result = _browser_payload(result)
+            if browser_result and browser_result.get("status") in {"failed", "blocked"}:
+                is_error = True
+                error = str(
+                    browser_result.get("error", browser_result.get("message", ""))
+                )
+        if isinstance(code, str) and code in CONTROL_CODES:
+            item["status"] = "blocked"
+            item["error_category"] = _error_category(code)
+        elif is_error:
+            item["status"] = "executed_error"
+            item["error_category"] = _error_category(error)
+        elif item.get("tool", "").lower() in SEARCH_TOOLS and item["result_count"] == 0:
+            item["status"] = "executed_empty"
+            item["error_category"] = "empty_results"
+        else:
+            item["status"] = "executed"
 
 
 def _search_payload(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -361,6 +528,66 @@ def _research_tool_kind(name: str) -> str | None:
     short_name = normalized.rsplit("_", 1)[-1]
     if normalized in SCRAPING_TOOLS or short_name in SCRAPING_TOOLS:
         return "scraping"
+    return None
+
+
+def _sanitize_query(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[email]", value.strip())
+    text = re.sub(
+        r"(?i)(api[_-]?key|token|password)\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        text,
+    )
+    return text[:240]
+
+
+def _sanitize_url(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = urlsplit(value.strip())
+        if not parsed.scheme or not parsed.netloc:
+            return value.strip()[:300]
+        host = parsed.hostname or ""
+        if parsed.port:
+            host += f":{parsed.port}"
+        return urlunsplit((parsed.scheme, host, parsed.path[:180], "", ""))[:300]
+    except ValueError:
+        return "[invalid-url]"
+
+
+def _error_category(error: str) -> str:
+    lowered = error.lower()
+    if any(term in lowered for term in ("dns", "name or service", "getaddrinfo")):
+        return "dns_failure"
+    if "timeout" in lowered or "timed out" in lowered:
+        return "timeout"
+    if "circuit" in lowered or "tool_circuit_open" in lowered:
+        return "circuit_breaker"
+    if any(term in lowered for term in ("blocked", "budget", "disabled", "duplicate")):
+        return "blocked_call"
+    if any(term in lowered for term in ("searx", "backend", "http", "connection")):
+        return "backend_error"
+    return "tool_error"
+
+
+def _tool_call_id(tool_context: ToolContext) -> str | None:
+    value = getattr(tool_context, "function_call_id", None)
+    return value if isinstance(value, str) else None
+
+
+def _result_count(result: Any) -> int | None:
+    if isinstance(result, dict):
+        for key in ("results", "items", "content"):
+            value = result.get(key)
+            if isinstance(value, list):
+                return len(value)
+        for key in ("structuredContent", "structured_content", "result"):
+            count = _result_count(result.get(key))
+            if count is not None:
+                return count
     return None
 
 

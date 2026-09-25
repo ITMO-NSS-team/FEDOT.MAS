@@ -131,36 +131,21 @@ def extract_solution(text: str) -> str:
     return text.strip()
 
 
-def extract_answer_from_state(state: dict[str, Any]) -> str:
-    """Extract final answer from session state.
+def extract_answer_from_state(
+    state: dict[str, Any], output_key: str | None = None
+) -> str:
+    """Extract only the named terminal output; never scan intermediate state."""
+    if output_key is None:
+        return ""
+    value = state.get(output_key)
+    if value is None:
+        return ""
+    return extract_solution(str(value))
 
-    First looks for <solution> tags in any non-query state value.
-    Falls back to the last non-null, non-user_query value.
-    """
-    # Search all values for <solution> tags (last match wins)
-    solution = None
-    for key, value in state.items():
-        if key == "user_query":
-            continue
-        if value is None:
-            continue
-        text = str(value)
-        found = extract_solution(text)
-        if found != text.strip():  # tags were found
-            solution = found
 
-    if solution is not None:
-        return solution
-
-    # Fall back: last non-null, non-user_query value
-    for key in reversed(list(state.keys())):
-        if key == "user_query":
-            continue
-        value = state[key]
-        if value is not None and str(value).strip():
-            return str(value).strip()
-
-    return ""
+def extract_terminal_answer(state: dict[str, Any], output_key: str) -> str:
+    """Extract only the configured terminal agent's output."""
+    return extract_answer_from_state(state, output_key)
 
 
 def normalize_answer(answer: str) -> str:
@@ -585,21 +570,13 @@ def build_plugins(task, enable_langfuse: bool) -> list:
         ),
         BrowserFallbackPolicyPlugin(),
         ToolResultTruncationPlugin(
-            max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 60000),
-            max_total_chars=_env_int("FEDOTMAS_GAIA_MAX_SEARCH_RESULT_CHARS", 6000),
-            aggregate_tool_names={
-                "search",
-                "web_search",
-                "web-search",
-                "websearch",
-                "searxng_search",
-            },
-        ),
-        ToolResultTruncationPlugin(
-            max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 60000),
-            max_total_chars=_env_int("FEDOTMAS_GAIA_MAX_DOCUMENT_RESULT_CHARS", 200000),
-            aggregate_tool_names=GAIA_DOCUMENT_RESULT_TOOL_NAMES,
-            name="fedotmas_gaia_document_result_truncation",
+            max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 6000),
+            max_total_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 6000),
+            aggregate_tool_names={"*"},
+            max_agent_total_chars=_env_int(
+                "FEDOTMAS_GAIA_AGENT_EVIDENCE_CHAR_BUDGET", 24000
+            ),
+            name="fedotmas_gaia_agent_context_budget",
         ),
         WebSearchLimitPlugin(
             max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 10),
@@ -886,7 +863,7 @@ async def _process_task_attempt(
     attempt_number: int,
 ) -> dict[str, Any]:
     """Run one attempt and write its complete result or failure diagnostics."""
-    instruction = (
+    final_answer_contract = (
         "Encapsulate your final answer within <solution> and </solution> tags.\n"
         "For example: The answer to the question is <solution>42</solution>.\n\n"
         "CRITICAL — the text inside <solution></solution> must be ONLY the bare answer, "
@@ -908,7 +885,7 @@ async def _process_task_attempt(
         "read to get the missing evidence first.\n\n"
     )
 
-    query = instruction
+    query = ""
     if task.file_path:
         query += (
             "Use available document, media, or sandbox tools to inspect the local file "
@@ -937,25 +914,47 @@ async def _process_task_attempt(
             worker_models=[worker_model],
             plugins=plugins,
             max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
+            max_agent_llm_turns=_env_int("FEDOTMAS_GAIA_MAX_AGENT_LLM_TURNS", 8),
             two_stage=False,
         )
         task_timeout = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 600)
-        # The pipeline salvages and returns partial state on its own execution
-        # timeout (see run_pipeline), so most slow tasks still yield an answer.
-        # The outer wait_for is only a hard backstop for meta-generation hangs;
+        # The pipeline retains partial state with an explicit timed_out status.
+        # The outer wait_for is a hard backstop for meta-generation hangs;
         # it is set well above the execution budget so the inner timeout fires
         # first and partial state is preserved.
         state = await asyncio.wait_for(
-            maw.run(query, timeout=task_timeout),
+            maw.run(
+                query,
+                timeout=task_timeout,
+                final_answer_contract=final_answer_contract,
+            ),
             timeout=task_timeout
             + _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_BACKSTOP_SECONDS", 180),
         )
-        answer = normalize_answer(extract_answer_from_state(state))
+        pipeline_result = maw.last_result
+        pipeline_status = getattr(pipeline_result, "status", "completed")
+        if pipeline_status != "completed":
+            raise RuntimeError(
+                f"MAW execution ended with status '{pipeline_status}'; "
+                "partial state is retained for diagnostics"
+            )
+        config = getattr(maw, "generated_config", None)
+        final_agent = getattr(config, "final_answer_agent", None)
+        if not final_agent:
+            raise ValueError("Generated MAWConfig has no final_answer_agent")
+        agents = {agent.name: agent for agent in config.agents}
+        terminal = agents.get(final_agent)
+        if terminal is None:
+            raise ValueError(
+                f"Configured terminal agent '{final_agent}' is missing from config"
+            )
+        answer = normalize_answer(extract_terminal_answer(state, terminal.output_key))
         if not answer:
-            raise ValueError("MAW produced no non-empty answer")
+            raise ValueError(
+                f"Configured terminal output '{terminal.output_key}' is missing"
+            )
         is_correct = gaia_benchmark.is_correct_answer(answer, task.ground_truth)
 
-        pipeline_result = maw.last_result
         result = {
             "task_id": task.task_id,
             "question": task.question,
@@ -965,6 +964,7 @@ async def _process_task_attempt(
             "is_correct": is_correct,
             "attempt": attempt_number,
             "attempt_status": "succeeded",
+            "pipeline_status": pipeline_status,
             "session_state": {k: str(v) for k, v in state.items()},
             "maw_config": _generated_config(maw),
             "tokens": _token_usage(maw, pipeline_result),
@@ -983,12 +983,22 @@ async def _process_task_attempt(
             maw_state = getattr(maw_partial, "state", None)
             if isinstance(maw_state, dict):
                 state = maw_state
+        pipeline_status = getattr(partial_result, "status", None)
+        if pipeline_status is None:
+            pipeline_status = getattr(getattr(maw, "last_result", None), "status", None)
+        if pipeline_status is None:
+            pipeline_status = "timed_out" if isinstance(exc, TimeoutError) else "failed"
         artifact = {
             "task_id": task.task_id,
             "question": task.question,
             "difficulty": task.difficulty,
             "attempt": attempt_number,
-            "attempt_status": "failed",
+            "attempt_status": (
+                "incomplete"
+                if pipeline_status in {"timed_out", "limited", "incomplete"}
+                else "failed"
+            ),
+            "pipeline_status": pipeline_status,
             "error": str(exc),
             **root_cause_summary(exc),
             "session_state": {k: str(v) for k, v in state.items()},
@@ -1153,7 +1163,13 @@ def _public_research_telemetry(
 
 
 def _copy_attempt_fields(destination: dict[str, Any], record: dict[str, Any]) -> None:
-    for key in ("session_state", "maw_config"):
+    for key in (
+        "session_state",
+        "maw_config",
+        "attempt_status",
+        "pipeline_status",
+        "error",
+    ):
         if key in record:
             destination[key] = record[key]
 

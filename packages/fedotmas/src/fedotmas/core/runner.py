@@ -4,7 +4,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from google.adk import Runner
 from google.adk.agents.base_agent import BaseAgent
@@ -35,6 +35,9 @@ class PipelineResult:
     #: The pipeline carries on past them, so callers need this to tell "the
     #: model answered wrongly" from "the model never got to answer".
     truncated_agents: list[str] = field(default_factory=list)
+    status: Literal["completed", "timed_out", "failed", "limited", "incomplete"] = (
+        "completed"
+    )
 
 
 class PipelineExecutionError(RuntimeError):
@@ -84,12 +87,11 @@ async def run_pipeline(
         initial_state: Extra keys to inject into ``session.state`` before
             execution (``user_query`` is always set automatically).
         timeout: Optional wall-clock budget (seconds) for pipeline *execution*.
-            On expiry the run is stopped and the partial ``session.state``
-            accumulated so far is returned instead of raising — so any
-            sub-answers already produced can still be salvaged.
+            On expiry the run is stopped and partial state is returned with
+            ``status='timed_out'`` for diagnostics.
 
     Returns:
-        The full ``session.state`` dict after pipeline execution.
+        A ``PipelineResult`` containing full session state and execution status.
     """
     if isinstance(agent_or_app, App):
         app = agent_or_app
@@ -129,6 +131,7 @@ async def run_pipeline(
     truncated_agents: list[str] = []
     pipeline_start = time.monotonic()
     failure: Exception | None = None
+    timed_out = False
 
     async with Runner(
         app=app,
@@ -146,8 +149,9 @@ async def run_pipeline(
                 timeout=timeout,
             )
         except TimeoutError:
+            timed_out = True
             _log.warning(
-                "Pipeline execution exceeded {}s budget; salvaging partial state",
+                "Pipeline execution exceeded {}s budget; preserving partial state",
                 timeout,
             )
         except Exception as exc:  # noqa: BLE001 - retain partial accounting for any agent failure
@@ -171,12 +175,27 @@ async def run_pipeline(
         raise RuntimeError(
             f"Session '{session.id}' lost after pipeline execution — results unavailable"
         )
+    metadata = final_session.state.get("_fedotmas_execution", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    status: Literal["completed", "timed_out", "failed", "limited", "incomplete"]
+    if failure is not None:
+        status = "failed"
+    elif timed_out:
+        status = "timed_out"
+    elif metadata.get("limited_agents"):
+        status = "limited"
+    elif metadata.get("handoff_issues"):
+        status = "incomplete"
+    else:
+        status = "completed"
     result = PipelineResult(
         state=dict(final_session.state),
         total_prompt_tokens=usage.prompt,
         total_completion_tokens=usage.completion,
         elapsed=total_elapsed,
         truncated_agents=truncated_agents,
+        status=status,
     )
     if failure is not None:
         raise PipelineExecutionError(failure, result) from failure

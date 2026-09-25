@@ -118,6 +118,17 @@ async def test_sequential_agents_keep_budget_exhaustion_local():
     assert actual_searches == ["initial evidence", "agent B independent search"]
     assert result.state["agent_a_output"] == "Agent A finished from gathered evidence."
     assert result.state["agent_b_output"] == "Agent B finished."
+    assert (
+        result.state["_fedotmas_tool_budgets"]["agent_a"]["search"]["status"]
+        == "exhausted"
+    )
+    for request in agent_a_llm.requests[1:]:
+        advertised = [
+            declaration.name
+            for group in request.config.tools or []
+            for declaration in group.function_declarations or []
+        ]
+        assert "search" not in advertised
 
     calls: dict[str, str] = {}
     responses: dict[str, dict] = {}

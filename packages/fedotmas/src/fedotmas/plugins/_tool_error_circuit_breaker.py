@@ -85,7 +85,6 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         tool_args: dict[str, Any],
         tool_context: ToolContext,
     ) -> dict | None:
-        del tool_args
         session_id, agent_name = _session_agent(tool_context)
         circuit_key = (session_id, agent_name, tool.name)
         reason = self._open_circuits.get(circuit_key)
@@ -93,6 +92,13 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
             return None
         if self.telemetry is not None:
             self.telemetry.circuit_blocked(agent_name, tool.name)
+            self.telemetry.record_blocked(
+                agent_name,
+                tool.name,
+                tool_args,
+                category="circuit_breaker",
+                call_id=getattr(tool_context, "function_call_id", None),
+            )
         return {
             "isError": True,
             "error_code": TOOL_CIRCUIT_OPEN,

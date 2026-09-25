@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from fedotmas.plugins._research_telemetry import ResearchTelemetry
+from google.genai import types
 
 
 def _context(agent: str = "researcher") -> MagicMock:
@@ -196,3 +198,127 @@ async def test_research_telemetry_records_structured_outcomes_and_serializes():
     assert metrics["urls_inspected"] == 1
     assert metrics["scraping_extraction_calls"] == 3
     assert metrics["search_exhaustion"] == 1
+
+
+@pytest.mark.asyncio
+async def test_per_call_diagnostics_distinguish_infra_failures_and_blocks():
+    telemetry = ResearchTelemetry()
+
+    async def record(name, args, result):
+        tool = MagicMock()
+        tool.name = name
+        await telemetry.before_tool_callback(
+            tool=tool, tool_args=args, tool_context=_context()
+        )
+        await telemetry.after_tool_callback(
+            tool=tool, tool_args=args, tool_context=_context(), result=result
+        )
+
+    await record(
+        "search",
+        {
+            "query": "lookup token=secret@example.com",
+            "url": "https://user:pass@example.org/search?token=secret",
+        },
+        {"isError": True, "error": "HTTP backend unavailable in SearXNG"},
+    )
+    await record(
+        "search",
+        {"query": "dns check"},
+        {"isError": True, "error": "DNS lookup failed: getaddrinfo"},
+    )
+    await record(
+        "complete_browser_task",
+        {"task": "open the source"},
+        {"isError": True, "error": "OperationTimedout: browser timeout"},
+    )
+    await record("search", {"query": "empty"}, {"results": []})
+    search_tool = MagicMock()
+    search_tool.name = "search"
+    await telemetry.before_tool_callback(
+        tool=search_tool,
+        tool_args={"query": "blocked"},
+        tool_context=_context(),
+    )
+    telemetry.record_blocked(
+        "researcher",
+        "search",
+        {"query": "blocked"},
+        category="budget_exhausted",
+        budget={"kind": "search", "limit": 1, "used": 1, "remaining": 0},
+    )
+    markdown_tool = MagicMock()
+    markdown_tool.name = "markdown"
+    await telemetry.before_tool_callback(
+        tool=markdown_tool,
+        tool_args={"url": "https://example.org"},
+        tool_context=_context(),
+    )
+    telemetry.record_blocked(
+        "researcher",
+        "markdown",
+        {"url": "https://example.org"},
+        category="circuit_breaker",
+    )
+
+    calls = telemetry.snapshot()["researcher"]["tool_calls"]
+    assert [call["error_category"] for call in calls] == [
+        "backend_error",
+        "dns_failure",
+        "timeout",
+        "empty_results",
+        "budget_exhausted",
+        "circuit_breaker",
+    ]
+    assert all(call["elapsed_ms"] is not None for call in calls)
+    assert calls[0]["result_chars"] > 0
+    assert calls[0]["query"] == "lookup token=[redacted]"
+    assert calls[0]["url"] == "https://example.org/search"
+    assert calls[4]["budget"]["remaining"] == 0
+    assert calls[3]["result_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_event_diagnostics_match_parallel_tool_results_by_call_id():
+    telemetry = ResearchTelemetry()
+    tool = MagicMock()
+    tool.name = "search"
+    first_context = _context()
+    first_context.function_call_id = "call-1"
+    second_context = _context()
+    second_context.function_call_id = "call-2"
+
+    for query, context in (("first", first_context), ("second", second_context)):
+        await telemetry.before_tool_callback(
+            tool=tool, tool_args={"query": query}, tool_context=context
+        )
+
+    event = SimpleNamespace(
+        author="researcher",
+        partial=False,
+        usage_metadata=None,
+        content=types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id="call-1",
+                        name="search",
+                        response={
+                            "isError": True,
+                            "error_code": "WEB_BUDGET_EXHAUSTED",
+                            "error": "search budget exhausted",
+                        },
+                    )
+                )
+            ],
+        ),
+    )
+    invocation = SimpleNamespace(agent=SimpleNamespace(name="researcher"))
+    await telemetry.on_event_callback(invocation_context=invocation, event=event)
+
+    calls = telemetry.snapshot()["researcher"]["tool_calls"]
+    assert [(call["query"], call["status"]) for call in calls] == [
+        ("first", "blocked"),
+        ("second", "attempted"),
+    ]

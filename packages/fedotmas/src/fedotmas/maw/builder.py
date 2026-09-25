@@ -6,19 +6,29 @@ from typing import Any, cast
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
+from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.exit_loop_tool import exit_loop
 from google.adk.utils.instructions_utils import inject_session_state
 from google.genai import types as genai_types
 
 from fedotmas._settings import (
     ModelConfig,
+    get_max_agent_llm_turns,
     get_max_loop_iterations,
     get_worker_models,
 )
 from fedotmas.common.llm import make_llm
 from fedotmas.common.logging import get_logger
+from fedotmas.maw.handoffs import (
+    EXECUTION_METADATA_KEY,
+    append_execution_issue,
+    describe_requirement,
+    parse_artifact,
+    validate_output_contract,
+)
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.mcp import MCPServerConfig, create_toolset
 
@@ -96,6 +106,8 @@ def _instruction_provider(
     agent_name: str,
     state_keys: frozenset[str] | None = None,
     output_key: str | None = None,
+    input_requirements: list | None = None,
+    research_policy: str = "independent",
 ):
     """Resolve state refs at call time, naming missing inputs and safe self refs."""
 
@@ -129,6 +141,29 @@ def _instruction_provider(
                 key,
             )
             text = text.replace(ref, _missing_input_marker(key))
+        for requirement in input_requirements or []:
+            raw, missing, identity = describe_requirement(state, requirement)
+            if missing:
+                mode = (
+                    "Use only narrowly targeted recovery if your assigned role and "
+                    "tools allow it; otherwise pass the dependency as unresolved."
+                    if research_policy == "targeted_recovery"
+                    else "Do not invent missing fields or silently substitute a "
+                    "different entity. Mark this dependency unresolved."
+                )
+                text = (
+                    f"{text}\n\n[INCOMPLETE HANDOFF from {requirement.source_key}: "
+                    f"missing {', '.join(missing)}. Received artifact: {raw}. {mode}]"
+                )
+            elif identity:
+                text = (
+                    f"{text}\n\n[ENTITY CONTINUITY for {requirement.source_key}: "
+                    f"preserve these upstream identity values exactly: "
+                    f"{identity}. Do not replace them with another entity. If the "
+                    "identity cannot be supported, mark it unresolved.]"
+                )
+            if requirement.purpose:
+                text += f"\nHandoff purpose: {requirement.purpose}"
         return await inject_session_state(text, readonly_context)
 
     return provide
@@ -140,6 +175,8 @@ def build(
     mcp_registry: dict[str, MCPServerConfig] | None = None,
     worker_models: dict[str, ModelConfig] | None = None,
     autonomous: bool = True,
+    final_answer_contract: str | None = None,
+    max_agent_llm_turns: int | None = None,
 ) -> BaseAgent:
     """Convert a ``MAWConfig`` into an executable ADK agent tree.
 
@@ -156,6 +193,13 @@ def build(
         worker_models,
         state_keys,
         autonomous=autonomous,
+        final_answer_agent=config.final_answer_agent,
+        final_answer_contract=final_answer_contract,
+        max_agent_llm_turns=(
+            max_agent_llm_turns
+            if max_agent_llm_turns is not None
+            else get_max_agent_llm_turns()
+        ),
     )
 
 
@@ -167,6 +211,9 @@ def _build_node(
     state_keys: frozenset[str] | None = None,
     *,
     autonomous: bool = True,
+    final_answer_agent: str | None = None,
+    final_answer_contract: str | None = None,
+    max_agent_llm_turns: int,
 ) -> BaseAgent:
     if node.type == "agent":
         if node.agent_name is None:
@@ -177,11 +224,24 @@ def _build_node(
             worker_models,
             state_keys,
             autonomous=autonomous,
+            final_answer_contract=(
+                final_answer_contract if node.agent_name == final_answer_agent else None
+            ),
+            final_answer_agent=final_answer_agent,
+            max_agent_llm_turns=max_agent_llm_turns,
         )
 
     children = [
         _build_node(
-            c, agents, mcp_registry, worker_models, state_keys, autonomous=autonomous
+            c,
+            agents,
+            mcp_registry,
+            worker_models,
+            state_keys,
+            autonomous=autonomous,
+            final_answer_agent=final_answer_agent,
+            final_answer_contract=final_answer_contract,
+            max_agent_llm_turns=max_agent_llm_turns,
         )
         for c in node.children
     ]
@@ -241,6 +301,9 @@ def _build_llm_agent(
     state_keys: frozenset[str] | None = None,
     *,
     autonomous: bool = True,
+    final_answer_contract: str | None = None,
+    final_answer_agent: str | None = None,
+    max_agent_llm_turns: int | None = None,
 ) -> LlmAgent:
     tools: list = []
     for tool_name in cfg.tools:
@@ -251,6 +314,11 @@ def _build_llm_agent(
     instruction_text = (
         frame_instruction(cfg.instruction) if autonomous else cfg.instruction
     )
+    if final_answer_contract:
+        instruction_text = (
+            f"{instruction_text}\n\nFINAL ANSWER CONTRACT (terminal stage only):\n"
+            f"{final_answer_contract}"
+        )
     # Decided on the final text: a reference anywhere in it, framing included,
     # has to reach the provider rather than ADK's plain-string path.
     instruction = (
@@ -259,8 +327,10 @@ def _build_llm_agent(
             cfg.name,
             state_keys - {cfg.output_key} if state_keys is not None else None,
             output_key=cfg.output_key,
+            input_requirements=cfg.input_requirements,
+            research_policy=cfg.research_policy,
         )
-        if _STATE_REF_RE.search(instruction_text)
+        if _STATE_REF_RE.search(instruction_text) or cfg.input_requirements
         else instruction_text
     )
     kwargs: dict = {}
@@ -268,6 +338,151 @@ def _build_llm_agent(
         kwargs["generate_content_config"] = genai_types.GenerateContentConfig(
             max_output_tokens=cfg.max_output_tokens,
         )
+
+    async def before_agent(callback_context: CallbackContext) -> None:
+        for requirement in cfg.input_requirements:
+            raw, missing, _identity = describe_requirement(
+                callback_context.state, requirement
+            )
+            if missing:
+                append_execution_issue(
+                    callback_context.state,
+                    {
+                        "kind": "incomplete_handoff",
+                        "agent": cfg.name,
+                        "source_key": requirement.source_key,
+                        "missing_fields": missing,
+                        "received": raw[:4000],
+                    },
+                )
+
+    async def after_agent(callback_context: CallbackContext) -> None:
+        if cfg.output_contract is None:
+            return
+        value = callback_context.state.get(cfg.output_key)
+        missing = validate_output_contract(value, cfg.output_contract)
+        if missing:
+            append_execution_issue(
+                callback_context.state,
+                {
+                    "kind": "incomplete_artifact",
+                    "agent": cfg.name,
+                    "output_key": cfg.output_key,
+                    "missing_fields": missing,
+                },
+            )
+        artifact = parse_artifact(value)
+        if artifact is not None:
+            for requirement in cfg.input_requirements:
+                upstream = parse_artifact(
+                    callback_context.state.get(requirement.source_key)
+                )
+                if upstream is None:
+                    continue
+                shared_identity = set(requirement.identity_fields) & set(
+                    cfg.output_contract.identity_fields
+                )
+                mismatched = [
+                    field
+                    for field in shared_identity
+                    if field in upstream and artifact.get(field) != upstream[field]
+                ]
+                if mismatched:
+                    append_execution_issue(
+                        callback_context.state,
+                        {
+                            "kind": "entity_continuity_mismatch",
+                            "agent": cfg.name,
+                            "source_key": requirement.source_key,
+                            "fields": sorted(mismatched),
+                        },
+                    )
+
+    async def before_tool(tool, args, tool_context) -> dict | None:
+        del args
+        if cfg.research_policy != "evidence_first":
+            return None
+        if _is_discovery_tool(tool):
+            return {
+                "isError": True,
+                "error_code": "EVIDENCE_FIRST_SEARCH_DISABLED",
+                "error": (
+                    "This role is evidence-first. Use the supplied upstream evidence "
+                    "to verify the claim; if required evidence is absent, mark that "
+                    "claim unresolved."
+                ),
+            }
+        return None
+
+    per_agent_limit = (
+        cfg.max_llm_turns or max_agent_llm_turns or get_max_agent_llm_turns()
+    )
+
+    async def before_model(
+        callback_context: CallbackContext, llm_request
+    ) -> LlmResponse | None:
+        state = callback_context.state
+        if cfg.research_policy == "evidence_first":
+            discovery_names = {
+                name
+                for name, tool in llm_request.tools_dict.items()
+                if _is_discovery_tool(tool)
+            }
+            if discovery_names:
+                retained = []
+                for group in llm_request.config.tools or []:
+                    declarations = group.function_declarations
+                    if declarations is None:
+                        retained.append(group)
+                        continue
+                    group.function_declarations = [
+                        declaration
+                        for declaration in declarations
+                        if declaration.name not in discovery_names
+                    ]
+                    if group.function_declarations:
+                        retained.append(group)
+                llm_request.config.tools = retained
+            llm_request.append_instructions(
+                [
+                    (
+                        "This role is evidence-first. Discovery search tools are not "
+                        "available. Verify against the supplied artifact; identify any "
+                        "missing evidence as unresolved."
+                    )
+                ]
+            )
+        metadata = state.get(EXECUTION_METADATA_KEY)
+        if not isinstance(metadata, dict):
+            metadata = {}
+            state[EXECUTION_METADATA_KEY] = metadata
+        turns = metadata.setdefault("agent_llm_turns", {})
+        used = turns.get(cfg.name, 0) if isinstance(turns, dict) else 0
+        if used >= per_agent_limit:
+            limited = metadata.setdefault("limited_agents", {})
+            if isinstance(limited, dict):
+                limited[cfg.name] = {"limit": per_agent_limit, "turns": used}
+            return LlmResponse(
+                content=genai_types.Content(
+                    role="model",
+                    parts=[
+                        genai_types.Part.from_text(
+                            text=(
+                                f"INCOMPLETE: agent '{cfg.name}' reached its "
+                                f"{per_agent_limit}-turn model limit before finishing. "
+                                "Preserve this result as limited; do not claim the "
+                                "task is complete."
+                            )
+                        )
+                    ],
+                ),
+                turnComplete=True,
+                finishReason=genai_types.FinishReason.STOP,
+            )
+        if isinstance(turns, dict):
+            turns[cfg.name] = used + 1
+        return None
+
     return LlmAgent(
         name=cfg.name,
         model=model,
@@ -279,8 +494,22 @@ def _build_llm_agent(
         # history; ADK still provides the current input and this agent's tool
         # results while it is working.
         include_contents="none",
+        before_agent_callback=before_agent,
+        after_agent_callback=after_agent,
+        before_model_callback=before_model,
+        before_tool_callback=before_tool,
         **kwargs,
     )
+
+
+def _is_discovery_tool(tool: Any) -> bool:
+    name = tool.name.rsplit("__", 1)[-1].lower().replace("-", "_")
+    if name in {"search", "web_search", "websearch", "searxng_search", "google_search"}:
+        return name != "search" or any(
+            word in (tool.description or "").lower()
+            for word in ("web", "internet", "search", "query")
+        )
+    return name.endswith("_search") or name.startswith("search_")
 
 
 def _inject_exit_loop(children: list[BaseAgent]) -> None:

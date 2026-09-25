@@ -394,22 +394,23 @@ class TestSearchLimitDoesNotRestartPipeline:
                 self.root_agent = root_agent
                 self.plugins = plugins or []
 
-        with (
-            patch("fedotmas.core.runner.App", _FakeApp),
-            patch("fedotmas.core.runner.Runner", side_effect=fake_runner_cm),
-            pytest.raises(PipelineExecutionError, match="limit hit"),
-        ):
-            await run_pipeline(
-                _fake_agent(),
-                "hello",
-                session_service=mock_session_service,
-            )
+        with pytest.raises(PipelineExecutionError, match="limit hit") as error:
+            with (
+                patch("fedotmas.core.runner.App", _FakeApp),
+                patch("fedotmas.core.runner.Runner", side_effect=fake_runner_cm),
+            ):
+                await run_pipeline(
+                    _fake_agent(),
+                    "hello",
+                    session_service=mock_session_service,
+                )
 
         assert calls == [True]
+        assert error.value.result.status == "failed"
 
 
-class TestExecutionTimeoutSalvage:
-    """A pipeline that exceeds its timeout returns partial state, not an error."""
+class TestExecutionTimeoutStatus:
+    """A timed out pipeline returns partial state with explicit status."""
 
     @pytest.mark.asyncio
     async def test_timeout_returns_partial_state(self, mock_session_service):
@@ -450,6 +451,7 @@ class TestExecutionTimeoutSalvage:
             )
 
         assert isinstance(result, PipelineResult)
+        assert result.status == "timed_out"
         assert result.state["sub_answer"] == "42"
         assert result.total_prompt_tokens == 7
         assert result.total_completion_tokens == 3

@@ -81,6 +81,50 @@ class TestToolResultTruncationPlugin:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_exhausted_agent_budget_keeps_nested_source_metadata(self):
+        plugin = ToolResultTruncationPlugin(
+            max_string_chars=1000,
+            max_total_chars=1000,
+            aggregate_tool_names={"*"},
+            max_agent_total_chars=500,
+        )
+        context = _tool_context()
+        context._invocation_context.session.id = "session-1"
+
+        await plugin.after_tool_callback(
+            tool=_tool("markdown"),
+            tool_args={},
+            tool_context=context,
+            result={"url": "https://example.org/first", "content": "x" * 30000},
+        )
+        result = await plugin.after_tool_callback(
+            tool=_tool("search"),
+            tool_args={},
+            tool_context=context,
+            result={
+                "structuredContent": {
+                    "results": [
+                        {
+                            "url": "https://example.org/second",
+                            "title": "Source title",
+                            "snippet": "Decisive excerpt",
+                            "content": "y" * 30000,
+                        }
+                    ],
+                    "total_results": 1,
+                }
+            },
+        )
+
+        assert result is not None
+        assert result["structuredContent"]["results"][0]["url"] == (
+            "https://example.org/second"
+        )
+        assert result["structuredContent"]["results"][0]["snippet"] == (
+            "Decisive excerpt"
+        )
+
+    @pytest.mark.asyncio
     async def test_truncates_nested_strings(self):
         plugin = ToolResultTruncationPlugin(max_string_chars=5)
 

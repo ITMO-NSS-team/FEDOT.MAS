@@ -271,11 +271,34 @@ class BaseMAS(ABC, Generic[ConfigT]):
     def build(self, config: ConfigT, *, autonomous: bool = True) -> BaseAgent: ...
 
     def build_app(
-        self, config: ConfigT, *, name: str = "fedotmas", autonomous: bool = True
+        self,
+        config: ConfigT,
+        *,
+        name: str = "fedotmas",
+        autonomous: bool = True,
+        final_answer_contract: str | None = None,
     ) -> App:
         """Build an ADK ``App`` (agent tree + plugins) from *config*."""
-        agent = self.build(config, autonomous=autonomous)
+        agent = self._build_agent(
+            config,
+            autonomous=autonomous,
+            final_answer_contract=final_answer_contract,
+        )
         return App(name=name, root_agent=agent, plugins=list(self._plugins))
+
+    def _build_agent(
+        self,
+        config: ConfigT,
+        *,
+        autonomous: bool,
+        final_answer_contract: str | None,
+    ) -> BaseAgent:
+        """Execution hook for builders with a terminal-output contract."""
+        if final_answer_contract is not None:
+            raise ValueError(
+                f"{type(self).__name__} does not support a terminal answer contract"
+            )
+        return self.build(config, autonomous=autonomous)
 
     async def build_and_run(
         self,
@@ -284,14 +307,18 @@ class BaseMAS(ABC, Generic[ConfigT]):
         *,
         initial_state: dict[str, Any] | None = None,
         timeout: float | None = None,
+        final_answer_contract: str | None = None,
     ) -> dict[str, Any]:
         """Build the ADK agent tree from *config* and execute it.
 
         Returns the final ``session.state`` dict. When *timeout* is set and
         execution exceeds it, the partial state accumulated so far is returned
-        instead of raising (see :func:`run_pipeline`).
+        instead of raising (see :func:`run_pipeline`); inspect ``last_result.status``
+        before treating that state as a completed result.
         """
-        app = self.build_app(config)
+        app = self.build_app(
+            config, final_answer_contract=final_answer_contract
+        )
         _log.info("Running pipeline")
         try:
             self._last_result = await run_pipeline(
@@ -355,6 +382,7 @@ class BaseMAS(ABC, Generic[ConfigT]):
         *,
         initial_state: dict[str, Any] | None = None,
         timeout: float | None = None,
+        final_answer_contract: str | None = None,
     ) -> dict[str, Any]:
         """Generate a config and immediately execute it.
 
@@ -369,7 +397,11 @@ class BaseMAS(ABC, Generic[ConfigT]):
         try:
             config = await self.generate_config(task)
             return await self.build_and_run(
-                config, task, initial_state=initial_state, timeout=timeout
+                config,
+                task,
+                initial_state=initial_state,
+                timeout=timeout,
+                final_answer_contract=final_answer_contract,
             )
         finally:
             self._finalize_langfuse()

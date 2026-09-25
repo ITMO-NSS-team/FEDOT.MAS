@@ -5,11 +5,15 @@ from fedotmas.export.synapse import SynapseExport, to_synapse_bundle
 from fedotmas.mas.mas import MAS
 from fedotmas.mas.models import MASConfig
 from fedotmas.maw.maw import MAW
-from fedotmas.maw.models import AgentPoolConfig, MAWConfig
+from fedotmas.maw.models import (
+    AgentPoolConfig,
+    ArtifactContract,
+    ArtifactRequirement,
+    MAWConfig,
+)
 from fedotmas.mcp._config import HttpMCPServer, StdioMCPServer
 from fedotmas.mcp.discovery import discover_local_servers
-from fedotmas.optimize import Optimizer, OptimizationResult
-
+from fedotmas.optimize import OptimizationResult, Optimizer
 
 # litellm's Message.__init__ deletes None-valued attributes from instances,
 # causing Pydantic to warn about missing fields during serialization.
@@ -40,15 +44,17 @@ __all__ = [
     "MAS",
     "MAW",
     "AgentPoolConfig",
+    "ArtifactContract",
+    "ArtifactRequirement",
+    "HttpMCPServer",
     "MASConfig",
     "MAWConfig",
     "ModelConfig",
-    "HttpMCPServer",
-    "StdioMCPServer",
-    "discover_local_servers",
-    "Optimizer",
     "OptimizationResult",
+    "Optimizer",
+    "StdioMCPServer",
     "SynapseExport",
+    "discover_local_servers",
     "to_synapse_bundle",
 ]
 

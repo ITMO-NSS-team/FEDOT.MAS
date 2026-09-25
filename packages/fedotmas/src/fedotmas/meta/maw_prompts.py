@@ -66,9 +66,15 @@ Choose models based on task complexity: use stronger models for critical/complex
 - A verifier first determines the requested value or entity type and expected namespace, unit, and format; checks whether upstream interpretation matches; then verifies candidate values against evidence.
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
+- Set `final_answer_agent` to the actual terminal answer-producing agent. The runtime applies any final submission format only to this agent; never copy a terminal-only contract into research, calculation, extraction, or verification instructions.
+- For meaningful semantic dependencies, generate a task-specific `output_contract` for the producer and matching `input_requirements` for its consumer. Preserve evidence and provenance; do not impose a universal artifact schema. Leave contracts absent when no downstream handoff needs validation.
+- Contract shapes shown in examples are illustrative for those roles. Choose fields from the current task's dependencies and evidence needs.
+- A producer with an `output_contract` must return a JSON object containing every required field. It may include additional evidence, sources, assumptions, and uncertainty needed downstream; never reduce that artifact to a bare final answer.
+- If a dependent role must continue with the same selected entity, include those identity fields in both contracts. Preserve their values exactly or mark the dependency unresolved; do not silently substitute another paper, site, video, or entity.
+- Verifiers should use `research_policy: "evidence_first"` when upstream evidence is complete, or `"targeted_recovery"` when their role permits retrieving a specific missing claim. Avoid duplicating a full research pass.
 
 **IMPORTANT — syntax for state references in generated instructions:**
-Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output. Preserve any literal XML or answer tags from the user task, such as <solution>...</solution>, exactly as written.
+Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output. Preserve literal markup only when it is part of the actual task content.
 
 ---
 
@@ -83,9 +89,10 @@ Use single curly braces around the state key name. In the examples below, angle 
 7. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 8. **Instructions must be specific and actionable** — tell the agent exactly what to do.
 9. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
-10. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and this follow-up in a `sequential` node.
-11. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
-12. For numerical computation, spreadsheet or structured-file analysis, programmatic filtering, transformations, or multi-step calculations, assign `code-agent` to a suitable specialist only when execution materially helps. For document retrieval, prefer `document`; do not add `code-agent` to every research role by default.
+10. **Keep final formatting at the boundary.** Designate `final_answer_agent`; do not place benchmark submission tags or bare-answer rules in intermediate instructions.
+11. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and this follow-up in a `sequential` node.
+12. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
+13. For numerical computation, spreadsheet or structured-file analysis, programmatic filtering, transformations, or multi-step calculations, assign `code-agent` to a suitable specialist only when execution materially helps. For document retrieval, prefer `document`; do not add `code-agent` to every research role by default.
 
 ---
 
@@ -102,7 +109,8 @@ Use single curly braces around the state key name. In the examples below, angle 
       "model": "<model>"
     }
   ],
-  "pipeline": {"type": "agent", "agent_name": "solver"}
+  "pipeline": {"type": "agent", "agent_name": "solver"},
+  "final_answer_agent": "solver"
 }
 ```
 
@@ -112,16 +120,18 @@ Use single curly braces around the state key name. In the examples below, angle 
   "agents": [
     {
       "name": "researcher",
-      "instruction": "Research the topic: <user_query>. Gather key facts and findings.",
+      "instruction": "Research the topic: <user_query>. Return JSON with findings and their source URLs.",
       "output_key": "research_result",
       "model": "<model>",
-      "tools": ["download"]
+      "tools": ["download"],
+      "output_contract": {"required_fields": ["findings", "sources"]}
     },
     {
       "name": "writer",
       "instruction": "Write a comprehensive report based on the research: <research_result>",
       "output_key": "report",
-      "model": "<model>"
+      "model": "<model>",
+      "input_requirements": [{"source_key": "research_result", "required_fields": ["findings", "sources"], "purpose": "Use the source-backed findings in the report."}]
     }
   ],
   "pipeline": {
@@ -130,7 +140,8 @@ Use single curly braces around the state key name. In the examples below, angle 
       {"type": "agent", "agent_name": "researcher"},
       {"type": "agent", "agent_name": "writer"}
     ]
-  }
+  },
+  "final_answer_agent": "writer"
 }
 ```
 
@@ -154,7 +165,8 @@ Use single curly braces around the state key name. In the examples below, angle 
       "name": "verifier",
       "instruction": "Determine the requested identifier type and namespace from <user_query>. Check whether <record_identifier> and <record_details> use that interpretation, then verify candidate values against cited sources and report any mismatch.",
       "output_key": "verified_result",
-      "model": "<model>"
+      "model": "<model>",
+      "output_contract": {"required_fields": ["record_identifier", "decision"], "identity_fields": ["record_identifier"]}
     }
   ],
   "pipeline": {
@@ -164,7 +176,8 @@ Use single curly braces around the state key name. In the examples below, angle 
       {"type": "agent", "agent_name": "dependent_researcher"},
       {"type": "agent", "agent_name": "verifier"}
     ]
-  }
+  },
+  "final_answer_agent": "verifier"
 }
 ```
 
@@ -203,7 +216,8 @@ Use single curly braces around the state key name. In the examples below, angle 
       },
       {"type": "agent", "agent_name": "synthesizer_verifier"}
     ]
-  }
+  },
+  "final_answer_agent": "synthesizer_verifier"
 }
 ```
 
@@ -446,9 +460,13 @@ ${available_models}
 - A verifier first determines the requested value or entity type and expected namespace, unit, and format; checks whether upstream interpretation matches; then verifies candidate values against evidence.
 - In a loop, agents can overwrite state keys — each iteration refines the previous result.
 - **Parallel results require synthesis.** When agents run in parallel, each writes to its own `output_key`. A downstream synthesizer agent must reference all of them and combine the results into a single coherent answer.
+- Set `final_answer_agent` to the actual terminal answer-producing agent. The runtime applies final submission formatting only at that boundary.
+- Generate task-specific `output_contract` and matching `input_requirements` for meaningful handoffs. Preserve all useful evidence, provenance, and required entity identity fields. Do not use one universal schema.
+- Contracted producer outputs are JSON objects that retain all required fields plus useful evidence and provenance, rather than short answer strings.
+- For evidence-complete verification, use `research_policy: "evidence_first"`. Use `"targeted_recovery"` only when the verifier may recover a specific missing claim; do not repeat full research.
 
 **IMPORTANT — syntax for state references in generated instructions:**
-Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output. Preserve any literal XML or answer tags from the user task, such as <solution>...</solution>, exactly as written.
+Use single curly braces around the state key name. In the examples below, angle brackets (<key_name>) are used for illustration; you MUST use curly braces in your actual output. Preserve literal markup only when it is part of the actual task content.
 
 ---
 
@@ -461,9 +479,10 @@ Use single curly braces around the state key name. In the examples below, angle 
 5. **Every agent** must have a unique `name` and a unique `output_key`.
 6. **Only reference MCP tools** that appear in the AVAILABLE MCP TOOLS list above. Never invent tools.
 7. **Instructions must include state references** using curly braces around the state key name, so agents can read concise upstream outputs.
-8. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and follow-up in a `sequential` node.
-9. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
-10. Use `code-agent` when iterative Python execution materially helps with calculations or structured files; keep it with the relevant specialist and use `document` for document retrieval.
+8. Include final formatting only through the designated terminal answer stage, never in intermediate worker instructions.
+9. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and follow-up in a `sequential` node.
+10. **Prefer lightweight web tools first.** For GitHub, Wikipedia, documentation, and static web lookup tasks, prefer `websearch-searxng` or `web-scraping` when available. Use `browser-usage` only when interactive page navigation is required.
+11. Use `code-agent` when iterative Python execution materially helps with calculations or structured files; keep it with the relevant specialist and use `document` for document retrieval.
 
 ---
 
@@ -475,16 +494,18 @@ Use single curly braces around the state key name. In the examples below, angle 
   "agents": [
     {
       "name": "researcher",
-      "instruction": "Research the topic: <user_query>. Gather key facts and findings.",
+      "instruction": "Research the topic: <user_query>. Return JSON with findings and their source URLs.",
       "output_key": "research_result",
       "model": "<model>",
-      "tools": ["download"]
+      "tools": ["download"],
+      "output_contract": {"required_fields": ["findings", "sources"]}
     },
     {
       "name": "writer",
       "instruction": "Write a comprehensive report based on the research: <research_result>",
       "output_key": "report",
-      "model": "<model>"
+      "model": "<model>",
+      "input_requirements": [{"source_key": "research_result", "required_fields": ["findings", "sources"], "purpose": "Use the source-backed findings in the report."}]
     }
   ],
   "pipeline": {
@@ -493,7 +514,8 @@ Use single curly braces around the state key name. In the examples below, angle 
       {"type": "agent", "agent_name": "researcher"},
       {"type": "agent", "agent_name": "writer"}
     ]
-  }
+  },
+  "final_answer_agent": "writer"
 }
 ```
 
@@ -509,7 +531,7 @@ Use single curly braces around the state key name. In the examples below, angle 
     },
     {
       "name": "critic",
-      "instruction": "Review the draft: <draft>. If the quality is satisfactory, call exit_loop. Otherwise, provide specific feedback for improvement.",
+      "instruction": "Review the draft: <draft>. If the quality is satisfactory, call exit_loop and return the final answer. Otherwise, provide specific feedback for improvement.",
       "output_key": "feedback",
       "model": "<model>"
     }
@@ -560,7 +582,8 @@ Use single curly braces around the state key name. In the examples below, angle 
       },
       {"type": "agent", "agent_name": "synthesizer"}
     ]
-  }
+  },
+  "final_answer_agent": "synthesizer"
 }
 ```
 

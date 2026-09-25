@@ -18,6 +18,8 @@ from benchmarks.gaia.run_gaia import (
     _gaia_mcp_servers,
     build_plugins,
     compute_token_summary,
+    extract_answer_from_state,
+    extract_terminal_answer,
     process_task,
     root_cause_summary,
 )
@@ -41,6 +43,7 @@ def _config() -> MAWConfig:
                     "model": "openai/gpt-4o",
                 },
             ],
+            "final_answer_agent": "answerer",
             "pipeline": {
                 "type": "sequential",
                 "children": [
@@ -281,8 +284,16 @@ class _FakeMAW:
         self.total_completion_tokens = 6
         self.elapsed = 1.5
 
-    async def run(self, _query: str, *, timeout: int) -> dict[str, str]:
+    async def run(
+        self,
+        _query: str,
+        *,
+        timeout: int,
+        final_answer_contract: str | None = None,
+    ) -> dict[str, str]:
         assert timeout > 0
+        assert "<solution>" not in _query
+        assert "<solution>" in (final_answer_contract or "")
         return {"final_answer": "<solution>42</solution>"}
 
 
@@ -321,7 +332,14 @@ async def test_generated_config_survives_execution_failure(tmp_path: Path):
             super().__init__(**kwargs)
             self.last_result.state = {"findings": "partial evidence"}
 
-        async def run(self, _query: str, *, timeout: int) -> dict[str, str]:
+        async def run(
+            self,
+            _query: str,
+            *,
+            timeout: int,
+            final_answer_contract: str | None = None,
+        ) -> dict[str, str]:
+            assert "<solution>" in (final_answer_contract or "")
             telemetry = next(
                 plugin
                 for plugin in self._kwargs["plugins"]
@@ -368,7 +386,14 @@ async def test_retries_keep_each_attempt_diagnostics_and_sum_tokens(tmp_path: Pa
             if type(self).calls == 1:
                 self.last_result.state = {"findings": "first attempt partial"}
 
-        async def run(self, _query: str, *, timeout: int) -> dict[str, str]:
+        async def run(
+            self,
+            _query: str,
+            *,
+            timeout: int,
+            final_answer_contract: str | None = None,
+        ) -> dict[str, str]:
+            assert "<solution>" in (final_answer_contract or "")
             telemetry = next(
                 plugin
                 for plugin in self.plugins
@@ -426,3 +451,95 @@ def test_pipeline_wrapper_preserves_underlying_root_cause():
     assert summary["last_exception"] == "RuntimeError"
     assert summary["message"] == "backend unavailable"
     assert summary["wrapper_exception"] == "PipelineExecutionError"
+
+
+def test_gaia_answer_extraction_only_reads_the_configured_terminal_output():
+    state = {
+        "research_findings": "<solution>wrong intermediate value</solution>",
+        "terminal_output": "Reasoning outside the tag. <solution>42</solution>",
+    }
+
+    assert extract_answer_from_state(state) == ""
+    assert extract_terminal_answer(state, "terminal_output") == "42"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("partial_answer", "ground_truth"),
+    [("<solution>wrong</solution>", "42"), ("<solution>42</solution>", "42")],
+)
+async def test_gaia_timeout_never_submits_intermediate_or_matching_partial_answer(
+    tmp_path: Path, partial_answer: str, ground_truth: str
+):
+    class TimedOutMAW(_FakeMAW):
+        async def run(
+            self,
+            _query: str,
+            *,
+            timeout: int,
+            final_answer_contract: str | None = None,
+        ) -> dict[str, str]:
+            self.last_result = PipelineResult(
+                state={"research_findings": partial_answer}, status="timed_out"
+            )
+            return self.last_result.state
+
+    task = SimpleNamespace(
+        task_id="task-timeout",
+        question="Question?",
+        ground_truth=ground_truth,
+        file_path=None,
+        file_name=None,
+        difficulty="1",
+    )
+    scored: list[str] = []
+    benchmark = SimpleNamespace(
+        is_correct_answer=lambda answer, truth: scored.append(answer) or answer == truth
+    )
+    with (
+        patch("benchmarks.gaia.run_gaia.MAW", TimedOutMAW),
+        patch.dict("os.environ", {"FEDOTMAS_GAIA_TASK_ATTEMPTS": "1"}),
+        pytest.raises(RuntimeError, match="status 'timed_out'"),
+    ):
+        await process_task(task, benchmark, tmp_path, enable_langfuse=False)
+
+    artifact = json.loads((tmp_path / "result.json").read_text())
+    attempt = json.loads((tmp_path / "attempts" / "attempt_01.json").read_text())
+    assert scored == []
+    assert artifact["pipeline_status"] == "timed_out"
+    assert artifact["attempt_status"] == "incomplete"
+    assert attempt["session_state"]["research_findings"] == partial_answer
+    assert artifact["response"] == ""
+
+
+@pytest.mark.asyncio
+async def test_outer_gaia_timeout_is_recorded_as_incomplete(tmp_path: Path):
+    class BackstopTimeoutMAW(_FakeMAW):
+        async def run(
+            self,
+            _query: str,
+            *,
+            timeout: int,
+            final_answer_contract: str | None = None,
+        ) -> dict[str, str]:
+            raise TimeoutError("outer execution backstop expired")
+
+    task = SimpleNamespace(
+        task_id="task-backstop-timeout",
+        question="Question?",
+        ground_truth="42",
+        file_path=None,
+        file_name=None,
+        difficulty="1",
+    )
+    with (
+        patch("benchmarks.gaia.run_gaia.MAW", BackstopTimeoutMAW),
+        patch.dict("os.environ", {"FEDOTMAS_GAIA_TASK_ATTEMPTS": "1"}),
+        pytest.raises(TimeoutError, match="backstop expired"),
+    ):
+        await process_task(task, SimpleNamespace(), tmp_path, enable_langfuse=False)
+
+    artifact = json.loads((tmp_path / "result.json").read_text())
+    assert artifact["pipeline_status"] == "timed_out"
+    assert artifact["attempt_status"] == "incomplete"
+    assert artifact["response"] == ""

@@ -107,6 +107,23 @@ class AgentPoolConfig(BaseModel):
         return self
 
 
+class ArtifactContract(BaseModel):
+    """Task-specific fields an agent must retain in its handoff artifact."""
+
+    description: str = ""
+    required_fields: list[str] = []
+    identity_fields: list[str] = []
+
+
+class ArtifactRequirement(BaseModel):
+    """Fields a downstream agent expects from one upstream state artifact."""
+
+    source_key: str
+    required_fields: list[str] = []
+    identity_fields: list[str] = []
+    purpose: str = ""
+
+
 class MAWAgentConfig(BaseModel):
     """Configuration for a single LLM agent."""
 
@@ -116,6 +133,18 @@ class MAWAgentConfig(BaseModel):
     output_key: str
     tools: list[str] = []
     max_output_tokens: int | None = None
+    max_llm_turns: int | None = None
+    output_contract: ArtifactContract | None = None
+    input_requirements: list[ArtifactRequirement] = []
+    research_policy: Literal["independent", "evidence_first", "targeted_recovery"] = (
+        "independent"
+    )
+
+    @model_validator(mode="after")
+    def _validate_turn_limit(self) -> MAWAgentConfig:
+        if self.max_llm_turns is not None and self.max_llm_turns < 1:
+            raise ValueError("max_llm_turns must be >= 1")
+        return self
 
     @model_validator(mode="after")
     def _normalize_fields(self) -> MAWAgentConfig:
@@ -173,6 +202,7 @@ class MAWConfig(BaseModel):
 
     agents: list[MAWAgentConfig]
     pipeline: MAWStepConfig
+    final_answer_agent: str | None = None
 
     def __str__(self) -> str:
         agents_map = {a.name: a.output_key for a in self.agents}
@@ -272,6 +302,42 @@ class MAWConfig(BaseModel):
                 seen_keys.add(a.output_key)
 
         validate_node_refs(self.pipeline, agent_names)
+        if self.final_answer_agent is not None:
+            if self.final_answer_agent not in agent_names:
+                raise ValueError(
+                    f"Unknown final_answer_agent '{self.final_answer_agent}'. "
+                    f"Available: {sorted(agent_names)}"
+                )
+            from fedotmas.maw._validators import _find_terminal_node
+
+            terminal = _find_terminal_node(self.pipeline)
+            if (
+                terminal.type != "agent"
+                or terminal.agent_name != self.final_answer_agent
+            ):
+                raise ValueError(
+                    "final_answer_agent must be the pipeline's terminal agent"
+                )
+        for agent in self.agents:
+            for requirement in agent.input_requirements:
+                if requirement.source_key not in state_keys:
+                    raise ValueError(
+                        f"Agent '{agent.name}' requires unknown state key "
+                        f"'{requirement.source_key}'"
+                    )
+            required_identity = {
+                field
+                for requirement in agent.input_requirements
+                for field in requirement.identity_fields
+            }
+            if required_identity and (
+                agent.output_contract is None
+                or not required_identity.issubset(agent.output_contract.identity_fields)
+            ):
+                raise ValueError(
+                    f"Agent '{agent.name}' must include upstream identity fields "
+                    f"{sorted(required_identity)} in its output_contract"
+                )
         warn_unused_agents(self.pipeline, agent_names)
         warn_terminal_parallel(self.pipeline)
 

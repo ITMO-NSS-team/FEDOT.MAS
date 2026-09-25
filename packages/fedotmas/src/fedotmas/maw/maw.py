@@ -39,9 +39,18 @@ class MAW(BaseMAS[MAWConfig]):
         result = await maw.build_and_run(config, "Research quantum computing trends")
     """
 
-    def __init__(self, *, two_stage: bool = True, **kwargs) -> None:
+    def __init__(
+        self,
+        *,
+        two_stage: bool = True,
+        max_agent_llm_turns: int | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._two_stage = two_stage
+        if max_agent_llm_turns is not None and max_agent_llm_turns < 1:
+            raise ValueError("max_agent_llm_turns must be >= 1")
+        self._max_agent_llm_turns = max_agent_llm_turns
         self._generated_config: MAWConfig | None = None
 
     @property
@@ -209,18 +218,43 @@ class MAW(BaseMAS[MAWConfig]):
             elapsed=result.elapsed if result else 0.0,
         )
 
-    def build(self, config: MAWConfig, *, autonomous: bool = True) -> BaseAgent:
+    def build(
+        self,
+        config: MAWConfig,
+        *,
+        autonomous: bool = True,
+        final_answer_contract: str | None = None,
+    ) -> BaseAgent:
         """Build an ADK agent tree from *config*."""
         self._reject_external_build()
+        if final_answer_contract and config.final_answer_agent is None:
+            raise ValueError(
+                "A final_answer_contract requires MAWConfig.final_answer_agent"
+            )
         _log.info("Building agent tree")
         agent = build(
             config,
             mcp_registry=self._mcp_registry,
             worker_models=self._worker_map(),
             autonomous=autonomous,
+            final_answer_contract=final_answer_contract,
+            max_agent_llm_turns=self._max_agent_llm_turns,
         )
         _log.info("Config:\n{}", config)
         return agent
+
+    def _build_agent(
+        self,
+        config: MAWConfig,
+        *,
+        autonomous: bool,
+        final_answer_contract: str | None,
+    ) -> BaseAgent:
+        return self.build(
+            config,
+            autonomous=autonomous,
+            final_answer_contract=final_answer_contract,
+        )
 
 
 def _pool_for_prompt(pool: AgentPoolConfig) -> AgentPoolConfig:
