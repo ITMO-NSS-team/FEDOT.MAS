@@ -351,7 +351,7 @@ def _restore_external_agents(config: MAWConfig, pool: AgentPoolConfig) -> MAWCon
 
 
 def _drop_generated_token_budgets(config: MAWConfig) -> None:
-    """Clear ``max_output_tokens`` on a freshly generated config.
+    """Clear meta-generated limits and invalid evidence policies.
 
     ``maw_prompts.py`` never asks for the field, so a value arriving in it is
     the meta-agent filling in the JSON schema, not sizing the step.  Treating
@@ -363,12 +363,26 @@ def _drop_generated_token_budgets(config: MAWConfig) -> None:
     explicit cap means what it says.
     """
     for agent in config.agents:
-        if agent.max_output_tokens is None:
-            continue
-        _log.warning(
-            "Dropping generated max_output_tokens for '{}' ({}): nothing asked "
-            "the meta-agent for this number; using the provider default",
-            agent.name,
-            agent.max_output_tokens,
-        )
-        agent.max_output_tokens = None
+        if agent.max_llm_turns is not None:
+            _log.warning(
+                "Dropping generated max_llm_turns for '{}' ({}): "
+                "GAIA/runtime policy owns worker turn limits",
+                agent.name,
+                agent.max_llm_turns,
+            )
+            agent.max_llm_turns = None
+        if agent.max_output_tokens is not None:
+            _log.warning(
+                "Dropping generated max_output_tokens for '{}' ({}): nothing asked "
+                "the meta-agent for this number; using the provider default",
+                agent.name,
+                agent.max_output_tokens,
+            )
+            agent.max_output_tokens = None
+        if agent.research_policy == "evidence_first" and not agent.input_requirements:
+            _log.warning(
+                "Changing generated research_policy for '{}' from evidence_first "
+                "to independent: no upstream inputs",
+                agent.name,
+            )
+            agent.research_policy = "independent"

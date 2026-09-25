@@ -14,6 +14,7 @@ from fedotmas.plugins import ResearchTelemetry
 from benchmarks.gaia.run_gaia import (
     GAIA_BASE_MCP_SERVERS,
     _attempt_diagnostics,
+    _gaia_max_agent_llm_turns,
     _gaia_mcp_registry,
     _gaia_mcp_servers,
     build_plugins,
@@ -166,9 +167,30 @@ def test_gaia_mcp_server_override_is_preserved(monkeypatch: pytest.MonkeyPatch):
     assert _gaia_mcp_servers() == ["download", "browser-agent"]
 
 
+def test_gaia_research_budget_defaults(monkeypatch: pytest.MonkeyPatch):
+    for name in (
+        "FEDOTMAS_GAIA_MAX_AGENT_LLM_TURNS",
+        "FEDOTMAS_GAIA_WEB_SEARCH_LIMIT",
+        "FEDOTMAS_GAIA_WEB_TOOL_LIMIT",
+        "FEDOTMAS_GAIA_BROWSER_AGENT_LIMIT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    plugins = build_plugins(SimpleNamespace(), enable_langfuse=False)
+    budgets = {
+        plugin.budget_kind: plugin.max_calls_per_agent
+        for plugin in plugins
+        if hasattr(plugin, "budget_kind")
+    }
+    assert _gaia_max_agent_llm_turns() == 12
+    assert budgets["search"] == 25
+    assert budgets["scraping"] == 25
+    assert budgets["browser_agent"] == 8
+
+
 @pytest.mark.asyncio
 async def test_gaia_browser_limit_is_per_agent_and_uses_budget_control(monkeypatch):
-    monkeypatch.delenv("FEDOTMAS_GAIA_BROWSER_AGENT_LIMIT", raising=False)
+    monkeypatch.setenv("FEDOTMAS_GAIA_BROWSER_AGENT_LIMIT", "3")
     plugins = build_plugins(SimpleNamespace(), enable_langfuse=False)
     limit = next(
         plugin

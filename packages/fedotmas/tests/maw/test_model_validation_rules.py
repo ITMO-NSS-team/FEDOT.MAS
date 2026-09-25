@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from fedotmas.maw.maw import (
     _drop_generated_token_budgets,
 )
@@ -14,6 +12,7 @@ from fedotmas.maw.models import (
     MAWConfig,
     MAWStepConfig,
 )
+from pydantic import ValidationError
 
 
 class TestDuplicateAgentNames:
@@ -259,3 +258,23 @@ class TestGeneratedTokenBudget:
         _drop_generated_token_budgets(config)
 
         assert config.agents[0].max_output_tokens is None
+
+    def test_generated_turn_limit_is_discarded(self):
+        config = self._config(None)
+        config.agents[0].max_llm_turns = 4
+        _drop_generated_token_budgets(config)
+
+        assert config.agents[0].max_llm_turns is None
+
+    def test_handwritten_turn_limit_is_preserved_without_generated_cleanup(self):
+        config = self._config(None)
+        config.agents[0].max_llm_turns = 4
+
+        assert config.agents[0].max_llm_turns == 4
+
+    def test_evidence_first_without_inputs_becomes_independent(self):
+        config = self._config(None)
+        config.agents[0].research_policy = "evidence_first"
+        _drop_generated_token_budgets(config)
+
+        assert config.agents[0].research_policy == "independent"

@@ -182,6 +182,10 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _gaia_max_agent_llm_turns() -> int:
+    return _env_int("FEDOTMAS_GAIA_MAX_AGENT_LLM_TURNS", 12)
+
+
 def _env_list(name: str) -> list[str] | None:
     value = os.getenv(name)
     if not value:
@@ -589,11 +593,11 @@ def build_plugins(task, enable_langfuse: bool) -> list:
             name="fedotmas_gaia_agent_context_budget",
         ),
         WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 10),
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 25),
             telemetry=telemetry,
         ),
         WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 12),
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 25),
             tool_names=GAIA_WEB_SCRAPING_TOOL_NAMES,
             count_unique_urls=True,
             same_url_exempt_tool_names={"eval", "evaluate", "links", "status"},
@@ -603,7 +607,7 @@ def build_plugins(task, enable_langfuse: bool) -> list:
             name="fedotmas_gaia_web_tool_limit",
         ),
         WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_BROWSER_AGENT_LIMIT", 3),
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_BROWSER_AGENT_LIMIT", 8),
             tool_names={"complete_browser_task"},
             telemetry=telemetry,
             budget_kind="browser_agent",
@@ -924,7 +928,7 @@ async def _process_task_attempt(
             worker_models=[worker_model],
             plugins=plugins,
             max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
-            max_agent_llm_turns=_env_int("FEDOTMAS_GAIA_MAX_AGENT_LLM_TURNS", 8),
+            max_agent_llm_turns=_gaia_max_agent_llm_turns(),
             two_stage=False,
         )
         task_timeout = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 600)
