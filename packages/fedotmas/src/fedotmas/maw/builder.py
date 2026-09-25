@@ -37,6 +37,7 @@ from fedotmas.maw.handoffs import (
 )
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.mcp import MCPServerConfig, create_toolset
+from fedotmas.plugins._research_telemetry import RESEARCH_GATE_STATE_KEY
 
 type AgentTree = BaseAgent
 
@@ -236,9 +237,12 @@ async def _repair_contract_once(
         "Exact upstream identity values: "
         f"{json.dumps(upstream_identity_values, ensure_ascii=False, default=str)}. "
         f"Keys currently missing or invalid: {json.dumps(missing)}.\n"
-        "Map only information explicitly present in the previous output. Do not "
-        "invent facts, evidence, sources, or identity values. If a required value "
-        "is absent, leave it absent or null. Additional fields are allowed.\n"
+        "Map only information explicitly present in the previous output. "
+        "Do not invent facts, evidence, sources, or identity values. "
+        "If a required top-level value appears under one unambiguous nested key "
+        "with the same semantic name, you may copy that existing value upward. "
+        "Never replace a required top-level value that is already present and valid. "
+        "If a required value is absent, leave it absent or null. Additional fields are allowed.\n"
         "Previous output:\n"
         f"{previous}"
     )
@@ -307,20 +311,49 @@ def _repair_values_supported(
         for field, value in identity.items():
             upstream_by_field.setdefault(field, []).append(value)
     for field in fields:
+        if field in source and not _is_blank(source[field]) and result.get(field) != source[field]:
+            invalid.append(field)
+            continue
         if field not in result or _is_blank(result[field]):
             continue
-        source_fields = [
-            old_field
-            for old_field, old_value in source.items()
-            if old_value == result[field]
-            and (
-                old_field == field
-                or (
-                    field not in cfg.output_contract.identity_fields
-                    and key_tokens(old_field) & key_tokens(field)
+        if field in source and source[field] == result[field]:
+            source_fields = [field]
+        else:
+            source_fields = [
+                old_field
+                for old_field, old_value in source.items()
+                if old_value == result[field]
+                and (
+                    old_field == field
+                    or (
+                        field not in cfg.output_contract.identity_fields
+                        and key_tokens(old_field) & key_tokens(field)
+                    )
                 )
-            )
-        ]
+            ]
+            if not source_fields and field not in cfg.output_contract.identity_fields:
+                nested = []
+
+                def collect(value: Any, semantic_field: str, found: list[Any]) -> None:
+                    if isinstance(value, dict):
+                        for key, item in value.items():
+                            if (
+                                isinstance(key, str)
+                                and key_tokens(key) & key_tokens(semantic_field)
+                            ):
+                                found.append(item)
+                            collect(item, semantic_field, found)
+                    elif isinstance(value, list):
+                        for item in value:
+                            collect(item, semantic_field, found)
+
+                collect(source, field, nested)
+                if (
+                    nested
+                    and all(item == nested[0] for item in nested)
+                    and nested[0] == result[field]
+                ):
+                    source_fields = [field]
         if not source_fields:
             invalid.append(field)
             continue
@@ -718,7 +751,17 @@ def _build_llm_agent(
                     )
 
     async def before_tool(tool, args, tool_context) -> dict | None:
-        del args
+        if _is_discovery_tool(tool):
+            gate_root = tool_context.state.get(RESEARCH_GATE_STATE_KEY)
+            gate = gate_root.get(cfg.name) if isinstance(gate_root, dict) else None
+            pending = gate.get("pending_urls", []) if isinstance(gate, dict) else []
+            if gate and gate.get("gated") and not _is_targeted_recovery_query(args, pending):
+                return {
+                    "isError": True,
+                    "error_code": "INSPECT_CANDIDATES_FIRST",
+                    "error": "Broad discovery is paused. Inspect one of these candidates first: "
+                    + json.dumps(pending),
+                }
         if cfg.research_policy != "evidence_first":
             return None
         if _is_discovery_tool(tool):
@@ -769,6 +812,38 @@ def _build_llm_agent(
                         "available. Verify against the supplied artifact; identify any "
                         "missing evidence as unresolved."
                     )
+                ]
+            )
+        gate_root = state.get(RESEARCH_GATE_STATE_KEY)
+        gate = gate_root.get(cfg.name) if isinstance(gate_root, dict) else None
+        if isinstance(gate, dict) and gate.get("gated"):
+            candidates = gate.get("pending_urls", [])
+            discovery_names = {
+                name
+                for name, tool in llm_request.tools_dict.items()
+                if _is_discovery_tool(tool)
+            }
+            if discovery_names:
+                retained = []
+                for group in llm_request.config.tools or []:
+                    declarations = group.function_declarations
+                    if declarations is None:
+                        retained.append(group)
+                        continue
+                    group.function_declarations = [
+                        declaration
+                        for declaration in declarations
+                        if declaration.name not in discovery_names
+                    ]
+                    if group.function_declarations:
+                        retained.append(group)
+                llm_request.config.tools = retained
+            llm_request.append_instructions(
+                [
+                    "Discovery is paused until at least one pending candidate has "
+                    "been inspected. Inspect one of these URLs, including a failed "
+                    "inspection, before searching again: "
+                    + json.dumps(candidates)
                 ]
             )
         metadata = state.get(EXECUTION_METADATA_KEY)
@@ -829,6 +904,22 @@ def _is_discovery_tool(tool: Any) -> bool:
             for word in ("web", "internet", "search", "query")
         )
     return name.endswith("_search") or name.startswith("search_")
+
+
+def _is_targeted_recovery_query(args: dict[str, Any], pending: list[str]) -> bool:
+    query = args.get("query")
+    if not isinstance(query, str):
+        return False
+    query = query.casefold()
+    for url in pending:
+        if not isinstance(url, str):
+            continue
+        from urllib.parse import urlsplit
+
+        host = (urlsplit(url).hostname or "").casefold().removeprefix("www.")
+        if host and host in query:
+            return True
+    return False
 
 
 def _inject_exit_loop(children: list[BaseAgent]) -> None:

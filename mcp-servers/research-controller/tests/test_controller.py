@@ -57,6 +57,61 @@ def test_recommendations_have_structured_action_and_reason():
     assert result["guidance"]
 
 
+def test_malformed_pending_recommendation_missing_action_is_reset_safely():
+    controller = ResearchController()
+    snapshot = _update(controller, unresolved_questions=["What remains unknown?"])
+    snapshot["telemetry"]["pending_recommendation"] = {
+        "id": 1,
+        "searches_before": 0,
+    }
+
+    result = controller.get_next_action(snapshot)
+
+    assert result["action"] in {
+        "continue_search",
+        "change_strategy",
+        "strategy_blocked",
+        "synthesize",
+    }
+    pending = result["research_state"]["telemetry"]["pending_recommendation"]
+    assert pending["action"] == result["action"]
+    assert pending["id"] == 1
+
+
+def test_malformed_recommendation_history_is_discarded_without_crashing():
+    controller = ResearchController()
+    snapshot = _update(controller, unresolved_questions=["What remains unknown?"])
+    snapshot["telemetry"]["pending_recommendation"] = {
+        "id": 1,
+        "action": [],
+    }
+    snapshot["telemetry"]["recommendations"] = [
+        {"action": "continue_search", "searches_before": 0},
+        {
+            "id": 2,
+            "action": "not-a-controller-action",
+            "searches_before": 0,
+        },
+    ]
+    snapshot["telemetry"]["intervention_outcomes"] = [{"followed": True}]
+
+    result = controller.get_next_action(snapshot)
+
+    telemetry = result["research_state"]["telemetry"]
+    assert telemetry["pending_recommendation"]["action"] == result["action"]
+    assert telemetry["recommendations"] == [
+        {
+            "id": 1,
+            "action": result["action"],
+            "reason": result["reason"],
+            "searches_before": 0,
+            "searches_after": None,
+            "followed": None,
+        }
+    ]
+    assert telemetry["intervention_outcomes"] == []
+
+
 def test_similar_queries_escalate_from_change_strategy_to_strategy_blocked():
     controller = ResearchController()
     snapshot = _update(

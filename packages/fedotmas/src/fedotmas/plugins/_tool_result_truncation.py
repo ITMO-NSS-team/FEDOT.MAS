@@ -68,20 +68,30 @@ class ToolResultTruncationPlugin(BasePlugin):
         if active_chars() <= self.max_agent_total_chars:
             return
 
-        # Compact older responses, preserving source identifiers and URLs.
-        for response in responses[:-1]:
-            response.response = _compact_metadata(response.response)
+        latest_state_response = next(
+            (
+                index
+                for index in range(len(responses) - 1, -1, -1)
+                if _has_research_state(responses[index].response)
+            ),
+            None,
+        )
+        # Compact older evidence but retain the latest controller snapshot.
+        for index, response in enumerate(responses[:-1]):
+            if index != latest_state_response:
+                response.response = _compact_metadata(response.response)
         # Reserve most active context for the newest payload while keeping some
         # compact source metadata for older evidence.
         metadata_limit = max(1, self.max_agent_total_chars // 3)
-        for response in responses[:-1]:
+        for index, response in enumerate(responses[:-1]):
             older_chars = sum(
                 len(json.dumps(item.response, ensure_ascii=False, default=str))
                 for item in responses[:-1]
             )
             if older_chars <= metadata_limit:
                 break
-            response.response = {}
+            if index != latest_state_response:
+                response.response = {}
         newest = responses[-1]
         if active_chars() > self.max_agent_total_chars:
             older_chars = active_chars() - len(
@@ -91,10 +101,11 @@ class ToolResultTruncationPlugin(BasePlugin):
                 newest.response,
                 max(1, self.max_agent_total_chars - older_chars - 10),
             )
-        for response in responses[:-1]:
+        for index, response in enumerate(responses[:-1]):
             if active_chars() <= self.max_agent_total_chars:
                 break
-            response.response = {}
+            if index != latest_state_response:
+                response.response = {}
 
     async def after_tool_callback(
         self,
@@ -164,6 +175,9 @@ def _truncate_value(value: Any, max_chars: int) -> tuple[Any, bool]:
         changed = False
         result = {}
         for key, item in value.items():
+            if str(key).casefold() == "research_state":
+                result[key] = deepcopy(item)
+                continue
             truncated, item_changed = _truncate_value(item, max_chars)
             result[key] = truncated
             changed = changed or item_changed
@@ -179,17 +193,23 @@ def _truncate_total(value: Any, limit: int) -> tuple[Any, bool]:
     result = deepcopy(value)
     changed = False
     while len(json.dumps(result, ensure_ascii=False, default=str)) > limit:
-        lists = _containers(result, list)
+        lists = _ordinary_containers(result, list)
         nonempty = [items for items in lists if len(items) > 1]
         if nonempty:
             # Keep the newest list entry where possible.
             max(nonempty, key=lambda items: len(json.dumps(items, default=str))).pop(0)
             changed = True
             continue
-        strings = _string_slots(result)
+        strings = _ordinary_string_slots(result)
         if not strings:
-            dictionaries = [item for item in _containers(result, dict) if item]
+            dictionaries = [
+                item
+                for item in _ordinary_containers(result, dict)
+                if any(str(key).casefold() != "research_state" for key in item)
+            ]
             if not dictionaries:
+                if _has_research_state(result):
+                    return result, True
                 return (0 if limit == 1 else {}), True
             container = max(
                 dictionaries,
@@ -206,8 +226,23 @@ def _truncate_total(value: Any, limit: int) -> tuple[Any, bool]:
                 "snippet",
                 "text",
             }
-            removable = [key for key in container if str(key).lower() not in keep]
-            del container[removable[-1] if removable else next(reversed(container))]
+            removable = [
+                key
+                for key in container
+                if str(key).lower() not in keep
+                and str(key).casefold() != "research_state"
+            ]
+            if not removable:
+                removable = [
+                    key
+                    for key in container
+                    if str(key).casefold() != "research_state"
+                ]
+                if not removable and _has_research_state(result):
+                    return result, True
+                if not removable:
+                    removable = list(container)
+            del container[removable[-1]]
             changed = True
             continue
         container, key = max(strings, key=lambda slot: len(slot[0][slot[1]]))
@@ -223,26 +258,45 @@ def _truncate_total(value: Any, limit: int) -> tuple[Any, bool]:
     return result, changed
 
 
-def _containers(value: Any, kind: type) -> list[Any]:
+def _has_research_state(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(
+            str(key).casefold() == "research_state" or _has_research_state(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_has_research_state(item) for item in value)
+    return False
+
+
+def _ordinary_containers(value: Any, kind: type) -> list[Any]:
     found = [value] if isinstance(value, kind) else []
     if isinstance(value, dict):
-        for item in value.values():
-            found.extend(_containers(item, kind))
+        for key, item in value.items():
+            if str(key).casefold() != "research_state":
+                found.extend(_ordinary_containers(item, kind))
     elif isinstance(value, list):
         for item in value:
-            found.extend(_containers(item, kind))
+            found.extend(_ordinary_containers(item, kind))
     return found
 
 
-def _string_slots(value: Any) -> list[tuple[Any, Any]]:
+def _ordinary_string_slots(value: Any) -> list[tuple[Any, Any]]:
     found: list[tuple[Any, Any]] = []
-    if isinstance(value, (dict, list)):
-        items = value.items() if isinstance(value, dict) else enumerate(value)
-        for key, item in items:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).casefold() == "research_state":
+                continue
             if isinstance(item, str):
                 found.append((value, key))
             else:
-                found.extend(_string_slots(item))
+                found.extend(_ordinary_string_slots(item))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            if isinstance(item, str):
+                found.append((value, index))
+            else:
+                found.extend(_ordinary_string_slots(item))
     return found
 
 

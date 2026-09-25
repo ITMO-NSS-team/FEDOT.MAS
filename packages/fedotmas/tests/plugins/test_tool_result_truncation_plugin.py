@@ -212,6 +212,83 @@ class TestToolResultTruncationPlugin:
         assert all("content" not in response for response in compacted)
 
     @pytest.mark.asyncio
+    async def test_rolling_compaction_preserves_controller_research_state(self):
+        plugin = ToolResultTruncationPlugin(
+            max_string_chars=500,
+            max_total_chars=1000,
+            aggregate_tool_names={"*"},
+            max_agent_total_chars=500,
+        )
+        research_state = {
+            "research_id": "workstream-1",
+            "telemetry": {
+                "pending_recommendation": {
+                    "id": 4,
+                    "action": "continue_search",
+                    "searches_before": 3,
+                }
+            },
+        }
+        latest = await plugin.after_tool_callback(
+            tool=_tool("get_next_action"),
+            tool_args={},
+            tool_context=_tool_context(),
+            result={
+                "action": "continue_search",
+                "guidance": "x" * 800,
+                "research_state": research_state,
+                "results": [{"content": "old evidence " * 80}],
+            },
+        )
+        assert latest is not None
+        assert latest["research_state"] == research_state
+
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_function_response(
+                        name="search",
+                        response={"url": f"https://example.org/{i}", "content": "z" * 900},
+                    )
+                ],
+            )
+            for i in range(5)
+        ]
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_function_response(
+                        name="get_next_action", response=latest
+                    )
+                ],
+            )
+        )
+        request = LlmRequest(contents=contents)
+
+        await plugin.before_model_callback(
+            callback_context=SimpleNamespace(), llm_request=request
+        )
+
+        responses = [
+            part.function_response.response
+            for content in request.contents
+            for part in content.parts or []
+            if part.function_response is not None
+        ]
+        active_chars = sum(len(json.dumps(response)) for response in responses)
+        pending = responses[-1]["research_state"]["telemetry"][
+            "pending_recommendation"
+        ]
+        assert active_chars <= 500
+        assert pending == {
+            "id": 4,
+            "action": "continue_search",
+            "searches_before": 3,
+        }
+
+    @pytest.mark.asyncio
     async def test_truncates_nested_strings(self):
         plugin = ToolResultTruncationPlugin(max_string_chars=5)
 

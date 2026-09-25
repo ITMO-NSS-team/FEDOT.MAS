@@ -15,6 +15,9 @@ MAX_TEXT_CHARS = 240
 MAX_QUERY_EVENTS = 50
 MAX_TELEMETRY_EVENTS = 50
 MAX_SEARCHES = 12
+_RECOMMENDATION_ACTIONS = frozenset(
+    {"continue_search", "change_strategy", "strategy_blocked", "synthesize"}
+)
 
 _STOP_WORDS = {
     "a",
@@ -263,15 +266,33 @@ def _load_state(
     for name in _LIST_FIELDS:
         state[name] = _strings(state.get(name, []))
     state["failed_approaches"] = state["failed_approaches"][-MAX_ITEMS:]
-    state["search_intents"] = [
-        profile
-        for profile in state.get("search_intents", [])
-        if isinstance(profile, dict) and profile.get("terms")
-    ][-MAX_QUERY_EVENTS:]
-    state["search_count"] = max(0, int(state.get("search_count", 0)))
-    state["failed_attempt_count"] = max(0, int(state.get("failed_attempt_count", 0)))
+    raw_intents = state.get("search_intents")
+    state["search_intents"] = (
+        [
+            {
+                "terms": _strings(profile.get("terms")),
+                "entities": _strings(profile.get("entities")),
+            }
+            for profile in raw_intents
+            if isinstance(profile, dict) and _strings(profile.get("terms"))
+        ][-MAX_QUERY_EVENTS:]
+        if isinstance(raw_intents, list)
+        else []
+    )
+    state["search_count"] = _nonnegative_int(state.get("search_count"))
+    state["failed_attempt_count"] = _nonnegative_int(
+        state.get("failed_attempt_count")
+    )
     strategies = state.get("failed_strategy_counts", {})
-    state["failed_strategy_counts"] = strategies if isinstance(strategies, dict) else {}
+    state["failed_strategy_counts"] = (
+        {
+            key: _nonnegative_int(value)
+            for key, value in strategies.items()
+            if isinstance(key, str)
+        }
+        if isinstance(strategies, dict)
+        else {}
+    )
     telemetry = deepcopy(_TELEMETRY_DEFAULTS)
     existing_telemetry = state.get("telemetry")
     if isinstance(existing_telemetry, dict):
@@ -284,18 +305,14 @@ def _load_state(
         "unfollowed_recommendations",
         "unknown_follow_through",
     ):
-        telemetry[field] = max(0, int(telemetry[field]))
-    for field in ("recommendations", "intervention_outcomes"):
-        events = telemetry[field]
-        telemetry[field] = (
-            [event for event in events if isinstance(event, dict)][
-                -MAX_TELEMETRY_EVENTS:
-            ]
-            if isinstance(events, list)
-            else []
-        )
-    if not isinstance(telemetry["pending_recommendation"], dict):
-        telemetry["pending_recommendation"] = None
+        telemetry[field] = _nonnegative_int(telemetry[field])
+    events = telemetry.get("recommendations")
+    telemetry["recommendations"] = _sanitize_recommendations(events)
+    outcomes = telemetry.get("intervention_outcomes")
+    telemetry["intervention_outcomes"] = _sanitize_outcomes(outcomes)
+    telemetry["pending_recommendation"] = _sanitize_pending_recommendation(
+        telemetry.get("pending_recommendation")
+    )
     state["telemetry"] = telemetry
     return state
 
@@ -358,10 +375,34 @@ def _evidence_is_sufficient(state: dict[str, Any]) -> bool:
 
 
 def _finish_recommendation(state: dict[str, Any], followed: bool | None) -> None:
-    telemetry = state["telemetry"]
-    pending = telemetry.get("pending_recommendation")
+    if followed is not None and not isinstance(followed, bool):
+        followed = None
+    telemetry = state.get("telemetry")
+    if not isinstance(telemetry, dict):
+        telemetry = deepcopy(_TELEMETRY_DEFAULTS)
+        state["telemetry"] = telemetry
+    pending = _sanitize_pending_recommendation(
+        telemetry.get("pending_recommendation")
+    )
+    telemetry["pending_recommendation"] = pending
     if not pending:
         return
+    telemetry["recommendations"] = _sanitize_recommendations(
+        telemetry.get("recommendations")
+    )
+    telemetry["intervention_outcomes"] = _sanitize_outcomes(
+        telemetry.get("intervention_outcomes")
+    )
+    for field in (
+        "controller_calls",
+        "recommendation_count",
+        "strategy_blocked_events",
+        "followed_recommendations",
+        "unfollowed_recommendations",
+        "unknown_follow_through",
+    ):
+        telemetry[field] = _nonnegative_int(telemetry.get(field))
+    state["search_count"] = _nonnegative_int(state.get("search_count"))
     outcome = {
         "recommendation_id": pending["id"],
         "action": pending["action"],
@@ -385,6 +426,103 @@ def _finish_recommendation(state: dict[str, Any], followed: bool | None) -> None
     }[followed]
     telemetry[counter] += 1
     telemetry["pending_recommendation"] = None
+
+
+def _nonnegative_int(value: Any, *, minimum: int = 0) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= minimum:
+        return value
+    return 0
+
+
+def _sanitize_pending_recommendation(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    recommendation_id = value.get("id")
+    action = value.get("action")
+    searches_before = value.get("searches_before")
+    if (
+        _nonnegative_int(recommendation_id, minimum=1) == 0
+        or not isinstance(action, str)
+        or action not in _RECOMMENDATION_ACTIONS
+        or _nonnegative_int(searches_before) != searches_before
+    ):
+        return None
+    return {
+        "id": recommendation_id,
+        "action": action,
+        "searches_before": searches_before,
+    }
+
+
+def _sanitize_recommendations(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    events = []
+    for event in value:
+        if not isinstance(event, dict):
+            continue
+        recommendation_id = event.get("id")
+        action = event.get("action")
+        searches_before = event.get("searches_before")
+        if (
+            _nonnegative_int(recommendation_id, minimum=1) == 0
+            or not isinstance(action, str)
+            or action not in _RECOMMENDATION_ACTIONS
+            or _nonnegative_int(searches_before) != searches_before
+        ):
+            continue
+        searches_after = event.get("searches_after")
+        if searches_after is not None and _nonnegative_int(searches_after) != searches_after:
+            searches_after = None
+        followed = event.get("followed")
+        if followed is not None and not isinstance(followed, bool):
+            followed = None
+        events.append(
+            {
+                "id": recommendation_id,
+                "action": action,
+                "reason": event.get("reason")
+                if isinstance(event.get("reason"), str)
+                else "",
+                "searches_before": searches_before,
+                "searches_after": searches_after,
+                "followed": followed,
+            }
+        )
+    return events[-MAX_TELEMETRY_EVENTS:]
+
+
+def _sanitize_outcomes(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    outcomes = []
+    for event in value:
+        if not isinstance(event, dict):
+            continue
+        recommendation_id = event.get("recommendation_id")
+        action = event.get("action")
+        searches_before = event.get("searches_before")
+        searches_after = event.get("searches_after")
+        followed = event.get("followed")
+        if (
+            _nonnegative_int(recommendation_id, minimum=1) == 0
+            or not isinstance(action, str)
+            or action not in _RECOMMENDATION_ACTIONS
+            or _nonnegative_int(searches_before) != searches_before
+            or _nonnegative_int(searches_after) != searches_after
+            or (followed is not None and not isinstance(followed, bool))
+        ):
+            continue
+        outcomes.append(
+            {
+                "recommendation_id": recommendation_id,
+                "action": action,
+                "searches_before": searches_before,
+                "searches_after": searches_after,
+                "followed": followed,
+            }
+        )
+    return outcomes[-MAX_TELEMETRY_EVENTS:]
 
 
 def _counts(state: dict[str, Any]) -> dict[str, int]:

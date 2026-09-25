@@ -74,7 +74,53 @@ def _contract_config() -> MAWConfig:
     )
 
 
-def test_nonterminal_identity_consumer_must_propagate_identity():
+def test_maw_config_autofills_multiple_upstream_identity_fields():
+    consumer = MAWAgentConfig(
+        name="consumer",
+        instruction="Use input",
+        output_key="out",
+        input_requirements=[
+            ArtifactRequirement(source_key="up_a", identity_fields=["title"]),
+            ArtifactRequirement(source_key="up_b", identity_fields=["date", "title"]),
+        ],
+        output_contract=ArtifactContract(required_fields=["finding"]),
+    )
+    upstream = [
+        MAWAgentConfig(name="a", instruction="", output_key="up_a"),
+        MAWAgentConfig(name="b", instruction="", output_key="up_b"),
+    ]
+    terminal = MAWAgentConfig(name="terminal", instruction="", output_key="answer")
+    config = MAWConfig(agents=[*upstream, consumer, terminal], pipeline=MAWStepConfig(
+        type="sequential", children=[MAWStepConfig(type="agent", agent_name="a"),
+            MAWStepConfig(type="agent", agent_name="b"), MAWStepConfig(type="agent", agent_name="consumer"),
+            MAWStepConfig(type="agent", agent_name="terminal")]
+    ))
+    assert config.agents[2].output_contract.identity_fields == ["date", "title"]
+
+
+def test_maw_config_preserves_correct_identity_contract_and_terminal_exemption():
+    existing = ArtifactContract(required_fields=["finding"], identity_fields=["id"])
+    consumer = MAWAgentConfig(
+        name="consumer", instruction="", output_key="out",
+        input_requirements=[ArtifactRequirement(source_key="out", identity_fields=["id"])],
+        output_contract=existing,
+    )
+    config = MAWConfig(
+        agents=[consumer], pipeline=MAWStepConfig(type="agent", agent_name="consumer")
+    )
+    assert config.agents[0].output_contract.identity_fields == ["id"]
+
+    terminal = MAWAgentConfig(
+        name="terminal", instruction="", output_key="answer",
+        input_requirements=[ArtifactRequirement(source_key="answer", identity_fields=["id"])],
+    )
+    terminal_config = MAWConfig(
+        agents=[terminal], pipeline=MAWStepConfig(type="agent", agent_name="terminal")
+    )
+    assert terminal_config.agents[0].output_contract is None
+
+
+def test_nonterminal_identity_consumer_is_normalized_before_validation():
     config = _contract_config().model_copy(
         deep=True,
         update={
@@ -97,8 +143,8 @@ def test_nonterminal_identity_consumer_must_propagate_identity():
     )
     config.agents[1].output_contract = None
 
-    with pytest.raises(ValueError, match="must include upstream identity fields"):
-        MAWConfig.model_validate(config.model_dump())
+    normalized = MAWConfig.model_validate(config.model_dump())
+    assert normalized.agents[1].output_contract.identity_fields == ["paper_identity"]
 
 
 @pytest.mark.parametrize("explicit", [True, False])
@@ -765,6 +811,81 @@ async def test_contract_repair_accepts_semantic_key_remapping(monkeypatch):
     assert state["_fedotmas_execution"]["contract_repairs"]["producer"][-1] == {
         "status": "format_repair_succeeded"
     }
+
+
+@pytest.mark.asyncio
+async def test_contract_repair_copies_unambiguous_nested_value_and_preserves_valid_fields(monkeypatch):
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[types.Content(role="model", parts=[types.Part.from_text(
+            text='{"answer":"A","standard_name":"X","assessments":[{"standard_name":"X","status":"superseded"}]}'
+        )])],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    cfg = MAWAgentConfig(
+        name="producer", instruction="", output_key="artifact",
+        output_contract=ArtifactContract(required_fields=["answer", "standard_name", "assessments"]),
+    )
+    agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
+    state = {"artifact": '{"answer":"A","assessments":[{"standard_name":"X","status":"superseded"}]}' }
+    await agent.after_agent_callback(_context(state))
+    assert json.loads(state["artifact"]) == {
+        "answer": "A", "standard_name": "X",
+        "assessments": [{"standard_name": "X", "status": "superseded"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_contract_repair_rejects_ambiguous_nested_mapping_and_changed_valid_value(monkeypatch):
+    llm = _ScriptedLlm(model="openai/test", responses=[types.Content(role="model", parts=[
+        types.Part.from_text(text='{"answer":"B","source":"src","standard_name":"X"}')
+    ])])
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    cfg = MAWAgentConfig(name="producer", instruction="", output_key="artifact",
+        output_contract=ArtifactContract(required_fields=["answer", "source", "standard_name"]))
+    agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
+    original = '{"answer":"A","solution":"B","provenance":"src","assessments":[{"standard_name":"X"},{"standard_name":"Y"}]}'
+    state = {"artifact": original}
+    await agent.after_agent_callback(_context(state))
+    assert state["artifact"] == original
+
+
+def test_contract_repair_rejects_ambiguous_nested_value_mapping():
+    cfg = MAWAgentConfig(name="producer", instruction="", output_key="artifact",
+        output_contract=ArtifactContract(required_fields=["standard_name"]))
+    assert builder._repair_values_supported(
+        '{"assessments":[{"standard_name":"X"},{"standard_name":"Y"}]}',
+        '{"standard_name":"X"}', cfg, {},
+    ) == ["standard_name"]
+
+
+@pytest.mark.asyncio
+async def test_pending_candidates_remove_broad_search_across_repeated_model_turns():
+    search = FunctionTool(func=lambda query: {"results": []})
+    search.name = "searxng_search"
+    search.description = "Search the web"
+    cfg = MAWAgentConfig(name="researcher", instruction="Research", output_key="out")
+    agent = builder._build_llm_agent(cfg, [search], None, autonomous=False)
+    state = {"__fedotmas_research_gate": {"researcher": {
+        "gated": True,
+        "pending_urls": ["https://example.org/a", "https://example.org/b", "https://example.org/c"],
+    }}}
+    context = _context(state)
+    context.state = state
+    for _ in range(3):
+        request = LlmRequest(
+            tools_dict={search.name: search},
+            config=types.GenerateContentConfig(tools=[types.Tool(function_declarations=[
+                types.FunctionDeclaration(name=search.name, description=search.description)
+            ])]),
+        )
+        await agent.before_model_callback(context, request)
+        declarations = [
+            declaration.name for group in request.config.tools or []
+            for declaration in group.function_declarations or []
+        ]
+        assert search.name not in declarations
+        assert "https://example.org/a" in request.config.system_instruction
 
 
 @pytest.mark.asyncio

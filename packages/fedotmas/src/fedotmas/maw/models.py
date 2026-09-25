@@ -335,6 +335,15 @@ class MAWConfig(BaseModel):
             }
             if agent.name == (self.final_answer_agent or inferred_final_answer_agent):
                 continue
+            if required_identity:
+                contract = agent.output_contract or ArtifactContract()
+                normalized_identity = list(
+                    dict.fromkeys([*contract.identity_fields, *sorted(required_identity)])
+                )
+                if normalized_identity != contract.identity_fields:
+                    agent.output_contract = contract.model_copy(
+                        update={"identity_fields": normalized_identity}
+                    )
             if required_identity and (
                 agent.output_contract is None
                 or not required_identity.issubset(agent.output_contract.identity_fields)

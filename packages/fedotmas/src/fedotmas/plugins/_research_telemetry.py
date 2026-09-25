@@ -57,6 +57,7 @@ CONTROL_CODES = frozenset(
         "INSPECT_CANDIDATES_FIRST",
     }
 )
+RESEARCH_GATE_STATE_KEY = "__fedotmas_research_gate"
 
 
 class ResearchTelemetry(BasePlugin):
@@ -92,6 +93,8 @@ class ResearchTelemetry(BasePlugin):
             "discovery_calls": 0,
             "candidate_urls_discovered": 0,
             "candidate_urls_inspected": 0,
+            "discovery_gated": 0,
+            "discovery_reopened": 0,
             "repeated_discovery_without_inspection": 0,
             "scraping_extraction_calls": 0,
             "search_exhaustion": 0,
@@ -299,6 +302,22 @@ class ResearchTelemetry(BasePlugin):
         self._agents[agent]["candidate_urls_inspected"] = len(self._inspected[agent])
         self._discovery_since_inspection[agent] = 0
 
+    def _sync_gate_state(self, state: Any, agent: str) -> None:
+        root = state.get(RESEARCH_GATE_STATE_KEY)
+        if not isinstance(root, dict):
+            root = {}
+        old = root.get(agent)
+        was_gated = bool(old.get("gated")) if isinstance(old, dict) else False
+        pending = sorted(self._discovered[agent] - self._inspected[agent])
+        gated = len(pending) >= 3
+        metrics = self._agents[agent]
+        if gated and not was_gated:
+            metrics["discovery_gated"] += 1
+        elif was_gated and not gated:
+            metrics["discovery_reopened"] += 1
+        root[agent] = {"pending_urls": pending, "gated": gated}
+        state[RESEARCH_GATE_STATE_KEY] = root
+
     async def after_tool_callback(
         self,
         *,
@@ -321,6 +340,7 @@ class ResearchTelemetry(BasePlugin):
                 # An attempted inspection counts as inspection even if the source
                 # is unavailable; discovery can resume after failed candidates.
                 self.inspected(agent, url.strip())
+                self._sync_gate_state(tool_context.state, agent)
         self._record_call_result(
             agent,
             tool.name,
@@ -328,6 +348,8 @@ class ResearchTelemetry(BasePlugin):
             result,
             call_id=_tool_call_id(tool_context),
         )
+        if kind == "search":
+            self._sync_gate_state(tool_context.state, agent)
         if (
             isinstance(result.get("error_code"), str)
             and result["error_code"] in CONTROL_CODES
