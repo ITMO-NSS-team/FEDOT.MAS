@@ -219,24 +219,6 @@ def _upstream_identity_values(
     return values
 
 
-def _upstream_identity_values(
-    state: dict[str, Any], cfg: MAWAgentConfig
-) -> dict[str, dict[str, Any]]:
-    values = {}
-    for requirement in cfg.input_requirements:
-        artifact = parse_artifact(state.get(requirement.source_key))
-        if artifact is None:
-            continue
-        identity = {
-            field: artifact[field]
-            for field in requirement.identity_fields
-            if field in artifact
-        }
-        if identity:
-            values[requirement.source_key] = identity
-    return values
-
-
 async def _repair_contract_once(
     model: str | BaseLlm,
     cfg: MAWAgentConfig,
@@ -285,6 +267,73 @@ async def _repair_contract_once(
         if text:
             return text, usage
     return None, usage
+
+
+def _repair_values_supported(
+    previous: Any,
+    repaired: Any,
+    cfg: MAWAgentConfig,
+    upstream: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Reject repaired contract values that cannot be traced to prior output."""
+    source = parse_artifact(previous)
+    result = parse_artifact(repaired)
+    if source is None or result is None or cfg.output_contract is None:
+        return ["<invalid_repair_artifact>"]
+
+    aliases = (
+        {"answer", "solution", "result"},
+        {"valid", "correct", "answer", "solution"},
+        {"source", "citation", "reference", "provenance", "url"},
+        {"quote", "excerpt", "transcript"},
+    )
+
+    def key_tokens(key: str) -> set[str]:
+        tokens = {
+            token.rstrip("s") for token in re.findall(r"[a-z0-9]+", key.casefold())
+        }
+        for group in aliases:
+            if tokens & group:
+                tokens.update(group)
+        return tokens
+
+    invalid = []
+    fields = dict.fromkeys(
+        [*cfg.output_contract.required_fields, *cfg.output_contract.identity_fields]
+    )
+    # Identity values in repaired output must also match any available upstream value.
+    upstream_by_field: dict[str, list[Any]] = {}
+    for identity in upstream.values():
+        for field, value in identity.items():
+            upstream_by_field.setdefault(field, []).append(value)
+    for field in fields:
+        if field not in result or _is_blank(result[field]):
+            continue
+        source_fields = [
+            old_field
+            for old_field, old_value in source.items()
+            if old_value == result[field]
+            and (
+                old_field == field
+                or (
+                    field not in cfg.output_contract.identity_fields
+                    and key_tokens(old_field) & key_tokens(field)
+                )
+            )
+        ]
+        if not source_fields:
+            invalid.append(field)
+            continue
+        if (
+            field in cfg.output_contract.identity_fields
+            and field in upstream_by_field
+            and any(
+                result[field] != upstream_value
+                for upstream_value in upstream_by_field[field]
+            )
+        ):
+            invalid.append(field)
+    return invalid
 
 
 def build(
@@ -567,6 +616,18 @@ def _build_llm_agent(
                             repair_tokens[key] = repair_tokens.get(key, 0) + count
                     repaired_missing = validate_output_contract(
                         repaired, cfg.output_contract
+                    )
+                    upstream_identity = _upstream_identity_values(
+                        callback_context.state, cfg
+                    )
+                    unsupported = _repair_values_supported(
+                        value,
+                        repaired,
+                        cfg,
+                        upstream_identity,
+                    )
+                    repaired_missing = list(
+                        dict.fromkeys([*repaired_missing, *unsupported])
                     )
                 except Exception as exc:  # noqa: BLE001 - one bounded repair is best-effort
                     _record_contract_repair(

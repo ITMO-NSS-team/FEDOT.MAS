@@ -182,16 +182,15 @@ def _truncate_total(value: Any, limit: int) -> tuple[Any, bool]:
         lists = _containers(result, list)
         nonempty = [items for items in lists if len(items) > 1]
         if nonempty:
-            max(nonempty, key=lambda items: len(json.dumps(items, default=str))).pop()
+            # Keep the newest list entry where possible.
+            max(nonempty, key=lambda items: len(json.dumps(items, default=str))).pop(0)
             changed = True
             continue
         strings = _string_slots(result)
         if not strings:
-            dictionaries = [
-                item for item in _containers(result, dict) if len(item) > 1
-            ]
+            dictionaries = [item for item in _containers(result, dict) if item]
             if not dictionaries:
-                return {}, True
+                return (0 if limit == 1 else {}), True
             container = max(
                 dictionaries,
                 key=lambda item: len(json.dumps(item, ensure_ascii=False, default=str)),
@@ -214,7 +213,12 @@ def _truncate_total(value: Any, limit: int) -> tuple[Any, bool]:
         container, key = max(strings, key=lambda slot: len(slot[0][slot[1]]))
         excess = len(json.dumps(result, ensure_ascii=False, default=str)) - limit
         old = container[key]
-        container[key] = old[: max(0, len(old) - excess - 20)]
+        shortened = old[: max(0, len(old) - excess - 20)]
+        if shortened == old:
+            # Empty strings can still sit under an oversized structural envelope.
+            del container[key]
+        else:
+            container[key] = shortened
         changed = True
     return result, changed
 

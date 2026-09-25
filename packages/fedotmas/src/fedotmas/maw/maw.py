@@ -145,6 +145,14 @@ class MAW(BaseMAS[MAWConfig]):
                 else set()
             ),
         )
+        _normalize_generated_research_policies(
+            config,
+            preserved_names=(
+                {agent.name for agent in existing_agents.agents}
+                if existing_agents is not None
+                else set()
+            ),
+        )
         self._generated_config = config
         _log.info(
             "Config generated | agents={} pipeline_type={}",
@@ -456,5 +464,48 @@ def _drop_generated_token_budgets(config: MAWConfig) -> None:
                 "Changing generated research_policy for '{}' from evidence_first "
                 "to independent: no upstream inputs",
                 agent.name,
+            )
+            agent.research_policy = "independent"
+
+
+def _normalize_generated_research_policies(
+    config: MAWConfig, *, preserved_names: set[str] | None = None
+) -> None:
+    """Keep evidence-first only when every declared input is upstream in the tree."""
+    agents = {agent.name: agent for agent in config.agents}
+    occurrences: dict[str, list[set[str]]] = {}
+
+    def visit(node: MAWStepConfig, available: set[str]) -> set[str]:
+        if node.type == "agent":
+            name = node.agent_name
+            if name in agents:
+                occurrences.setdefault(name, []).append(set(available))
+                return available | {agents[name].output_key}
+            return available
+        if node.type in {"sequential", "loop"}:
+            current = set(available)
+            for child in node.children:
+                current = visit(child, current)
+            return current
+        if node.type == "parallel":
+            outputs = [visit(child, set(available)) for child in node.children]
+            return set.union(*outputs) if outputs else available
+        return available
+
+    visit(config.pipeline, set())
+    preserved_names = preserved_names or set()
+    for name, agent in agents.items():
+        if agent.research_policy != "evidence_first" or name in preserved_names:
+            continue
+        requirements = {item.source_key for item in agent.input_requirements}
+        paths = occurrences.get(name, [])
+        valid = bool(requirements and paths) and all(
+            requirements <= available for available in paths
+        )
+        if not valid:
+            _log.warning(
+                "Changing generated research_policy for '{}' from evidence_first "
+                "to independent: input requirements are not upstream pipeline outputs",
+                name,
             )
             agent.research_policy = "independent"

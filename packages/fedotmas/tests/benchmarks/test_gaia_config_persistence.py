@@ -135,6 +135,21 @@ def test_gaia_mcp_override_cannot_enable_code_agent_without_e2b(
     )
 
 
+def test_gaia_all_mcp_servers_excludes_e2b_servers_without_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("FEDOTMAS_GAIA_MCP_SERVERS", "all")
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+
+    servers = _gaia_mcp_servers()
+
+    assert "sandbox-light" in servers
+    assert not {"sandbox", "code-agent", "sampo-python"} & set(servers)
+    registry = _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
+    assert "sandbox-light" in registry
+    assert not {"sandbox", "code-agent", "sampo-python"} & set(registry)
+
+
 def test_gaia_passes_resolved_worker_settings_to_browser_agent(monkeypatch):
     monkeypatch.delenv("FEDOTMAS_GAIA_MCP_SERVERS", raising=False)
     monkeypatch.setenv("E2B_API_KEY", "test-key")

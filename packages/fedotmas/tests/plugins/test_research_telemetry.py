@@ -118,16 +118,30 @@ async def test_discovery_pauses_until_candidate_inspection_and_resumes_after_fai
         },
     )
 
-    blocked = await telemetry.before_tool_callback(
-        tool=search, tool_args=args, tool_context=_context()
+    quoted_broad = await telemetry.before_tool_callback(
+        tool=search,
+        tool_args={"query": '"general topic"'},
+        tool_context=_context(),
     )
-    assert blocked["error_code"] == "INSPECT_CANDIDATES_FIRST"
+    assert quoted_broad["error_code"] == "INSPECT_CANDIDATES_FIRST"
+    unrelated_site = await telemetry.before_tool_callback(
+        tool=search,
+        tool_args={"query": "site:unrelated.example example.org specific claim"},
+        tool_context=_context(),
+    )
+    assert unrelated_site["error_code"] == "INSPECT_CANDIDATES_FIRST"
     targeted = await telemetry.before_tool_callback(
         tool=search,
         tool_args={"query": 'site:example.org "specific claim"'},
         tool_context=_context(),
     )
     assert targeted is None
+    candidate_domain = await telemetry.before_tool_callback(
+        tool=search,
+        tool_args={"query": "example.org focused recovery"},
+        tool_context=_context(),
+    )
+    assert candidate_domain is None
 
     inspect = MagicMock(name="markdown")
     inspect.name = "markdown"
@@ -148,10 +162,40 @@ async def test_discovery_pauses_until_candidate_inspection_and_resumes_after_fai
     assert resumed is None
 
     metrics = telemetry.snapshot()["researcher"]
-    assert metrics["discovery_calls"] == 4
+    assert metrics["discovery_calls"] == 6
     assert metrics["candidate_urls_discovered"] == 4
     assert metrics["candidate_urls_inspected"] == 1
-    assert metrics["repeated_discovery_without_inspection"] == 1
+    assert metrics["repeated_discovery_without_inspection"] == 2
+
+
+@pytest.mark.asyncio
+async def test_unrelated_scrape_does_not_count_as_candidate_inspection():
+    telemetry = ResearchTelemetry()
+    search = MagicMock(name="search")
+    search.name = "search"
+    await telemetry.before_tool_callback(
+        tool=search, tool_args={"query": "topic"}, tool_context=_context()
+    )
+    await telemetry.after_tool_callback(
+        tool=search,
+        tool_args={},
+        tool_context=_context(),
+        result={"results": [{"url": "https://example.org/paper"}]},
+    )
+    scrape = MagicMock(name="markdown")
+    scrape.name = "markdown"
+    args = {"url": "https://unrelated.example/page"}
+    await telemetry.before_tool_callback(
+        tool=scrape, tool_args=args, tool_context=_context()
+    )
+    await telemetry.after_tool_callback(
+        tool=scrape,
+        tool_args=args,
+        tool_context=_context(),
+        result={"content": "unrelated"},
+    )
+
+    assert telemetry.snapshot()["researcher"]["candidate_urls_inspected"] == 0
 
 
 @pytest.mark.asyncio

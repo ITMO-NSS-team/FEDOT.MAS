@@ -182,10 +182,36 @@ class ResearchTelemetry(BasePlugin):
             self._discovery_since_inspection[agent] += 1
             query = tool_args.get("query")
             query_text = query.casefold() if isinstance(query, str) else ""
+            candidate_hosts = {
+                (urlsplit(url).hostname or "").casefold().removeprefix("www.")
+                for url in self._discovered[agent]
+            }
+            site_domains = re.findall(r"(?:^|\s)site:([^\s]+)", query_text)
+            query_hosts = [
+                (urlsplit("//" + domain).hostname or "").removeprefix("www.")
+                for domain in site_domains
+            ]
+            candidate_mentioned = any(
+                host
+                and re.search(
+                    rf"(?<![a-z0-9.-]){re.escape(host)}(?![a-z0-9.-])",
+                    query_text,
+                )
+                for host in candidate_hosts
+            )
+            site_matches_candidate = any(
+                domain.count(".") >= 1
+                and any(
+                    host == domain
+                    or host.endswith("." + domain)
+                    or domain.endswith("." + host)
+                    for host in candidate_hosts
+                    if host
+                )
+                for domain in query_hosts
+            )
             targeted = (
-                '"' in query_text
-                or "site:" in query_text
-                or any(urlsplit(url).hostname and urlsplit(url).hostname in query_text for url in pending)
+                site_matches_candidate if site_domains else candidate_mentioned
             )
             if (
                 len(pending) >= 3
@@ -265,7 +291,10 @@ class ResearchTelemetry(BasePlugin):
         metrics["circuit_open_blocks"] += 1
 
     def inspected(self, agent: str, url: str) -> None:
-        self._inspected[agent].add(_sanitize_url(url) or url)
+        candidate = _sanitize_url(url) or url
+        if candidate not in self._discovered[agent]:
+            return
+        self._inspected[agent].add(candidate)
         self._agents[agent]["urls_inspected"] = len(self._inspected[agent])
         self._agents[agent]["candidate_urls_inspected"] = len(self._inspected[agent])
         self._discovery_since_inspection[agent] = 0

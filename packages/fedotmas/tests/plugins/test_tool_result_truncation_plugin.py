@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fedotmas.plugins import ToolResultTruncationPlugin
+from fedotmas.plugins._tool_result_truncation import _truncate_total
 from google.adk.models.llm_request import LlmRequest
 from google.genai import types
 
@@ -23,6 +24,13 @@ def _tool_context(*, agent_name: str = "researcher"):
 
 
 class TestToolResultTruncationPlugin:
+    @pytest.mark.parametrize("limit", [1, 2])
+    def test_structural_overhead_cannot_make_total_truncation_stall(self, limit):
+        value, changed = _truncate_total({"payload": [1]}, limit)
+
+        assert changed is True
+        assert len(json.dumps(value, ensure_ascii=False, default=str)) <= limit
+
     @pytest.mark.asyncio
     async def test_aggregate_limit_is_opt_in_for_other_callers(self):
         plugin = ToolResultTruncationPlugin(max_string_chars=1000)

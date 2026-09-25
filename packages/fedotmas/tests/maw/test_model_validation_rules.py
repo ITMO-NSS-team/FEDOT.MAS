@@ -6,9 +6,11 @@ import pytest
 from fedotmas.maw.maw import (
     _drop_generated_token_budgets,
     _normalize_generated_agent_names,
+    _normalize_generated_research_policies,
 )
 from fedotmas.maw.models import (
     AgentPoolConfig,
+    ArtifactRequirement,
     MAWAgentConfig,
     MAWConfig,
     MAWStepConfig,
@@ -334,5 +336,38 @@ class TestGeneratedTokenBudget:
         config = self._config(None)
         config.agents[0].research_policy = "evidence_first"
         _drop_generated_token_budgets(config)
+
+        assert config.agents[0].research_policy == "independent"
+
+    def test_evidence_first_first_stage_with_non_upstream_requirement_is_independent(self):
+        config = MAWConfig(
+            agents=[
+                MAWAgentConfig(
+                    name="first",
+                    instruction="Discover evidence.",
+                    output_key="first_output",
+                    research_policy="evidence_first",
+                    input_requirements=[
+                        ArtifactRequirement(
+                            source_key="later_output", required_fields=["evidence"]
+                        )
+                    ],
+                ),
+                MAWAgentConfig(
+                    name="later",
+                    instruction="Inspect evidence.",
+                    output_key="later_output",
+                ),
+            ],
+            pipeline=MAWStepConfig(
+                type="sequential",
+                children=[
+                    MAWStepConfig(type="agent", agent_name="first"),
+                    MAWStepConfig(type="agent", agent_name="later"),
+                ],
+            ),
+        )
+
+        _normalize_generated_research_policies(config)
 
         assert config.agents[0].research_policy == "independent"

@@ -197,7 +197,15 @@ def _env_list(name: str) -> list[str] | None:
 def _gaia_mcp_servers() -> list[str] | str:
     value = os.getenv("FEDOTMAS_GAIA_MCP_SERVERS")
     if value is not None and value.strip().lower() == "all":
-        return "all"
+        if os.getenv("E2B_API_KEY"):
+            return "all"
+        e2b_servers = {"sandbox", "code-agent", "sampo-python"}
+        servers = [
+            name for name in resolve_mcp_registry("all") if name not in e2b_servers
+        ]
+        if "sandbox-light" not in servers:
+            servers.append("sandbox-light")
+        return servers
     if value is not None:
         servers = [name.strip() for name in value.split(",") if name.strip()]
         if not os.getenv("E2B_API_KEY"):
