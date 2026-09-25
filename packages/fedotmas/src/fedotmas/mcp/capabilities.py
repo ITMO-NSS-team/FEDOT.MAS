@@ -18,7 +18,6 @@ class ToolCapability(StrEnum):
 
 _DISCOVERY = frozenset(
     {
-        "search",
         "web_search",
         "websearch",
         "google_search",
@@ -83,10 +82,22 @@ def normalize_tool_name(name: str) -> str:
     return normalized
 
 
-def tool_capability(name: str) -> ToolCapability:
+def tool_capability(name: str, *, description: str = "", server: str = "") -> ToolCapability:
     """Return the runtime capability for a bare, prefixed, or namespaced tool."""
+    raw = name.lower().replace("-", "_").replace(".", "_")
+    server_name = server.lower().replace("-", "_").replace(".", "_")
     normalized = normalize_tool_name(name)
-    if normalized in _DISCOVERY or normalized in _DISCOVERY_SERVERS or normalized.endswith("_search"):
+    if normalized in _DIAGNOSTIC:
+        return ToolCapability.DIAGNOSTIC
+    if normalized in _DISCOVERY_SERVERS or (
+        normalized in {"search", "web_search"}
+        and any(s in raw or s in server_name for s in _DISCOVERY_SERVERS)
+    ):
+        return ToolCapability.DISCOVERY
+    if normalized == "search":
+        hints = ("web search", "search the web", "search the internet", "internet search", "search engine", "search broadly", "search for independent", "search sources", "tavily", "searx")
+        return ToolCapability.DISCOVERY if any(hint in description.casefold() for hint in hints) else ToolCapability.OTHER
+    if normalized in {"web_search", "websearch", "google_search", "searxng_search", "tavily_search"} or normalized.endswith(("_web_search", "_google_search", "_searxng_search", "_tavily_search")):
         return ToolCapability.DISCOVERY
     if normalized == "web_scraping" or normalized in _URL_INSPECTION:
         return ToolCapability.URL_INSPECTION

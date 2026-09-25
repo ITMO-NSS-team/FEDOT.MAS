@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import sys
+import json
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -166,40 +165,42 @@ class TestReadDocument:
         assert second.total_matches == 12
 
     @pytest.mark.anyio
-    async def test_reads_legacy_xls_with_xlrd(self, tmp_path: Path, monkeypatch):
-        class FakeSheet:
-            name = "Records"
-            nrows = 1
-            ncols = 2
+    async def test_reads_real_legacy_xls_through_mcp_with_paging(self, tmp_path: Path):
+        import xlrd
+        import xlwt
 
-            @staticmethod
-            def cell_value(row: int, column: int):
-                return [["name", "orcid"]][row][column]
-
-        class FakeWorkbook:
-            @staticmethod
-            def sheets():
-                return [FakeSheet()]
-
-            @staticmethod
-            def release_resources():
-                return None
-
-        monkeypatch.setitem(
-            sys.modules,
-            "xlrd",
-            SimpleNamespace(open_workbook=lambda *_args, **_kwargs: FakeWorkbook()),
-        )
         path = tmp_path / "legacy.xls"
-        path.write_bytes(b"test fixture")
-        ctx = MagicMock()
-        ctx.info = AsyncMock()
-        ctx.error = AsyncMock()
+        workbook = xlwt.Workbook()
+        records = workbook.add_sheet("Records")
+        records.write(0, 0, "name")
+        records.write(0, 1, "orcid")
+        records.write(1, 0, "Ada")
+        records.write(1, 1, "0000-0001")
+        for row in range(2, 100):
+            records.write(row, 0, f"record-{row}")
+            records.write(row, 1, f"orcid-{row}")
+        extra = workbook.add_sheet("Notes")
+        extra.write(0, 0, "legacy-sheet-value")
+        workbook.save(str(path))
+        assert xlrd.open_workbook(str(path)).nsheets == 2
 
-        result = await read_document(str(path), ctx)
-
-        assert "## Sheet: Records" in result.content
-        assert "1\tname\torcid" in result.content
+        async with Client(mcp) as client:
+            first = await client.call_tool("read_document", {"file_path": str(path), "max_chars": 500})
+            first_page = json.loads(_text(first))
+            assert "## Sheet: Records" in first_page["content"]
+            assert "Ada" in first_page["content"]
+            assert first_page["truncated"] is True
+            contents = [first_page["content"]]
+            cursor = first_page["next_start_char"]
+            while cursor is not None:
+                page_result = await client.call_tool("read_document", {"file_path": str(path), "start_char": cursor, "max_chars": 500})
+                page = json.loads(_text(page_result))
+                contents.append(page["content"])
+                cursor = page["next_start_char"]
+            combined = "".join(contents)
+            assert "record-99" in combined
+            assert "## Sheet: Notes" in combined
+            assert "legacy-sheet-value" in combined
 
 
 class TestZip:

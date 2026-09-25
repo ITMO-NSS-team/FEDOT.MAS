@@ -106,6 +106,7 @@ async def test_discovery_gate_is_stateful_and_reopens_after_failed_candidate_ins
     context = _context()
     search = MagicMock(name="search")
     search.name = "search"
+    search.description = "Search the web for candidate sources."
     args = {"query": "broad topic"}
     allowed = await telemetry.before_tool_callback(
         tool=search, tool_args=args, tool_context=context
@@ -160,6 +161,10 @@ async def test_discovery_gate_is_stateful_and_reopens_after_failed_candidate_ins
         tool_context=context,
         result={"isError": True, "error": "source unavailable"},
     )
+    candidate = context.state["__fedotmas_research_candidates"]["researcher"][0]
+    assert candidate["inspection_status"] == "failed"
+    assert candidate["inspection_tool"] == "markdown"
+    assert "source unavailable" in candidate["inspection_error"]
     resumed = await telemetry.before_tool_callback(
         tool=search, tool_args=args, tool_context=context
     )
@@ -180,6 +185,7 @@ async def test_unrelated_scrape_does_not_count_as_candidate_inspection():
     context = _context()
     search = MagicMock(name="search")
     search.name = "search"
+    search.description = "Search the web for candidate sources."
     await telemetry.before_tool_callback(
         tool=search, tool_args={"query": "topic"}, tool_context=context
     )
@@ -211,6 +217,7 @@ async def test_research_telemetry_records_structured_outcomes_and_serializes():
     telemetry = ResearchTelemetry()
     tool = MagicMock(name="search")
     tool.name = "search"
+    tool.description = "Search the web for candidate sources."
     for query in ("Example", "example"):
         await telemetry.before_tool_callback(
             tool=tool,
@@ -316,6 +323,8 @@ async def test_per_call_diagnostics_distinguish_infra_failures_and_blocks():
     async def record(name, args, result):
         tool = MagicMock()
         tool.name = name
+        if name == "search":
+            tool.description = "Search the web for candidate sources."
         await telemetry.before_tool_callback(
             tool=tool, tool_args=args, tool_context=_context()
         )
@@ -344,6 +353,7 @@ async def test_per_call_diagnostics_distinguish_infra_failures_and_blocks():
     await record("search", {"query": "empty"}, {"results": []})
     search_tool = MagicMock()
     search_tool.name = "search"
+    search_tool.description = "Search the web for candidate sources."
     await telemetry.before_tool_callback(
         tool=search_tool,
         tool_args={"query": "blocked"},
@@ -392,6 +402,7 @@ async def test_event_diagnostics_match_parallel_tool_results_by_call_id():
     telemetry = ResearchTelemetry()
     tool = MagicMock()
     tool.name = "search"
+    tool.description = "Search the web for candidate sources."
     first_context = _context()
     first_context.function_call_id = "call-1"
     second_context = _context()
@@ -475,6 +486,8 @@ async def test_youtube_candidate_inspection_reopens_mixed_discovery():
 
     candidate = context.state["__fedotmas_research_candidates"]["researcher"][0]
     assert candidate["inspected"] is True
+    assert candidate["inspection_status"] == "success"
+    assert candidate["inspection_tool"] == "get_video_info"
     assert context.state["__fedotmas_research_gate"]["researcher"]["phase"] == "discover"
     assert telemetry.snapshot()["researcher"]["candidate_urls_inspected"] == 1
 
@@ -511,6 +524,7 @@ async def test_candidate_ledger_deduplicates_and_records_no_progress_searches():
     context = _context()
     search = MagicMock(name="search")
     search.name = "search"
+    search.description = "Search the web for candidate sources."
     result = {
         "results": [
             {
@@ -552,6 +566,7 @@ async def test_candidate_ledger_survives_rolling_tool_result_compaction():
     context.state["__fedotmas_research_modes"] = {"researcher": "discovery_only"}
     search = MagicMock(name="search")
     search.name = "search"
+    search.description = "Search the web for candidate sources."
     await telemetry.before_tool_callback(
         tool=search,
         tool_args={"query": "large result"},

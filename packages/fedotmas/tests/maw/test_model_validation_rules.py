@@ -210,6 +210,19 @@ def test_generated_research_modes_follow_capabilities_and_pipeline_roles():
     ]
 
 
+def test_explicit_generated_modes_are_corrected_to_match_tools():
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(name="mixed_search", instruction="", output_key="a", tools=["websearch-tavily"], research_mode="mixed"),
+            MAWAgentConfig(name="inspect_search", instruction="", output_key="b", tools=["websearch-searxng"], research_mode="inspection_only"),
+            MAWAgentConfig(name="mixed_inspector", instruction="", output_key="c", tools=["document"], research_mode="mixed"),
+        ],
+        pipeline=MAWStepConfig(type="sequential", children=[MAWStepConfig(type="agent", agent_name=name) for name in ("mixed_search", "inspect_search", "mixed_inspector")]),
+    )
+    _normalize_generated_research_modes(config)
+    assert [agent.research_mode for agent in config.agents] == ["discovery_only", "discovery_only", "inspection_only"]
+
+
 class TestNonLeafWithoutChildren:
     """Rule 8: sequential/parallel/loop without children → ValidationError."""
 

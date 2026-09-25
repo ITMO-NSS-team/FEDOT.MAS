@@ -343,18 +343,13 @@ class WebSearchLimitPlugin(BasePlugin):
 
     def _is_web_search_tool(self, tool: BaseTool) -> bool:
         name = strip_tool_name_prefix(tool.name).lower()
-        if self._custom_tool_names:
-            if name not in self._tool_names:
-                return False
-            description = (tool.description or "").lower()
-            if name == "search":
-                return any(
-                    hint in description
-                    for hint in _WEB_SEARCH_DESCRIPTION_HINTS
-                )
-            return True
-        capability = tool_capability(tool.name)
+        description = (tool.description or "").lower()
         if self.budget_kind == "search":
+            if self._custom_tool_names and name not in self._tool_names:
+                return False
+            capability = tool_capability(tool.name, description=description)
+            if self._custom_tool_names and name != "search":
+                return True
             if capability != ToolCapability.DISCOVERY:
                 return False
             if normalize_tool_name(tool.name) == "search":
@@ -367,7 +362,9 @@ class WebSearchLimitPlugin(BasePlugin):
         if self.budget_kind == "scraping":
             return is_inspection_tool(tool.name)
         if self.budget_kind in {"browser", "browser_agent"}:
-            return capability == ToolCapability.BROWSER_NAVIGATION
+            return tool_capability(tool.name) == ToolCapability.BROWSER_NAVIGATION
+        if self._custom_tool_names:
+            return name in self._tool_names
         return False
 
 

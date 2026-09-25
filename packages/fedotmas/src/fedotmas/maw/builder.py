@@ -41,7 +41,11 @@ from fedotmas.maw.handoffs import (
 )
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.mcp import MCPServerConfig, create_toolset
-from fedotmas.mcp.capabilities import ToolCapability, tool_capability
+from fedotmas.mcp.capabilities import (
+    ToolCapability,
+    normalize_tool_name,
+    tool_capability,
+)
 from fedotmas.plugins._research_telemetry import (
     RESEARCH_CANDIDATE_LEDGER_KEY,
     RESEARCH_GATE_STATE_KEY,
@@ -873,7 +877,7 @@ def _build_llm_agent(
                     )
 
     async def before_tool(tool, args, tool_context) -> dict | None:
-        capability = tool_capability(tool.name)
+        capability = _runtime_tool_capability(tool)
         blocked: tuple[str, str] | None = None
         if cfg.research_mode == "discovery_only" and capability in {
             ToolCapability.URL_INSPECTION,
@@ -888,6 +892,29 @@ def _build_llm_agent(
                     "downstream extractor."
                 ),
             )
+        if cfg.research_mode == "discovery_only" and capability == ToolCapability.MEDIA_INSPECTION and normalize_tool_name(tool.name) == "get_video_info":
+            blocked = None
+        if (
+            cfg.research_mode == "discovery_only"
+            and capability == ToolCapability.MEDIA_INSPECTION
+            and normalize_tool_name(tool.name) == "get_video_info"
+        ):
+            blocked = None
+        if capability == ToolCapability.BROWSER_NAVIGATION:
+            candidates_for_browser = _candidate_context(tool_context.state, cfg.name)
+            args_text = json.dumps(args, ensure_ascii=False).casefold()
+            anchored = any(str(item.get("url", "")).casefold() in args_text for item in candidates_for_browser)
+            turn_root = tool_context.state.get(RESEARCH_TURN_STATE_KEY)
+            current_turn = turn_root.get(cfg.name) if isinstance(turn_root, dict) else None
+            if not anchored:
+                blocked = ("BROWSER_DISCOVERY_POLICY", "Browser exploration must be anchored to a known candidate; use the gated discovery tool for open-ended search.")
+            elif isinstance(current_turn, dict) and current_turn.get("force_converge"):
+                blocked = ("RESEARCH_CONVERGENCE_REQUIRED", "Inspect a known candidate or hand off; browser exploration is paused.")
+        if normalize_tool_name(tool.name) in {"get_next_action", "research_controller_get_next_action"}:
+            turn_root = tool_context.state.get(RESEARCH_TURN_STATE_KEY)
+            current_turn = turn_root.get(cfg.name) if isinstance(turn_root, dict) else None
+            if isinstance(current_turn, dict) and current_turn.get("force_converge"):
+                blocked = ("RESEARCH_CONVERGENCE_REQUIRED", "Controller polling is paused after repeated turns without progress.")
         if capability == ToolCapability.DISCOVERY:
             effective_policy = _effective_research_policy(tool_context.state, cfg)
             gate_root = tool_context.state.get(RESEARCH_GATE_STATE_KEY)
@@ -900,7 +927,7 @@ def _build_llm_agent(
                         "mark missing claims unresolved."
                     ),
                 )
-            elif cfg.research_mode == "inspection_only":
+            elif cfg.research_mode == "inspection_only" and effective_policy != "targeted_recovery":
                 blocked = (
                     "INSPECTION_ONLY_DISCOVERY_DISABLED",
                     (
@@ -918,14 +945,6 @@ def _build_llm_agent(
                     + json.dumps(candidates, ensure_ascii=False),
                 )
             candidates = _candidate_context(tool_context.state, cfg.name)
-            if cfg.research_mode == "discovery_only" and len(candidates) >= 3:
-                blocked = (
-                    "SOURCE_CANDIDATES_READY",
-                    (
-                        "Several candidate sources are available. Select the best small "
-                        "set and produce the source handoff now."
-                    ),
-                )
             turns_root = tool_context.state.get(RESEARCH_TURN_STATE_KEY)
             turns = turns_root.get(cfg.name) if isinstance(turns_root, dict) else None
             if isinstance(turns, dict):
@@ -948,6 +967,19 @@ def _build_llm_agent(
                     )
                 else:
                     turns["discovery_calls"] = 1
+                    if cfg.research_mode == "inspection_only" and effective_policy == "targeted_recovery":
+                        progress_root = tool_context.state.get(RESEARCH_PROGRESS_STATE_KEY, {})
+                        progress = progress_root.get(cfg.name, {}) if isinstance(progress_root, dict) else {}
+                        query = str(args.get("query", "")).casefold()
+                        candidate_text = " ".join(str(item.get("title", "")) + " " + str(item.get("url", "")) for item in _candidate_context(tool_context.state, cfg.name)).casefold()
+                        if not query or not any(token in candidate_text for token in query.split() if len(token) >= 5):
+                            blocked = ("TARGETED_RECOVERY_REQUIRES_IDENTITY", "Recovery search must reference a supplied title, DOI, domain, or URL.")
+                        elif isinstance(progress, dict) and progress.get("targeted_recovery_used"):
+                            blocked = ("TARGETED_RECOVERY_EXHAUSTED", "The one targeted recovery search has already been used.")
+                        else:
+                            progress["targeted_recovery_used"] = True
+                            progress_root[cfg.name] = progress
+                            tool_context.state[RESEARCH_PROGRESS_STATE_KEY] = progress_root
                     if isinstance(turns_root, dict):
                         turns_root[cfg.name] = turns
                         tool_context.state[RESEARCH_TURN_STATE_KEY] = turns_root
@@ -1062,17 +1094,17 @@ def _build_llm_agent(
         all_tool_names = set(llm_request.tools_dict)
         removed: dict[str, str] = {}
         for name, tool in llm_request.tools_dict.items():
-            if tool_capability(tool.name) == ToolCapability.DIAGNOSTIC:
+            if _runtime_tool_capability(tool) == ToolCapability.DIAGNOSTIC:
                 removed[name] = "diagnostic/control tools are internal-only"
         discovery_names = {
             name
             for name, tool in llm_request.tools_dict.items()
-            if tool_capability(tool.name) == ToolCapability.DISCOVERY
+            if _runtime_tool_capability(tool) == ToolCapability.DISCOVERY
         }
         inspection_names = {
             name
             for name, tool in llm_request.tools_dict.items()
-            if tool_capability(tool.name)
+            if _runtime_tool_capability(tool)
             in {
                 ToolCapability.URL_INSPECTION,
                 ToolCapability.DOCUMENT_INSPECTION,
@@ -1086,12 +1118,14 @@ def _build_llm_agent(
         effective_policy = _effective_research_policy(state, cfg)
         if effective_policy == "evidence_first":
             hide_discovery_reason = "evidence_first policy"
-        elif cfg.research_mode == "inspection_only":
+        elif cfg.research_mode == "inspection_only" and not (
+            effective_policy == "targeted_recovery" and not _targeted_recovery_used(state, cfg.name)
+        ):
             hide_discovery_reason = "inspection_only research mode"
         elif cfg.research_mode == "mixed" and isinstance(gate, dict) and gate.get("phase") == "inspect":
             hide_discovery_reason = "candidate inspection required"
-        elif cfg.research_mode == "discovery_only" and len(candidates) >= 3:
-            hide_discovery_reason = "candidate handoff ready"
+        elif cfg.research_mode == "discovery_only" and _discovery_waves_used(state, cfg.name) >= 3:
+            hide_discovery_reason = "discovery wave allowance exhausted"
         elif turn_state["force_converge"]:
             hide_discovery_reason = "repeated turns without semantic progress"
         if hide_discovery_reason:
@@ -1101,6 +1135,8 @@ def _build_llm_agent(
                 {
                     name: "discovery_only source selection role"
                     for name in inspection_names
+                    if normalize_tool_name(llm_request.tools_dict[name].name) != "get_video_info"
+                    if normalize_tool_name(llm_request.tools_dict[name].name) not in {"get_video_info"}
                 }
             )
 
@@ -1112,7 +1148,7 @@ def _build_llm_agent(
         for name in surface_filter_names:
             removed[name] = "diagnostic/control tools are internal-only"
         for name in all_tool_names:
-            if tool_capability(llm_request.tools_dict[name].name) == ToolCapability.DIAGNOSTIC:
+            if _runtime_tool_capability(llm_request.tools_dict[name]) == ToolCapability.DIAGNOSTIC:
                 removed[name] = "diagnostic/control tools are internal-only"
         for name in discovery_names:
             if hide_discovery_reason:
@@ -1142,7 +1178,7 @@ def _build_llm_agent(
             llm_request.append_instructions(
                 ["Inspect at least one pending candidate before another broad search. Available candidates: " + json.dumps(candidates, ensure_ascii=False)]
             )
-        if cfg.research_mode == "discovery_only" and len(candidates) >= 3:
+        if cfg.research_mode == "discovery_only" and _discovery_waves_used(state, cfg.name) >= 3:
             llm_request.append_instructions(
                 ["Select the best small set from these candidates and return the source handoff now: " + json.dumps(candidates, ensure_ascii=False)]
             )
@@ -1258,6 +1294,9 @@ def _candidate_context(state: Any, agent: str) -> list[dict[str, Any]]:
             "snippet": str(item.get("snippet") or "")[:320],
             "source_tool": str(item.get("source_tool") or "")[:60],
             "inspected": item.get("inspected") is True,
+            "inspection_status": str(item.get("inspection_status") or "uninspected")[:20],
+            "inspection_tool": str(item.get("inspection_tool") or "")[:60],
+            "inspection_error": str(item.get("inspection_error") or "")[:160],
         }
         for item in selected
         if isinstance(item, dict) and isinstance(item.get("url"), str)
@@ -1447,3 +1486,17 @@ def _par_name(_children: list[BaseAgent]) -> str:
 
 def _loop_name(_children: list[BaseAgent]) -> str:
     return f"loop_{_next_id()}"
+
+
+def _runtime_tool_capability(tool: Any) -> ToolCapability:
+    return tool_capability(tool.name, description=getattr(tool, "description", "") or "")
+
+def _discovery_waves_used(state: Any, agent: str) -> int:
+    progress = state.get(RESEARCH_PROGRESS_STATE_KEY, {}) if hasattr(state, "get") else {}
+    item = progress.get(agent, {}) if isinstance(progress, dict) else {}
+    return int(item.get("productive_discovery_waves", 0)) if isinstance(item, dict) else 0
+
+def _targeted_recovery_used(state: Any, agent: str) -> bool:
+    root = state.get(RESEARCH_PROGRESS_STATE_KEY, {}) if hasattr(state, "get") else {}
+    item = root.get(agent, {}) if isinstance(root, dict) else {}
+    return bool(item.get("targeted_recovery_used")) if isinstance(item, dict) else False

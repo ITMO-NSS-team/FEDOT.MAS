@@ -1057,7 +1057,68 @@ async def test_discovery_only_source_finder_does_not_wait_for_inspection():
 
 
 @pytest.mark.asyncio
-async def test_discovery_only_source_finder_hands_off_when_candidates_are_ready():
+async def test_source_finder_can_validate_video_identity_but_not_read_transcript():
+    search = FunctionTool(func=lambda query: {"results": []})
+    search.name = "searxng_search"
+    info = FunctionTool(func=lambda video_id: {"title": "Known video"})
+    info.name = "get_video_info"
+    transcript = FunctionTool(func=lambda video_id: {"text": "long transcript"})
+    transcript.name = "get_transcript"
+    agent = builder._build_llm_agent(MAWAgentConfig(name="finder", instruction="Find source", output_key="out", research_mode="discovery_only"), [search, info, transcript], None, autonomous=False)
+    context = _context({})
+    context._invocation_context.agent.name = "finder"
+    await agent.before_agent_callback(context)
+    request = _research_request(search, info, transcript)
+    await agent.before_model_callback(context, request)
+    visible = {d.name for g in request.config.tools or [] for d in g.function_declarations or []}
+    assert info.name in visible
+    assert transcript.name not in visible
+    assert await agent.before_tool_callback(info, {"video_id": "abc"}, context) is None
+    assert (await agent.before_tool_callback(transcript, {"video_id": "abc"}, context))["error_code"] == "DISCOVERY_ONLY_INSPECTION_DISABLED"
+
+
+@pytest.mark.asyncio
+async def test_targeted_recovery_is_one_identity_scoped_search_and_browser_is_anchored():
+    search = FunctionTool(func=lambda query: {"results": []})
+    search.name = "searxng_search"
+    search.description = "Search the web for a known source"
+    browser = FunctionTool(func=lambda task: {"status": "ok"})
+    browser.name = "complete_browser_task"
+    agent = builder._build_llm_agent(MAWAgentConfig(name="extractor", instruction="Inspect source", output_key="out", research_mode="inspection_only", research_policy="targeted_recovery"), [search, browser], None, autonomous=False)
+    state = {"__fedotmas_research_candidates": {"extractor": [{"url": "https://example.org/paper", "title": "Known Paper DOI 10.1234/known", "snippet": "", "inspected": False}]}}
+    context = _context(state)
+    context._invocation_context.agent.name = "extractor"
+    await agent.before_agent_callback(context)
+    request = _research_request(search, browser)
+    await agent.before_model_callback(context, request)
+    open_search = await agent.before_tool_callback(browser, {"task": "search the web for similar papers"}, context)
+    assert open_search["error_code"] == "BROWSER_DISCOVERY_POLICY"
+    assert await agent.before_tool_callback(search, {"query": "find another copy of Known Paper DOI 10.1234/known"}, context) is None
+    request = _research_request(search, browser)
+    await agent.before_model_callback(context, request)
+    assert search.name not in {d.name for g in request.config.tools or [] for d in g.function_declarations or []}
+
+
+@pytest.mark.asyncio
+async def test_forced_convergence_blocks_controller_and_open_browser_loops():
+    controller = FunctionTool(func=lambda: {"action": "search again"})
+    controller.name = "get_next_action"
+    browser = FunctionTool(func=lambda task: {"status": "ok"})
+    browser.name = "complete_browser_task"
+    agent = builder._build_llm_agent(MAWAgentConfig(name="researcher", instruction="Research", output_key="out"), [controller, browser], None, autonomous=False)
+    state: dict = {}
+    context = _context(state)
+    context._invocation_context.agent.name = "researcher"
+    await agent.before_agent_callback(context)
+    for _ in range(3):
+        await agent.before_model_callback(context, _research_request(controller, browser))
+    assert state["__fedotmas_research_turns"]["researcher"]["force_converge"] is True
+    assert (await agent.before_tool_callback(controller, {}, context))["error_code"] == "RESEARCH_CONVERGENCE_REQUIRED"
+    assert (await agent.before_tool_callback(browser, {"task": "search the web"}, context))["error_code"] in {"BROWSER_DISCOVERY_POLICY", "RESEARCH_CONVERGENCE_REQUIRED"}
+
+
+@pytest.mark.asyncio
+async def test_discovery_only_source_finder_gets_second_productive_wave_before_handoff():
     telemetry = ResearchTelemetry()
     search = FunctionTool(func=lambda query: {"results": []})
     search.name = "searxng_search"
@@ -1110,11 +1171,19 @@ async def test_discovery_only_source_finder_hands_off_when_candidates_are_ready(
         for group in request.config.tools or []
         for declaration in group.function_declarations or []
     }
-    assert search.name not in exposed
+    assert search.name in exposed
     assert inspect.name not in exposed
     assert "Source 0" in request.config.system_instruction
-    blocked = await agent.before_tool_callback(search, {"query": "again"}, context)
-    assert blocked["error_code"] == "SOURCE_CANDIDATES_READY"
+    assert await agent.before_tool_callback(search, {"query": "exact DOI source"}, context) is None
+    await telemetry.before_tool_callback(tool=search, tool_args={"query": "exact DOI source"}, tool_context=context)
+    await telemetry.after_tool_callback(tool=search, tool_args={"query": "exact DOI source"}, tool_context=context, result={"results": [{"url": "https://example.org/exact", "title": "Exact source"}]})
+    assert any(item["url"] == "https://example.org/exact" for item in state["__fedotmas_research_candidates"]["source_finder"])
+    state["__fedotmas_research_progress"]["source_finder"]["productive_discovery_waves"] = 3
+    request = _research_request(search, inspect)
+    await agent.before_model_callback(context, request)
+    exposed = {declaration.name for group in request.config.tools or [] for declaration in group.function_declarations or []}
+    assert search.name not in exposed
+    assert "Exact source" in request.config.system_instruction
     blocked_inspection = await agent.before_tool_callback(
         inspect, {"url": "https://example.org/source-0"}, context
     )

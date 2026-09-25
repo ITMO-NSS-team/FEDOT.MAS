@@ -79,7 +79,7 @@ def create_toolset(
 
     def solving_tool_filter(tool: BaseTool) -> bool:
         tool_name = getattr(tool, "name", "")
-        visible = is_solving_tool(tool_name)
+        visible = is_solving_tool(f"{name}__{tool_name}")
         if not visible:
             filtered_diagnostics.add(tool_name)
         return visible

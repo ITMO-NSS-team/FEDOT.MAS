@@ -26,6 +26,12 @@ def test_shared_capability_map_covers_research_tools():
     assert {name: tool_capability(name) for name in expected} == expected
 
 
+def test_bare_non_web_search_is_not_web_discovery():
+    assert tool_capability("search") == ToolCapability.OTHER
+    assert tool_capability("search", description="Search the web for sources") == ToolCapability.DISCOVERY
+    assert tool_capability("search", server="pubchem") == ToolCapability.OTHER
+
+
 def test_tavily_worker_toolset_exposes_search_and_filters_telemetry():
     registry = {
         "websearch-tavily": StdioMCPServer(command="echo", args=()),

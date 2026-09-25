@@ -528,15 +528,6 @@ def _normalize_generated_research_modes(
     for agent in config.agents:
         if agent.name in preserved_names:
             continue
-        role = f"{agent.name} {agent.instruction}".casefold()
-        if re.search(r"\bsource[_ -]?finder\b", role):
-            agent.research_mode = "discovery_only"
-            continue
-        if re.search(r"\bstructured[_ -]?extractor\b", role):
-            agent.research_mode = "inspection_only"
-            continue
-        if "research_mode" in agent.model_fields_set:
-            continue
         capabilities = {tool_capability(tool) for tool in agent.tools}
         has_discovery = ToolCapability.DISCOVERY in capabilities
         has_inspection = bool(
@@ -554,3 +545,8 @@ def _normalize_generated_research_modes(
             agent.research_mode = "discovery_only"
         elif has_inspection:
             agent.research_mode = "inspection_only"
+        elif "research_mode" in agent.model_fields_set:
+            raise ValueError(
+                f"Generated agent '{agent.name}' declares research_mode="
+                f"'{agent.research_mode}' but has no discovery or inspection tools."
+            )
