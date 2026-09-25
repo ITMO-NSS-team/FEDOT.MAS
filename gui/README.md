@@ -130,6 +130,8 @@ localhost.run меняет имя на живом соединении. Cloudfla
 | Переменная | По умолчанию | Зачем |
 |---|---|---|
 | `OPENAI_API_KEY`, `OPENAI_BASE_URL` | из `.env` | доступ к провайдеру моделей |
+| `OPENROUTER_API_KEY` | из `.env` | добавляет в список стенда модели OpenRouter (`openrouter/…`) |
+| `GUI_OPENROUTER_MODELS` | пять моделей | какие именно модели OpenRouter показывать; слоги через запятую, без префикса `openrouter/` |
 | `GUI_PORT` | `4173` | порт стенда |
 | `GUI_HOST` | `127.0.0.1` | адрес прослушивания; для прокси среды разработки можно задать `0.0.0.0` |
 | `GUI_PUBLIC` | выкл. | публичный режим: токен доступа + ключ от пользователя |
@@ -138,7 +140,7 @@ localhost.run меняет имя на живом соединении. Cloudfla
 | `GUI_UPLOAD_MAX_MB` | `25` | предел размера файла-источника |
 | `SMITHERY_API_KEY` | пусто | ключ реестра MCP: без него найденные серверы не подключаются |
 | `GUI_ALLOWED_HOSTS` | пусто | дополнительные имена хоста, с которых принимать запросы |
-| `GUI_MODEL` | `host/gpt-5.6-terra` | модель Codex по умолчанию |
+| `GUI_MODEL` | `host/gpt-5.6-terra` | модель по умолчанию (Codex или `openrouter/…`) |
 | `GUI_JUDGE_MODEL` | `host/gpt-5.6-terra` | модель судьи |
 | `GUI_EXTRA_TOOLS` | `rubber-recipe-predictor,technology-card-audit` | список дополнительных инструментов; можно добавить `browser-usage,youtube-transcript` |
 | `SEARXNG_URL` | `http://localhost:18888` | адрес своего SearXNG |

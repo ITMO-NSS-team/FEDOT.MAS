@@ -1291,7 +1291,10 @@ function codexOnly() {
 function renderCodexStatus() {
   const chip = $("codex-status");
   if (!chip) return;
-  chip.classList.toggle("hidden", !codexOnly());
+  // Чип осмыслен, пока в списке есть хоть одна codex-модель: рядом с ней могут
+  // стоять модели OpenRouter, которым codex login не нужен.
+  const hasCodex = (S.backend?.models || []).some((m) => String(m.id || "").startsWith("host/"));
+  chip.classList.toggle("hidden", !hasCodex);
   const ready = !!S.backend?.codex_authenticated;
   chip.classList.toggle("key-ok", ready);
   chip.textContent = ready ? "Codex · подписка активна" : "Codex · выполните codex login";

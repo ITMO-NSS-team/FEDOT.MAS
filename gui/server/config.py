@@ -48,9 +48,10 @@ PUBLIC_MODE = os.getenv("GUI_PUBLIC", "").strip().lower() not in ("", "0", "fals
 ACCESS_TOKEN = os.getenv("GUI_ACCESS_TOKEN") or secrets.token_urlsafe(18)
 
 if PUBLIC_MODE:
-    # Убираем ключ владельца из окружения процесса до того, как его успеет прочитать
+    # Убираем ключи владельца из окружения процесса до того, как их успеет прочитать
     # FEDOT.MAS: иначе публичная ссылка означала бы публичный доступ к его балансу.
     os.environ.pop("OPENAI_API_KEY", None)
+    os.environ.pop("OPENROUTER_API_KEY", None)
 
 DEFAULT_MODEL = os.getenv("GUI_MODEL", "host/gpt-5.6-terra")
 JUDGE_MODEL = os.getenv("GUI_JUDGE_MODEL", "host/gpt-5.6-terra")
@@ -60,6 +61,23 @@ MODELS = [
     {"id": "host/gpt-5.6-sol", "label": "GPT-5.6 Sol · подписка Codex", "open": False},
     {"id": "host/gpt-5.6-luna", "label": "GPT-5.6 Luna · подписка Codex", "open": False},
 ]
+
+# Модели OpenRouter: litellm понимает префикс openrouter/ сам, нужен только
+# OPENROUTER_API_KEY (локально — из .env, в публичном режиме ключ вводит гость,
+# поэтому там пункты показываем даже без ключа в окружении). Слоги проверены по
+# https://openrouter.ai/api/v1/models; свой список — GUI_OPENROUTER_MODELS
+# через запятую, без префикса openrouter/.
+_OPENROUTER_DEFAULT = ("anthropic/claude-sonnet-5,openai/gpt-5.6-terra,"
+                       "google/gemini-2.5-pro,deepseek/deepseek-v4-pro,"
+                       "deepseek/deepseek-v4-flash")
+if os.getenv("OPENROUTER_API_KEY") or PUBLIC_MODE:
+    MODELS += [
+        {"id": "openrouter/" + slug,
+         "label": slug.split("/")[-1] + " · OpenRouter", "open": True}
+        for slug in (s.strip() for s in
+                     os.getenv("GUI_OPENROUTER_MODELS", _OPENROUTER_DEFAULT).split(","))
+        if slug
+    ]
 
 # Рассуждающие модели тратят часть лимита на размышления: с запасом по умолчанию
 # агенты не обрываются на середине ответа.

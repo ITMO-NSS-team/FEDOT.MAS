@@ -85,7 +85,7 @@ async def status() -> dict:
         "scraping": SCRAPING,
         "mcp_servers": sorted(registry),
         "run_id": SERVER_RUN_ID,
-        "has_key": bool(os.getenv("OPENAI_API_KEY")),
+        "has_key": bool(os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")),
         "codex_cli": bool(find_codex_cli()),
         "codex_authenticated": codex_authenticated,
         "codex_status": codex_note,
