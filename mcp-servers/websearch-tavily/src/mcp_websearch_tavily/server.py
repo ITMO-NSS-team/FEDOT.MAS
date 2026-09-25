@@ -18,11 +18,18 @@ _log = logging.getLogger("mcp_websearch_tavily")
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 DEFAULT_ROTATE_EVERY = 50
 MAX_RESULTS = 10
-MAX_QUERY_CHARS = 2_000
+MAX_QUERY_CHARS = 400
 MAX_TITLE_CHARS = 160
 MAX_URL_CHARS = 2_048
 MAX_SNIPPET_CHARS = 500
-KEY_FAILURE_STATUSES = {401: "auth", 402: "quota", 403: "auth", 429: "rate_limit"}
+KEY_FAILURE_STATUSES = {
+    401: "auth",
+    402: "quota",
+    403: "auth",
+    429: "rate_limit",
+    432: "quota",
+    433: "quota",
+}
 
 
 def _parse_rotation(value: str | None) -> int:

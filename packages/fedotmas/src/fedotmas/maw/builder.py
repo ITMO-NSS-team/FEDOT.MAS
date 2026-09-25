@@ -1326,7 +1326,30 @@ def _seed_upstream_candidates(state: Any, cfg: MAWAgentConfig) -> None:
             if not missing_contract_fields(artifact, [field])[1]
         }
         for record in _artifact_records(artifact):
-            url = next((record.get(key) for key in ("url", "source_url", "link") if isinstance(record.get(key), str) and record[key].strip()), None)
+            url = next(
+                (
+                    value
+                    for key, value in record.items()
+                    if isinstance(value, str)
+                    and value.startswith(("http://", "https://"))
+                    and (
+                        "url" in str(key).casefold()
+                        or "link" in str(key).casefold()
+                    )
+                ),
+                None,
+            )
+            
+            if url is None:
+                url = next(
+                    (
+                        value
+                        for value in record.values()
+                        if isinstance(value, str)
+                        and value.startswith(("http://", "https://"))
+                    ),
+                    None,
+                )
             doi = next((record.get(key) for key in ("doi", "DOI") if isinstance(record.get(key), str) and record[key].strip()), None)
             title = next((record.get(key) for key in ("title", "name", "label") if isinstance(record.get(key), str) and record[key].strip()), None)
             if not doi and not url and not title and required_identity:

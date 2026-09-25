@@ -20,7 +20,14 @@ from youtube_transcript_api import (
 
 TRANSCRIPT_TOOLS = frozenset({"get_transcript", "get_timed_transcript"})
 
-
+VIDEO_URL_TOOLS = frozenset(
+    {
+        "get_video_info",
+        "get_transcript",
+        "get_timed_transcript",
+        "get_available_languages",
+    }
+)
 def _error(code: str, message: str) -> ToolResult:
     payload = {"error_code": code, "message": message}
     return ToolResult(
@@ -74,6 +81,13 @@ class TranscriptErrors(Middleware):
             return await call_next(context)
 
         arguments = context.message.arguments or {}
+        if context.message.name in VIDEO_URL_TOOLS:
+            url = arguments.get("url")
+            if not isinstance(url, str) or _video_id(url) is None:
+                return _error(
+                    "INVALID_VIDEO_URL",
+                    "Expected a direct YouTube video URL, not a homepage, channel, or search page.",
+                )
         if "next_cursor" in arguments and arguments["next_cursor"] is not None:
             cursor = arguments["next_cursor"]
             if (
