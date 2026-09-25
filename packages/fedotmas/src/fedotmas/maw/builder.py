@@ -22,6 +22,7 @@ from fedotmas._settings import (
 )
 from fedotmas.common.llm import make_llm
 from fedotmas.common.logging import get_logger
+from fedotmas.maw._validators import _find_terminal_node
 from fedotmas.maw.handoffs import (
     EXECUTION_METADATA_KEY,
     append_execution_issue,
@@ -185,6 +186,13 @@ def build(
     Pass ``autonomous=False`` when the tree is served to a person who can answer
     a clarifying question; see :func:`frame_instruction`.
     """
+    if final_answer_contract is not None and config.final_answer_agent is None:
+        terminal = _find_terminal_node(config.pipeline)
+        if terminal.type != "agent" or terminal.agent_name is None:
+            raise ValueError(
+                "Cannot infer final_answer_agent: the pipeline must end in one agent"
+            )
+        config.final_answer_agent = terminal.agent_name
     agents_by_name: dict[str, MAWAgentConfig] = {a.name: a for a in config.agents}
     # The same set MAWConfig validates against: what a step can actually produce.
     state_keys = frozenset({"user_query"} | {a.output_key for a in config.agents})
@@ -296,6 +304,31 @@ def _resolve_llm(
     return model_name
 
 
+def _resolve_recovered_handoffs(
+    state: dict[str, Any], cfg: MAWAgentConfig, artifact: dict[str, Any] | None
+) -> None:
+    """Resolve input gaps only for an explicitly permitted recovery role."""
+    for requirement in cfg.input_requirements:
+        if artifact is not None:
+            required_fields = list(
+                dict.fromkeys(
+                    [*requirement.required_fields, *requirement.identity_fields]
+                )
+            )
+            if not required_fields or missing_contract_fields(
+                artifact, required_fields
+            )[1]:
+                continue
+        resolve_execution_issue(
+            state,
+            {
+                "kind": "incomplete_handoff",
+                "agent": cfg.name,
+                "source_key": requirement.source_key,
+            },
+        )
+
+
 def _build_llm_agent(
     cfg: MAWAgentConfig,
     mcp_registry: dict[str, MCPServerConfig] | None,
@@ -368,15 +401,22 @@ def _build_llm_agent(
                 )
 
     async def after_agent(callback_context: CallbackContext) -> None:
-        # A terminal answer is formatted for the caller, not handed to a
-        # downstream agent. Its final-answer contract takes precedence over a
-        # generated structured handoff contract.
-        if cfg.output_contract is None or (
-            final_answer_contract is not None
-            and cfg.name == final_answer_agent
-        ):
-            return
         value = callback_context.state.get(cfg.output_key)
+        terminal_answer = (
+            final_answer_contract is not None and cfg.name == final_answer_agent
+        )
+        if terminal_answer:
+            # This role may recover an input dependency, but its answer is
+            # formatted for the caller and is never a structured handoff.
+            if (
+                cfg.research_policy == "targeted_recovery"
+                and value is not None
+                and str(value).strip()
+            ):
+                _resolve_recovered_handoffs(callback_context.state, cfg, None)
+            return
+        if cfg.output_contract is None:
+            return
         missing = validate_output_contract(value, cfg.output_contract)
         if missing:
             append_execution_issue(
@@ -399,24 +439,8 @@ def _build_llm_agent(
             )
         artifact = parse_artifact(value)
         if artifact is not None:
-            for requirement in cfg.input_requirements:
-                required_fields = list(
-                    dict.fromkeys(
-                        [*requirement.required_fields, *requirement.identity_fields]
-                    )
-                )
-                _recovered, recovery_missing = missing_contract_fields(
-                    artifact, required_fields
-                )
-                if required_fields and not recovery_missing:
-                    resolve_execution_issue(
-                        callback_context.state,
-                        {
-                            "kind": "incomplete_handoff",
-                            "agent": cfg.name,
-                            "source_key": requirement.source_key,
-                        },
-                    )
+            if cfg.research_policy == "targeted_recovery" and not missing:
+                _resolve_recovered_handoffs(callback_context.state, cfg, artifact)
             for requirement in cfg.input_requirements:
                 upstream = parse_artifact(
                     callback_context.state.get(requirement.source_key)
@@ -439,6 +463,18 @@ def _build_llm_agent(
                             "agent": cfg.name,
                             "source_key": requirement.source_key,
                             "fields": sorted(mismatched),
+                        },
+                    )
+                elif shared_identity and all(
+                    field in upstream and field in artifact
+                    for field in shared_identity
+                ):
+                    resolve_execution_issue(
+                        callback_context.state,
+                        {
+                            "kind": "entity_continuity_mismatch",
+                            "agent": cfg.name,
+                            "source_key": requirement.source_key,
                         },
                     )
 

@@ -339,8 +339,91 @@ async def test_terminal_final_answer_skips_generated_output_contract(monkeypatch
     assert "handoff_issues" not in result.state.get("_fedotmas_execution", {})
 
 
+@pytest.mark.parametrize(
+    ("policy", "completed"),
+    [("targeted_recovery", True), ("evidence_first", False), ("independent", False)],
+)
 @pytest.mark.asyncio
-async def test_recovered_handoff_issue_is_resolved(monkeypatch):
+async def test_terminal_targeted_recovery_resolves_missing_handoff(monkeypatch, policy, completed):
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(name="producer", instruction="Return evidence.", output_key="evidence"),
+            MAWAgentConfig(
+                name="answerer",
+                instruction="Recover the missing claim and answer.",
+                output_key="answer",
+                input_requirements=[ArtifactRequirement(source_key="evidence", required_fields=["claim"])],
+                output_contract=ArtifactContract(required_fields=["claim"]),
+                research_policy=policy,
+            ),
+        ],
+        pipeline=MAWStepConfig(
+            type="sequential",
+            children=[MAWStepConfig(type="agent", agent_name="producer"), MAWStepConfig(type="agent", agent_name="answerer")],
+        ),
+        final_answer_agent="answerer",
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(role="model", parts=[types.Part.from_text(text='{"other":"x"}')]),
+            types.Content(role="model", parts=[types.Part.from_text(text="<solution>42</solution>")]),
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    result = await run_pipeline(
+        builder.build(config, autonomous=False, final_answer_contract="Use <solution>answer</solution>."),
+        "Recover and answer.",
+        session_service=InMemorySessionService(),
+    )
+
+    issue = result.state["_fedotmas_execution"]["handoff_issues"][0]
+    assert issue["kind"] == "incomplete_handoff"
+    assert issue["resolved"] is completed
+    assert result.state["answer"] == "<solution>42</solution>"
+    assert result.status == ("completed" if completed else "incomplete")
+
+
+@pytest.mark.asyncio
+async def test_inferred_final_answer_agent_is_persisted(monkeypatch):
+    config = MAWConfig(
+        agents=[MAWAgentConfig(name="answerer", instruction="Answer.", output_key="answer")],
+        pipeline=MAWStepConfig(type="agent", agent_name="answerer"),
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[types.Content(role="model", parts=[types.Part.from_text(text="<solution>42</solution>")])],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    agent = builder.build(config, autonomous=False, final_answer_contract="Use <solution>answer</solution>.")
+    result = await run_pipeline(agent, "Answer.", session_service=InMemorySessionService())
+
+    assert config.final_answer_agent == "answerer"
+    assert result.state[config.agents[0].output_key] == "<solution>42</solution>"
+    assert result.status == "completed"
+
+
+def test_ambiguous_terminal_cannot_infer_final_answer_agent():
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(name="a", instruction="Answer A.", output_key="a_output"),
+            MAWAgentConfig(name="b", instruction="Answer B.", output_key="b_output"),
+        ],
+        pipeline=MAWStepConfig(
+            type="parallel",
+            children=[MAWStepConfig(type="agent", agent_name="a"), MAWStepConfig(type="agent", agent_name="b")],
+        ),
+    )
+    with pytest.raises(ValueError, match="Cannot infer final_answer_agent"):
+        builder.build(config, final_answer_contract="Return a final answer.")
+
+
+@pytest.mark.parametrize(
+    ("policy", "completed"),
+    [("targeted_recovery", True), ("evidence_first", False), ("independent", False)],
+)
+@pytest.mark.asyncio
+async def test_only_targeted_recovery_self_resolves_missing_handoff(monkeypatch, policy, completed):
     config = MAWConfig(
         agents=[
             MAWAgentConfig(
@@ -352,7 +435,7 @@ async def test_recovered_handoff_issue_is_resolved(monkeypatch):
                 output_key="recovered",
                 input_requirements=[ArtifactRequirement(source_key="evidence", required_fields=["claim"])],
                 output_contract=ArtifactContract(required_fields=["claim"]),
-                research_policy="targeted_recovery",
+                research_policy=policy,
             ),
         ],
         pipeline=MAWStepConfig(
@@ -374,8 +457,8 @@ async def test_recovered_handoff_issue_is_resolved(monkeypatch):
 
     issues = result.state["_fedotmas_execution"]["handoff_issues"]
     assert issues[0]["kind"] == "incomplete_handoff"
-    assert issues[0]["resolved"] is True
-    assert result.status == "completed"
+    assert issues[0]["resolved"] is completed
+    assert result.status == ("completed" if completed else "incomplete")
 
 
 @pytest.mark.asyncio
@@ -436,6 +519,39 @@ async def test_later_loop_iteration_resolves_incomplete_artifact(monkeypatch):
 
     issue = result.state["_fedotmas_execution"]["handoff_issues"][0]
     assert issue["resolved"] is True
+    assert result.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_later_loop_iteration_resolves_entity_continuity_mismatch(monkeypatch):
+    producer, verifier = _contract_config().agents
+    config = MAWConfig(
+        agents=[producer, verifier],
+        pipeline=MAWStepConfig(
+            type="loop",
+            max_iterations=2,
+            children=[MAWStepConfig(type="agent", agent_name="verifier")],
+        ),
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(role="model", parts=[types.Part.from_text(text='{"paper_identity":"paper-B","decision":"supported"}')]),
+            types.Content(role="model", parts=[types.Part.from_text(text='{"paper_identity":"paper-A","decision":"supported"}')]),
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    result = await run_pipeline(
+        builder.build(config, autonomous=False),
+        "Verify it.",
+        initial_state={"paper_evidence": json.dumps({"paper_identity": "paper-A", "equation": "E=mc^2", "evidence": "page 8"})},
+        session_service=InMemorySessionService(),
+    )
+
+    issues = result.state["_fedotmas_execution"]["handoff_issues"]
+    assert issues[0]["kind"] == "entity_continuity_mismatch"
+    assert issues[0]["fields"] == ["paper_identity"]
+    assert issues[0]["resolved"] is True
     assert result.status == "completed"
 
 

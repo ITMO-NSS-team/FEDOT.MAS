@@ -227,10 +227,6 @@ class MAW(BaseMAS[MAWConfig]):
     ) -> BaseAgent:
         """Build an ADK agent tree from *config*."""
         self._reject_external_build()
-        if final_answer_contract and config.final_answer_agent is None:
-            raise ValueError(
-                "A final_answer_contract requires MAWConfig.final_answer_agent"
-            )
         _log.info("Building agent tree")
         agent = build(
             config,

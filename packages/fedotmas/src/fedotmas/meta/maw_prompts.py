@@ -246,7 +246,8 @@ Use single curly braces around the state key name. In the examples below, angle 
       {"type": "agent", "agent_name": "writer"},
       {"type": "agent", "agent_name": "critic"}
     ]
-  }
+  },
+  "final_answer_agent": "critic"
 }
 ```
 
@@ -545,7 +546,8 @@ Use single curly braces around the state key name. In the examples below, angle 
       {"type": "agent", "agent_name": "writer"},
       {"type": "agent", "agent_name": "critic"}
     ]
-  }
+  },
+  "final_answer_agent": "critic"
 }
 ```
 
