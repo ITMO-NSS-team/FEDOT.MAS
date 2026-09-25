@@ -647,3 +647,89 @@ class TestTheirOwnBundleIsAccepted:
     def test_hand_built_bundle_passes(self):
         fixture = Path(__file__).parent / "urban_bundle_structure.json"
         _assert_accepted(json.loads(fixture.read_text()))
+
+
+class TestMASDelegation:
+    @pytest.fixture()
+    def mas(self):
+        from fedotmas.mas.models import MASConfig
+
+        fixture = Path(__file__).resolve().parents[4] / "examples/export/technology_card_mas.json"
+        return MASConfig.model_validate_json(fixture.read_text())
+
+    def test_technology_card_preserves_routing_and_roles(self, mas):
+        before = mas.model_dump()
+        export = to_synapse_bundle(mas, workflow_id="technology_card_audit")
+        _assert_accepted(export.bundle)
+        items = export.bundle["items"]
+        coordinator, *workers = items["agents"]
+        start, phase, end = items["workflows"][0]["nodes"]
+        assert phase["agent_type"] == coordinator["_id"]
+        assert phase["can_delegate"] is True
+        assert phase["writes"] == ["technology_card_audit"]
+        assert items["workflows"][0]["edges"] == [
+            {"from": start["id"], "to": phase["id"]},
+            {"from": phase["id"], "to": end["id"]},
+        ]
+        assert coordinator["allowed_delegation_targets"] == [w["_id"] for w in workers]
+        assert {"delegate_to_agent", "context_write"} <= set(coordinator["allowed_tools"])
+        assert mas.coordinator.instruction in coordinator["system_prompt"]
+        assert '"technology_card_audit"' in coordinator["system_prompt"]
+        for source, doc in zip(mas.workers, workers):
+            assert doc["allowed_delegation_targets"] == []
+            assert doc["system_prompt"] == source.instruction
+            assert doc["description"] == source.description
+            assert doc["output_save_key"] == source.output_key
+            assert doc["model"] == source.model
+            assert doc["allowed_tools"] == source.tools
+            assert doc["_id"] in coordinator["system_prompt"]
+            assert source.description in coordinator["system_prompt"]
+        assert export.linearized_branches == export.degraded_loops == 0
+        assert mas.model_dump() == before
+        assert to_synapse_bundle(mas, workflow_id="technology_card_audit") == export
+
+    def test_catalog_filters_domain_tools_but_keeps_runtime_tools(self, mas):
+        mas.coordinator.tools += ["delegate_to_agent", "context_write"]
+        export = to_synapse_bundle(mas, workflow_id="audit", tool_catalog={})
+        coordinator, *workers = export.bundle["items"]["agents"]
+        assert coordinator["allowed_tools"] == ["delegate_to_agent", "context_write"]
+        assert all(w["allowed_tools"] == [] for w in workers)
+        assert export.unresolved_tools == ("technology-card-audit",)
+
+    def test_reused_and_colliding_ids_resolve_to_actual_targets(self, mas):
+        from fedotmas.maw.models import AgentPoolEntry
+
+        mas.coordinator.name = "start"
+        mas.workers[0].name = "Ёж"
+        mas.workers[1].name = "Еж"
+        pool = AgentPoolConfig(agents=[
+            AgentPoolEntry(name="start", id="saved_master", instruction="old"),
+            AgentPoolEntry(name="Ёж", id="saved_worker", instruction="old"),
+            AgentPoolEntry(name="Еж", id="Неверный ID", instruction="old"),
+        ])
+        export = to_synapse_bundle(mas, workflow_id="audit", existing_agents=pool, tool_catalog={})
+        _assert_accepted(export.bundle)
+        coordinator, *workers = export.bundle["items"]["agents"]
+        assert export.reused_agents == ("saved_master", "saved_worker")
+        assert export.renamed_ids == (("Неверный ID", workers[1]["_id"]),)
+        assert coordinator["allowed_delegation_targets"] == [w["_id"] for w in workers]
+        assert all(w["allowed_delegation_targets"] == [] for w in workers)
+        assert "technology-card-audit" in workers[0]["allowed_tools"]
+        assert "allowed_delegation_targets" in export.overwritten_fields
+        assert "description" in export.overwritten_fields
+        collision = to_synapse_bundle(mas, workflow_id="audit")
+        ids = [a["_id"] for a in collision.bundle["items"]["agents"]]
+        assert len(ids) == len(set(ids))
+        assert ids[1] != ids[2]
+
+    def test_nullable_outputs_and_custom_phase(self, mas):
+        mas.coordinator.output_key = None
+        mas.workers[0].output_key = None
+        export = to_synapse_bundle(mas, workflow_id="audit", phase_label="review")
+        coordinator, *workers = export.bundle["items"]["agents"]
+        phase = export.bundle["items"]["workflows"][0]["nodes"][1]
+        assert "writes" not in phase
+        assert "context_write" not in coordinator["allowed_tools"]
+        assert coordinator["output_save_key"] is None
+        assert workers[0]["output_save_key"] is None
+        assert all(a["allowed_phases"] == ["review"] for a in [coordinator, *workers])

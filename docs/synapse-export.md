@@ -1,6 +1,6 @@
 # Synapse export
 
-A generated configuration does not have to run here. `fedotmas.export` turns a `MAWConfig` into the JSON that the Synapse platform imports through its configuration bundle endpoint, so the agents, prompts, tool assignments and the workflow between them are handed over as an artifact and executed by their engine.
+A generated configuration does not have to run here. `fedotmas.export` turns a `MAWConfig` or `MASConfig` into the JSON that the Synapse platform imports through its configuration bundle endpoint, so the agents, prompts, tool assignments and the workflow between them are handed over as an artifact and executed by their engine.
 
 Nothing in this module builds or runs anything. Generation and execution are separate steps here, and the export replaces the second one with their runtime.
 
@@ -37,6 +37,50 @@ asyncio.run(main())
 Leaving it out means something different on each side. Generation falls back to this instance's own MCP registry, which is empty unless `mcp_servers` was passed — that is the case above, and it produces agents with no tools. The export, given no catalogue, has nothing to check against and emits `tools` as they stand: an id their tenant does not have then imports as a broken reference rather than being dropped and reported.
 
 An instance built with a `tool_catalog` cannot `build()` the config it produced: the tools belong to another runtime, so the configuration is for export only.
+
+## Routing MAS and coordinator delegation
+
+`to_synapse_bundle` also accepts `MASConfig` with the same arguments and report.
+It exports all agents and a single workflow phase: `start → coordinator → end`.
+Workers are called dynamically by the coordinator, with control returning after
+each call; they do not become sequential workflow phases.
+
+The coordinator receives `delegate_to_agent` in `allowed_tools`, an explicit
+`allowed_delegation_targets` list containing the exported worker base IDs, and
+`can_delegate: true` on its phase node. Worker policies are empty, including on
+reused workers, so this export permits only coordinator-to-worker delegation.
+The original coordinator instruction is retained and extended with a roster of
+original names, exported IDs, descriptions and output keys, plus instructions
+for forwarding context and checking delegation results. Worker descriptions,
+prompts, models, tools and nullable output keys are preserved.
+
+If the coordinator has an `output_key`, its node declares `writes`, and the
+export adds `context_write` and an instruction to persist the final synthesis.
+Synapse delegation results return to the parent; they are not automatically
+stored in shared context. The parent must pass relevant results into subsequent
+delegation instructions. `delegate_to_agent` and the required `context_write`
+are runtime dependencies added independently of the domain-tool catalogue;
+they must already be registered in Synapse. Domain tools retain the MAW filtering
+and reuse rules. MAS reuse also overwrites `description` and
+`allowed_delegation_targets`, reported in `overwritten_fields`.
+
+An offline example uses the technology-card audit configuration from
+[PR #46](https://github.com/ITMO-NSS-team/FEDOT.MAS/pull/46)
+(commit `4223f3f123fd6e8a7ae72f546748f69695238072`):
+
+```sh
+uv run python examples/export/mas_synapse_bundle.py > /tmp/technology_card_bundle.json
+```
+
+This only exports JSON; it does not call models or MCP servers. The fixture
+retains the PR's `host/gpt-5.6-terra` and `technology-card-audit` identifiers.
+Before importing, replace these with model IDs and individual discovered tool
+IDs available in the target tenant. A local MCP server name is not automatically
+a Synapse tool ID. The fixture's `max_output_tokens` is not part of this branch's
+`MASConfig` schema and is not exported. Tests validate structure and delegation
+contracts offline; they do not establish successful execution in a tenant.
+
+The topology and agent tables below describe MAW export unless stated otherwise.
 
 ## What the bundle carries
 
