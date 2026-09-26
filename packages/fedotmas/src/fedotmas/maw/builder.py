@@ -621,7 +621,7 @@ def _build_llm_agent(
     )
     if cfg.output_contract is not None and not terminal_boundary:
         instruction_text += _contract_instruction(cfg)
-    if final_answer_contract:
+    if terminal_boundary:
         instruction_text = (
             f"{instruction_text}\n\nFINAL ANSWER CONTRACT (terminal stage only):\n"
             f"{final_answer_contract}"

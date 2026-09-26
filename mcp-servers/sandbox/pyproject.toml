@@ -26,7 +26,8 @@ ini_options.asyncio_mode = "auto"
 mcp.name = "sandbox"
 mcp.description = """\
   Full Python sandbox for computation and file operations, with pip install, shell commands, and persistent \
-  Jupyter-style sessions. Variables, imports, and packages are preserved across calls. Use for calculations, data \
-  processing, or filesystem work.\
+  Jupyter-style sessions. Persistence is local to one agent/tool session: different agents must not assume they \
+  share files, installed packages, variables, or processes. Pass semantic results through pipeline state. Use for \
+  calculations, data processing, or filesystem work.\
   """
 mcp.tags = [ "code", "sandbox" ]

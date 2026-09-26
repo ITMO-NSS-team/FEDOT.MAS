@@ -17,6 +17,8 @@ from benchmarks.gaia.run_gaia import (
     _gaia_max_agent_llm_turns,
     _gaia_mcp_registry,
     _gaia_mcp_servers,
+    _log_selected_models,
+    _task_from_file,
     build_plugins,
     compute_metrics_by_level,
     compute_token_summary,
@@ -187,6 +189,27 @@ def test_explicit_sandbox_mcp_selection_is_preserved_exactly(
 
     assert _gaia_mcp_servers() == ["sandbox"]
     assert list(_gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))) == ["sandbox"]
+
+
+def test_custom_task_file_preserves_raw_text_and_resolved_path(tmp_path: Path):
+    task_file = tmp_path / "input task.txt"
+    task_file.write_text("Complete raw task text.\nSecond line.", encoding="utf-8")
+
+    task = _task_from_file(task_file)
+
+    assert task.question == "Complete raw task text.\nSecond line."
+    assert task.file_path == str(task_file.resolve())
+    assert task.file_name == task_file.name
+
+
+def test_startup_logs_meta_and_worker_models_independently():
+    meta = ModelConfig(model="deepseek/meta")
+    worker = ModelConfig(model="deepseek/worker")
+    with patch("benchmarks.gaia.run_gaia._log.info") as log_info:
+        _log_selected_models(meta, worker)
+    log_info.assert_called_once_with(
+        "Meta model:   {}\nWorker model: {}", "deepseek/meta", "deepseek/worker"
+    )
 
 
 def test_gaia_research_budget_defaults(monkeypatch: pytest.MonkeyPatch):
@@ -656,7 +679,20 @@ async def test_gaia_timeout_never_submits_intermediate_or_matching_partial_answe
             final_answer_contract: str | None = None,
         ) -> dict[str, str]:
             self.last_result = PipelineResult(
-                state={"research_findings": partial_answer}, status="timed_out"
+                state={
+                    "research_findings": partial_answer,
+                    "_fedotmas_execution": {
+                        "handoff_issues": [
+                            {
+                                "kind": "incomplete_handoff",
+                                "agent": "researcher",
+                                "source_key": "findings",
+                                "resolved": False,
+                            }
+                        ]
+                    },
+                },
+                status="timed_out",
             )
             return self.last_result.state
 
@@ -685,6 +721,14 @@ async def test_gaia_timeout_never_submits_intermediate_or_matching_partial_answe
     assert artifact["pipeline_status"] == "timed_out"
     assert artifact["attempt_status"] == "incomplete"
     assert attempt["session_state"]["research_findings"] == partial_answer
+    assert attempt["unresolved_execution_issues"] == [
+        {
+            "kind": "incomplete_handoff",
+            "agent": "researcher",
+            "source_key": "findings",
+            "resolved": False,
+        }
+    ]
     assert artifact["response"] == ""
 
 

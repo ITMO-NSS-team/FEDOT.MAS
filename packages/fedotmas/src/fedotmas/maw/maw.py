@@ -512,7 +512,7 @@ def _normalize_generated_research_policies(
             return set.union(*outputs) if outputs else available
         return available
 
-    visit(config.pipeline, set())
+    visit(config.pipeline, {"user_query"})
     preserved_names = preserved_names or set()
     for name, agent in agents.items():
         if agent.research_policy != "evidence_first" or name in preserved_names:

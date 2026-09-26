@@ -38,6 +38,13 @@ mcp.timeout = 120
         assert srv.description == "Headless browser"
         assert srv.tags == ("web",)
 
+    def test_sandbox_description_explains_agent_local_persistence(self):
+        root = Path(__file__).resolve().parents[4]
+        sandbox = discover_local_servers(root / "mcp-servers")["sandbox"]
+
+        assert "local to one agent/tool session" in sandbox.description
+        assert "Pass semantic results through pipeline state" in sandbox.description
+
     def test_command_without_args(self, tmp_path):
         _write_toml(
             tmp_path,

@@ -447,3 +447,26 @@ class TestGeneratedTokenBudget:
         _normalize_generated_research_policies(config)
 
         assert config.agents[0].research_policy == "independent"
+
+
+def test_user_query_is_available_to_first_stage_research_policy():
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(
+                name="reader",
+                instruction="Use {user_query} and return an evidence packet.",
+                output_key="evidence",
+                research_policy="evidence_first",
+                input_requirements=[
+                    ArtifactRequirement(
+                        source_key="user_query", required_fields=["task"]
+                    )
+                ],
+            )
+        ],
+        pipeline=MAWStepConfig(type="agent", agent_name="reader"),
+    )
+
+    _normalize_generated_research_policies(config)
+
+    assert config.agents[0].research_policy == "evidence_first"

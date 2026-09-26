@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fedotmas.meta._adk_runner import _resolve_max_output_tokens, run_meta_agent_call
+from fedotmas.meta._adk_runner import (
+    _MetaUsageTracker,
+    _resolve_max_output_tokens,
+    _retry_message,
+    run_meta_agent_call,
+)
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -91,13 +97,28 @@ class TestRetryOnTransientError:
             usage = kwargs["usage_totals"]
             message = kwargs["user_message"]
             calls.append((message, usage))
+            tracker = _MetaUsageTracker(usage)
             if len(calls) == 1:
-                usage.update(prompt=11, completion=5)
+                await tracker.after_model_callback(
+                    callback_context=None,
+                    llm_response=SimpleNamespace(
+                        usage_metadata=SimpleNamespace(
+                            prompt_token_count=11, candidates_token_count=5
+                        )
+                    ),
+                )
                 raise RuntimeError(
                     "ValidationError: Pipeline references unknown agent 'bad'. "
                     "Available: ['solver']"
                 )
-            usage.update(prompt=7, completion=3)
+            await tracker.after_model_callback(
+                callback_context=None,
+                llm_response=SimpleNamespace(
+                    usage_metadata=SimpleNamespace(
+                        prompt_token_count=7, candidates_token_count=3
+                    )
+                ),
+            )
             from fedotmas.meta._adk_runner import LLMCallResult
 
             return LLMCallResult(
@@ -130,6 +151,13 @@ class TestRetryOnTransientError:
         assert "agent_name values exactly as declared" in calls[1][0]
         assert result.prompt_tokens == 18
         assert result.completion_tokens == 8
+
+    def test_truncated_meta_output_is_identified_explicitly(self):
+        message = _retry_message(
+            "generate config", RuntimeError("finish_reason=length; MAX_TOKENS")
+        )
+        assert "truncated by the output-token limit" in message
+        assert "FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS" in message
 
 
 class TestRetriesExhausted:

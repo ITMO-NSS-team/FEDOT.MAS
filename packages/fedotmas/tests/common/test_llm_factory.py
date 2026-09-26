@@ -7,10 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.common.llm import (
-    _DEFAULT_MAX_OUTPUT_TOKENS,
     _ERROR_PAYLOAD_LEN,
-    _ProxyClient,
     _invalid_tool_argument_names,
+    _ProxyClient,
     make_llm,
 )
 from fedotmas.mas.builder import build_routing_system
@@ -365,7 +364,63 @@ class TestProxyClientToolArgumentValidation:
         assert client._client.chat.completions.create.await_count == 2
         retry = client._client.chat.completions.create.await_args_list[1].kwargs
         assert retry["messages"][-1]["content"].startswith("The previous tool-call")
-        assert retry["max_tokens"] == _DEFAULT_MAX_OUTPUT_TOKENS
+        assert "max_tokens" not in retry
+
+    async def test_explicit_output_limit_is_preserved(self):
+        client = _client_with_response(_response())
+        await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], [], max_tokens=1234
+        )
+        assert (
+            client._client.chat.completions.create.await_args.kwargs["max_tokens"]
+            == 1234
+        )
+
+    async def test_usage_from_malformed_argument_retry_is_aggregated(self):
+        malformed = _tool_response("{")
+        malformed.model_dump.return_value["usage"] = {
+            "prompt_tokens": 11,
+            "completion_tokens": 5,
+            "total_tokens": 16,
+        }
+        valid = _tool_response('{"ok": true}')
+        valid.model_dump.return_value["usage"] = {
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
+            "total_tokens": 10,
+        }
+        client = _client_with_response(malformed)
+        client._client.chat.completions.create.side_effect = [malformed, valid]
+
+        response = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert response.usage.prompt_tokens == 18
+        assert response.usage.completion_tokens == 8
+        assert response.usage.total_tokens == 26
+
+    async def test_usage_survives_transport_error_during_retry(self):
+        malformed = _tool_response("{")
+        malformed.model_dump.return_value["usage"] = {
+            "prompt_tokens": 11,
+            "completion_tokens": 5,
+            "total_tokens": 16,
+        }
+        transport_error = RuntimeError("transport retry failed")
+        client = _client_with_response(malformed)
+        client._client.chat.completions.create.side_effect = [
+            malformed,
+            transport_error,
+        ]
+
+        with pytest.raises(RuntimeError, match="transport retry failed") as raised:
+            await client.acompletion(
+                "openai/test", [{"role": "user", "content": "x"}], []
+            )
+
+        assert raised.value.prompt_tokens == 11
+        assert raised.value.completion_tokens == 5
 
     async def test_repeated_malformed_tool_arguments_fail_clearly(self):
         client = _client_with_response(_tool_response("{"))

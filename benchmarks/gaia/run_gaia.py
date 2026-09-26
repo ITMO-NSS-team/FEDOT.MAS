@@ -18,6 +18,7 @@ from fedotmas import MAW, ModelConfig
 from fedotmas._settings import get_meta_model
 from fedotmas.common.logging import get_logger
 from fedotmas.maw._validators import _find_terminal_node
+from fedotmas.maw.handoffs import unresolved_execution_issues
 from fedotmas.mcp import MCPServerConfig, StdioMCPServer, resolve_mcp_registry
 from fedotmas.plugins import (
     BrowserFallbackPolicyPlugin,
@@ -91,6 +92,25 @@ class CompletedPipelinePostProcessingError(RuntimeError):
 
 def _is_custom_task(task: Any) -> bool:
     return (getattr(task, "metadata", None) or {}).get("source") == "custom_task_file"
+
+
+def _task_from_file(task_path: Path) -> BenchmarkTask:
+    resolved_path = task_path.resolve()
+    return BenchmarkTask(
+        task_id="custom_exact_optimization",
+        question=resolved_path.read_text(encoding="utf-8"),
+        file_path=str(resolved_path),
+        file_name=resolved_path.name,
+        ground_truth="",
+        difficulty="0",
+        metadata={"source": "custom_task_file"},
+    )
+
+
+def _log_selected_models(meta_model: ModelConfig, worker_model: ModelConfig) -> None:
+    _log.info(
+        "Meta model:   {}\nWorker model: {}", meta_model.model, worker_model.model
+    )
 
 
 @dataclass(frozen=True)
@@ -552,7 +572,8 @@ async def preflight_startup_models() -> None:
         if key in checked:
             continue
         checked.add(key)
-        _log.info("Preflight model healthcheck | {}={}", name, model.model)
+        if name != "FEDOTMAS_GAIA_WORKER_MODEL":
+            _log.info("Preflight model healthcheck | {}={}", name, model.model)
         try:
             await preflight_model_endpoint(model)
         except Exception as exc:
@@ -1028,6 +1049,7 @@ async def _process_task_attempt(
             "tokens": _token_usage(maw, pipeline_result),
             "elapsed": maw.elapsed,
             "research_telemetry": telemetry.snapshot() if telemetry else {},
+            "unresolved_execution_issues": unresolved_execution_issues(state),
         }
         await _write_attempt(task_log_dir, attempt_number, result)
         return result
@@ -1070,6 +1092,7 @@ async def _process_task_attempt(
             ),
             "elapsed": getattr(maw, "elapsed", 0.0) if maw is not None else 0.0,
             "research_telemetry": telemetry.snapshot() if telemetry else {},
+            "unresolved_execution_issues": unresolved_execution_issues(state),
         }
         if terminal_output_ready:
             artifact["attempt_status"] = "postprocessing_failed"
@@ -1238,6 +1261,7 @@ def _copy_attempt_fields(destination: dict[str, Any], record: dict[str, Any]) ->
         "maw_config",
         "attempt_status",
         "pipeline_status",
+        "unresolved_execution_issues",
         "error",
     ):
         if key in record:
@@ -1276,23 +1300,15 @@ async def run_gaia(
     base_log_dir.mkdir(parents=True, exist_ok=True)
 
     _log.info("Logs will be saved to: {}", base_log_dir)
+    meta_model = _gaia_meta_model()
+    worker_model = _gaia_worker_model()
+    _log_selected_models(meta_model, worker_model)
     await preflight_startup_models()
 
     gaia = GaiaBenchmark({"difficulty": difficulty, "split": split})
     if task_file:
         task_path = Path(task_file)
-        question = task_path.read_text(encoding="utf-8")
-        tasks = [
-            BenchmarkTask(
-                task_id="custom_exact_optimization",
-                question=question,
-                file_path="",
-                file_name="",
-                ground_truth="",
-                difficulty="0",
-                metadata={"source": "custom_task_file"},
-            )
-        ]
+        tasks = [_task_from_file(task_path)]
         _log.info("Loading custom task from {}", task_path)
     else:
         _log.info("Loading GAIA benchmark (difficulty={}, split={})", difficulty, split)
@@ -1373,6 +1389,7 @@ async def run_gaia(
                     "research_telemetry",
                     "attempts",
                     "elapsed",
+                    "unresolved_execution_issues",
                 ):
                     if key in partial:
                         result[key] = partial[key]

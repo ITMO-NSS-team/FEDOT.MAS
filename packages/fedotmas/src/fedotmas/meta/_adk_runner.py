@@ -9,7 +9,6 @@ from typing import Any, cast
 
 from google.adk import Runner
 from google.adk.agents import LlmAgent
-from google.adk.apps.app import App
 from google.adk.planners import BuiltInPlanner
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService, InMemorySessionService
@@ -32,6 +31,39 @@ class LLMCallResult:
     prompt_tokens: int
     completion_tokens: int
     elapsed: float
+
+
+class _MetaUsageTracker(BasePlugin):
+    """Collect provider usage before ADK validates structured responses."""
+
+    def __init__(self, usage_totals: dict[str, int | float]) -> None:
+        super().__init__("fedotmas_meta_usage")
+        self._usage_totals = usage_totals
+
+    async def after_model_callback(self, *, callback_context, llm_response):
+        finish_reason = str(getattr(llm_response, "finish_reason", "")).lower()
+        if "max_tokens" in finish_reason or "length" in finish_reason:
+            self._usage_totals["truncation_warning"] = 1
+            _log.warning(
+                "Meta-agent output was truncated at the configured output-token "
+                "limit; consider increasing FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS."
+            )
+        usage = getattr(llm_response, "usage_metadata", None)
+        if usage is not None:
+            self._usage_totals["prompt"] = self._usage_totals.get("prompt", 0) + (
+                usage.prompt_token_count or 0
+            )
+            self._usage_totals["completion"] = self._usage_totals.get(
+                "completion", 0
+            ) + (usage.candidates_token_count or 0)
+
+    async def on_model_error_callback(self, *, callback_context, llm_request, error):
+        self._usage_totals["prompt"] = self._usage_totals.get("prompt", 0) + int(
+            getattr(error, "prompt_tokens", 0)
+        )
+        self._usage_totals["completion"] = self._usage_totals.get(
+            "completion", 0
+        ) + int(getattr(error, "completion_tokens", 0))
 
 
 async def run_meta_agent_call(
@@ -116,6 +148,11 @@ async def run_meta_agent_call(
                     effective_timeout_s or 0.0,
                 )
                 raise
+            if _is_output_truncation(e) and not attempt_usage.get("truncation_warning"):
+                _log.warning(
+                    "Meta-agent output was truncated at the configured output-token "
+                    "limit; consider increasing FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS."
+                )
             if attempt < max_retries:
                 delay = 2**attempt
                 _log.warning(
@@ -202,22 +239,16 @@ async def _execute_meta_call(
     total_prompt = 0
     total_completion = 0
     start = time.monotonic()
+    usage_tracker = (
+        _MetaUsageTracker(usage_totals) if usage_totals is not None else None
+    )
 
-    if plugins:
-        runner = Runner(
-            app=App(
-                name=app_name,
-                root_agent=agent,
-                plugins=list(plugins),
-            ),
-            session_service=session_service,
-        )
-    else:
-        runner = Runner(
-            app_name=app_name,
-            agent=agent,
-            session_service=session_service,
-        )
+    runner = Runner(
+        app_name=app_name,
+        agent=agent,
+        plugins=[*([usage_tracker] if usage_tracker else []), *(plugins or [])],
+        session_service=session_service,
+    )
 
     await runner.__aenter__()
     primary_error: BaseException | None = None
@@ -237,9 +268,6 @@ async def _execute_meta_call(
                 completion = um.candidates_token_count or 0
                 total_prompt += prompt
                 total_completion += completion
-                if usage_totals is not None:
-                    usage_totals["prompt"] = total_prompt
-                    usage_totals["completion"] = total_completion
                 if prompt or completion:
                     _log.info("Tokens | prompt={} completion={}", prompt, completion)
 
@@ -275,10 +303,20 @@ async def _execute_meta_call(
                 cleanup_error,
             )
     if primary_error is not None and not suppressed:
+        if usage_totals is not None and not (
+            usage_totals["prompt"] or usage_totals["completion"]
+        ):
+            usage_totals["prompt"] = total_prompt
+            usage_totals["completion"] = total_completion
+        if usage_totals is not None:
+            usage_totals["elapsed"] = time.monotonic() - start
         raise primary_error
 
     elapsed = time.monotonic() - start
     if usage_totals is not None:
+        if not (usage_totals["prompt"] or usage_totals["completion"]):
+            usage_totals["prompt"] = total_prompt
+            usage_totals["completion"] = total_completion
         usage_totals["elapsed"] = elapsed
     _log.info(
         "{} complete | elapsed={:.1f}s prompt={} completion={}",
@@ -314,16 +352,26 @@ async def _execute_meta_call(
     if allowed_models:
         validate_allowed_models(raw_output, allowed_models)
 
+    tracked_prompt = int(usage_totals.get("prompt", 0)) if usage_totals else 0
+    tracked_completion = int(usage_totals.get("completion", 0)) if usage_totals else 0
     return LLMCallResult(
         raw_output=raw_output,
-        prompt_tokens=total_prompt,
-        completion_tokens=total_completion,
+        prompt_tokens=tracked_prompt or total_prompt,
+        completion_tokens=tracked_completion or total_completion,
         elapsed=elapsed,
     )
 
 
 def _retry_message(user_message: str, error: Exception) -> str:
     details = str(error)
+    if _is_output_truncation(error):
+        feedback = (
+            "The previous structured response was truncated by the output-token "
+            "limit. Regenerate the complete valid configuration concisely. If this "
+            "continues, increase FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS.\n"
+            f"Provider error: {details}"
+        )
+        return f"{user_message}\n\n{feedback}"
     if (
         "validationerror" in details.lower()
         or "references unknown agent" in details.lower()
@@ -338,6 +386,15 @@ def _retry_message(user_message: str, error: Exception) -> str:
     else:
         feedback = f"PREVIOUS ATTEMPT FAILED: {details}\nPlease fix this error in your response."
     return f"{user_message}\n\n{feedback}"
+
+
+def _is_output_truncation(error: BaseException) -> bool:
+    details = str(error).lower()
+    return (
+        "max_tokens" in details
+        or "finish_reason=length" in details
+        or "finish_reason='length'" in details
+    )
 
 
 def _resolve_timeout(timeout_s: float | None) -> float | None:
