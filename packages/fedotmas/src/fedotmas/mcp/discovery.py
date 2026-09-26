@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import tomllib
 from pathlib import Path
 
@@ -31,7 +32,10 @@ def _get_uv_bin() -> str:
     if _UV_BIN is None:
         import shutil
 
-        _UV_BIN = shutil.which("uv") or "uv"
+        # Запуск GUI через .venv/Scripts/python.exe не активирует окружение в PATH.
+        # uv может быть установлен рядом с этим интерпретатором, но which его не увидит.
+        sibling = Path(sys.executable).with_name("uv.exe" if os.name == "nt" else "uv")
+        _UV_BIN = shutil.which("uv") or (str(sibling) if sibling.is_file() else "uv")
     return _UV_BIN
 
 

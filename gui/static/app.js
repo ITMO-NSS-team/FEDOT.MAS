@@ -73,7 +73,7 @@ const ROLE_RULES = [
   [/critic|valid|review|complian|fraud|check|критик|валид|провер|контрол|комплаенс|мошен/i, "shield", "critic"],
   [/research|search|explor|vendor|news|registry|litig|поиск|исследов|разведк|новост|реестр/i, "search", "worker"],
   [/sql|schema|query|data|telemetry|телеметри|данн|запрос|витрин|схем/i, "db", "worker"],
-  [/analy|scor|synthes|risk|insight|анализ|оценк|риск|синтез|скоринг|вывод/i, "chart", "worker"],
+  [/analy|scor|synthes|aggreg|risk|insight|анализ|оценк|риск|синтез|агрег|скоринг|вывод/i, "chart", "worker"],
   [/writer|memo|report|plan|answer|doc|histor|extract|план|отчёт|отчет|записк|журнал|документ|истори|извлеч/i, "doc", "worker"],
   [/billing|invoice|payment|tariff|биллинг|счёт|счет|платеж|тариф|комисси/i, "coin", "worker"],
   [/support|tech|repair|maint|поддержк|техник|ремонт|обслуживан|наладк/i, "wrench", "worker"],
@@ -169,7 +169,7 @@ function pipelineDepth(node) {
 }
 
 /* ─────────────────────────── Раскладка графа ─────────────────────────── */
-const NW = 204, NH = 60, HGAP = 54, VGAP = 24, JUNC = 38, PAD = 24, LOOPTOP = 26;
+const NW = 224, NH = 68, HGAP = 54, VGAP = 24, JUNC = 38, PAD = 24, LOOPTOP = 26;
 
 function measure(n) {
   if (n.type === "agent" || !(n.children || []).length)
@@ -337,13 +337,13 @@ function drawNode(nd, i) {
       : { size: min, text: trunc(s, Math.floor(TEXT_W / (min * 0.6))) };
   };
 
-  const name = fit(String(nd.name || ""), 11.5, 8);
-  const nameEl = el("text", { class: "node-name", x: 53, y: NH / 2 - 3, style: `font-size:${name.size.toFixed(1)}px` }, name.text);
+  const name = fit(String(nd.name || ""), 14, 10);
+  const nameEl = el("text", { class: "node-name", x: 53, y: NH / 2 - 4, style: `font-size:${name.size.toFixed(1)}px` }, name.text);
   nameEl.appendChild(el("title", {}, String(nd.name)));
   g.appendChild(nameEl);
 
-  const sub = fit(a.output_key ? "→ " + a.output_key : trunc(a.description || "", 30), 10.5, 7.5);
-  const subEl = el("text", { class: "node-sub", x: 53, y: NH / 2 + 15, style: `font-size:${sub.size.toFixed(1)}px` }, sub.text);
+  const sub = fit(a.output_key ? "→ " + a.output_key : trunc(a.description || "", 30), 12, 9);
+  const subEl = el("text", { class: "node-sub", x: 53, y: NH / 2 + 16, style: `font-size:${sub.size.toFixed(1)}px` }, sub.text);
   subEl.appendChild(el("title", {}, a.output_key ? "→ " + a.output_key : String(a.description || "")));
   g.appendChild(subEl);
 
@@ -2211,6 +2211,17 @@ function toggleInspectorWidth() {
   if (!full) { S.needFit = true; fitView(); }     // граф вернулся — пересчитываем камеру
 }
 
+function setQueryExpanded(expanded) {
+  const block = $("query-block");
+  const btn = $("btn-query-expand");
+  block.classList.toggle("query-expanded", expanded);
+  document.body.classList.toggle("query-fullscreen", expanded);
+  btn.setAttribute("aria-expanded", String(expanded));
+  btn.textContent = expanded ? "Свернуть" : "На весь экран";
+  btn.title = expanded ? "Свернуть постановку задачи (Esc)" : "Развернуть постановку задачи на весь экран";
+  (expanded ? $("query") : btn).focus({ preventScroll: true });
+}
+
 function showTab(name) {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("tab-active", x.dataset.tab === name));
   ["answer", "feed", "agents", "tools", "effort", "json"].forEach((n) => $("tab-" + n).classList.toggle("hidden", n !== name));
@@ -2230,11 +2241,22 @@ function init() {
   initFileSources();
   initKeyForm();
 
+  $("btn-query-expand").addEventListener("click", () => {
+    setQueryExpanded(!$("query-block").classList.contains("query-expanded"));
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && $("query-block").classList.contains("query-expanded") && $("new-modal").classList.contains("hidden")) {
+      setQueryExpanded(false);
+    }
+  });
+
   $("btn-run").addEventListener("click", () => {
+    if ($("query-block").classList.contains("query-expanded")) setQueryExpanded(false);
     if (S.backend) { S.abort ? stopLive() : liveRun(); return; }
     S.playing ? pause() : play();                 // без бэкенда доступно только воспроизведение записи
   });
   $("btn-generate").addEventListener("click", () => {
+    if ($("query-block").classList.contains("query-expanded")) setQueryExpanded(false);
     openNewScenario($("query").value.trim());      // текст из поля запроса подставляем как постановку
   });
   $("btn-expand").addEventListener("click", toggleInspectorWidth);

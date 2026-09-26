@@ -43,8 +43,11 @@
 
   <!-- ЛЕВАЯ КОЛОНКА -->
   <aside class="panel side">
-    <section class="block">
-      <div class="block-title">Постановка задачи</div>
+    <section class="block query-block" id="query-block">
+      <div class="block-title row-title query-title">
+        <span>Постановка задачи</span>
+        <button class="btn btn-mini" id="btn-query-expand" type="button" aria-controls="query" aria-expanded="false" title="Развернуть постановку задачи на весь экран">На весь экран</button>
+      </div>
       <textarea id="query" rows="5" spellcheck="false" placeholder="Опишите задачу на естественном языке…"></textarea>
       <div class="run-row">
         <button class="btn btn-ghost" id="btn-generate">
@@ -333,7 +336,7 @@
 
 <script src="presets.js"></script>
 <script src="technology_card_preset.js?v=3"></script>
-<script src="rubber_preset.js?v=4"></script>
+<script src="rubber_preset.js?v=5"></script>
 <script src="app.js"></script>
 </body>
 </html>

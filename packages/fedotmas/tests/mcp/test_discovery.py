@@ -3,7 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from fedotmas.mcp._config import DEFAULT_MCP_TIMEOUT_S, StdioMCPServer
+from fedotmas.mcp import discovery
 from fedotmas.mcp.discovery import discover_local_servers
+
+
+def test_uv_next_to_active_interpreter_is_used_without_path(tmp_path, monkeypatch):
+    """GUI may run a venv interpreter directly, without activating its Scripts path."""
+    uv_name = "uv.exe" if discovery.os.name == "nt" else "uv"
+    uv = tmp_path / uv_name
+    uv.touch()
+    monkeypatch.setattr(discovery.sys, "executable", str(tmp_path / "python.exe"))
+    monkeypatch.setattr("shutil.which", lambda command: None)
+    monkeypatch.setattr(discovery, "_UV_BIN", None)
+
+    assert discovery._get_uv_bin() == str(uv)
 
 
 def _write_toml(tmp_path: Path, name: str, content: str) -> None:

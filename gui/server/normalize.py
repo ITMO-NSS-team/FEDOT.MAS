@@ -328,7 +328,7 @@ def _ensure_data_tools(config, kind: str, text: str) -> None:
 
 # Роли агентов определяем по имени: мета-агент называет их по-русски и осмысленно.
 _ROLE_CRITIC = re.compile(r"критик|провер|качеств|аудит|реценз|валид", re.IGNORECASE)
-_ROLE_COLLECTOR = re.compile(r"сборщик|сборка|итог|заключ|финал|обобщ", re.IGNORECASE)
+_ROLE_COLLECTOR = re.compile(r"сборщик|сборка|агрегатор|агрегац|итог|заключ|финал|обобщ", re.IGNORECASE)
 
 
 _ID_RE = re.compile(
@@ -550,7 +550,7 @@ def _ensure_web_tool(config, kind: str) -> None:
         return
 
     prefer = re.compile(r"поиск|источник|ограничен|контекст|сбор|данн|исслед|research|search", re.IGNORECASE)
-    skip = re.compile(r"критик|валид|провер|сборщик|заключ|итог", re.IGNORECASE)
+    skip = re.compile(r"критик|валид|провер|сборщик|агрегатор|заключ|итог", re.IGNORECASE)
     target = next((a for a in agents if prefer.search(a.name) and not skip.search(a.name)), None)
     target = target or next((a for a in agents if not skip.search(a.name)), None) or (agents[0] if agents else None)
     if target is None:
