@@ -166,13 +166,17 @@ async def _generate_impl(body: GenerateIn, queue: asyncio.Queue) -> dict:
     if config is None:
         return {"ok": False, "error": f"{type(last_error).__name__}: {last_error}"}
 
-    config = sanitize_config(config, body.kind, custom_names)
-    if body.web and WEB_SEARCH:
+    config = sanitize_config(config, body.kind, custom_names, available_tools=servers)
+    if body.web and WEB_SEARCH and "websearch-searxng" in servers:
         _ensure_web_tool(config, body.kind)
-    _ensure_data_tools(config, body.kind, f"{body.task} {body.query or ''}")
+    if {"download", "document", "sandbox-light"} <= servers.keys():
+        _ensure_data_tools(config, body.kind, f"{body.task} {body.query or ''}")
     _ensure_dependent_after_parallel(config, body.kind)
-    _ensure_calculator(config, body.kind)
-    _ensure_lookup_tools(config, body.kind, f"{body.task} {body.query or ''}")
+    if "sandbox-light" in servers:
+        _ensure_calculator(config, body.kind)
+    if {"websearch-searxng", "web-scraping"} <= servers.keys():
+        _ensure_lookup_tools(config, body.kind, f"{body.task} {body.query or ''}")
+    config = sanitize_config(config, body.kind, custom_names, available_tools=servers)
     # Кап на выход нужен всем агентам обеих схем: у MASConfig нет .agents,
     # его агенты — координатор и workers.
     capped = (getattr(config, "agents", None)
@@ -218,7 +222,8 @@ async def run(body: RunIn) -> StreamingResponse:
     is_mas = body.kind == "mas"
     cls = MAS if is_mas else MAW
     config = MASConfig(**body.config) if is_mas else MAWConfig(**body.config)
-    config = sanitize_config(config, body.kind, custom_names)   # может прийти из файла
+    config = sanitize_config(config, body.kind, custom_names,
+                             available_tools=servers)   # может прийти из файла
     # Исполнители MAS становятся инструментами координатора, а OpenAI не принимает
     # кириллицу в имени инструмента. Сценарий и экран сохраняют русские имена: под
     # латинскими идёт только запуск, поток переводит их обратно.

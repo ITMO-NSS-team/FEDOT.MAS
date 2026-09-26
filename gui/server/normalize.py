@@ -119,13 +119,16 @@ def _mcp_registry_for(tools: list[str], custom: list | None) -> tuple:
     return registry, added
 
 
-def sanitize_config(config, kind: str, extra_tools: list[str] | None = None):
+def sanitize_config(config, kind: str, extra_tools: list[str] | None = None,
+                    *, available_tools=None):
     """Приводит имена агентов и ключи состояния к виду, который принимает ADK.
 
     *extra_tools* — имена своих MCP-серверов: они разрешены наравне со встроенными,
     иначе чистка неизвестных инструментов выбросила бы их из агентов.
     """
     allowed_tools = set(SAFE_TOOLS) | set(extra_tools or [])
+    if available_tools is not None:
+        allowed_tools &= set(available_tools)
     agents = list(getattr(config, "agents", None) or ([config.coordinator] + list(config.workers)))
     renames: dict[str, str] = {}
     keys: dict[str, str] = {}
@@ -206,6 +209,13 @@ def sanitize_config(config, kind: str, extra_tools: list[str] | None = None):
         if unknown:
             dropped[agent.name] = unknown
             agent.tools = [t for t in agent.tools if t in allowed_tools]
+            agent.instruction += (
+                "\n\nСледующие инструменты не подключены в этом запуске: "
+                + ", ".join(unknown)
+                + ". Не вызывай их и не утверждай, что получил от них результат. "
+                "Если без них задачу решить нельзя, явно укажи ограничение; "
+                "не подменяй отсутствующие результаты предположениями."
+            )
 
     if renames or keys:
         _log.info("Имена приведены к идентификаторам | агенты={} ключи={}", renames, keys)

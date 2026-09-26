@@ -1291,7 +1291,7 @@ function loadPreset(p) {
   if (S.custom && !scenarioList().some((x) => x.id === p.id)) $("preset-count").textContent = scenarioList().length;
   $("btn-run").disabled = !S.backend;
   $("btn-run").title = S.backend
-    ? "Исполнить систему по-настоящему"
+    ? "Запустить систему"
     : "Бэкенд недоступен: запустите gui/run.py";
   $("btn-generate").disabled = !S.backend;
   renderGraph();
