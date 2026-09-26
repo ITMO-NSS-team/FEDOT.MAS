@@ -8,7 +8,7 @@ configured API keys inside the process.
 Set either a comma-separated key list or the existing single-key variable:
 
     TAVILY_API_KEYS=key1,key2,key3
-    TAVILY_ROTATE_EVERY=50
+    TAVILY_ROTATE_EVERY=20
     # Or:
     TAVILY_API_KEY=your-key
 

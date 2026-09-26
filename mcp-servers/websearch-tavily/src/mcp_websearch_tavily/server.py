@@ -16,7 +16,8 @@ load_dotenv()
 
 _log = logging.getLogger("mcp_websearch_tavily")
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
-DEFAULT_ROTATE_EVERY = 50
+SEARXNG_ENGINES = "bing,duckduckgo,brave,mullvadleta,yahoo,presearch"
+DEFAULT_ROTATE_EVERY = 20
 MAX_RESULTS = 10
 MAX_QUERY_CHARS = 400
 MAX_TITLE_CHARS = 160
@@ -79,7 +80,7 @@ class KeyPool:
     requests without serializing the network calls.
     """
 
-    def __init__(self, keys: tuple[str, ...] | list[str], rotate_every: int = 50):
+    def __init__(self, keys: tuple[str, ...] | list[str], rotate_every: int = DEFAULT_ROTATE_EVERY):
         cleaned = tuple(key.strip() for key in keys if key.strip())
         self._keys = cleaned
         self.rotate_every = rotate_every if rotate_every > 0 else DEFAULT_ROTATE_EVERY
@@ -244,13 +245,42 @@ async def _searxng_fallback(query: str, max_results: int) -> SearchResponse:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 f"{instance_url}/search",
-                params={"q": query, "format": "json", "engines": "bing,duckduckgo,brave,mullvadleta,yahoo,presearch", "categories": "general", "safesearch": 1},
+                params={
+                    "q": query,
+                    "format": "json",
+                    "engines": SEARXNG_ENGINES,
+                    "categories": "general",
+                    "safesearch": 1,
+                },
             )
             response.raise_for_status()
             payload = response.json()
         raw_results = payload.get("results") if isinstance(payload, dict) else None
         if not isinstance(raw_results, list):
             raise TypeError("invalid results payload")
+        if not raw_results:
+            unresponsive = payload.get("unresponsive_engines") or []
+            unresponsive_names = set()
+            if isinstance(unresponsive, list):
+                for engine in unresponsive:
+                    if isinstance(engine, str):
+                        unresponsive_names.add(engine)
+                    elif isinstance(engine, (list, tuple)) and engine:
+                        if isinstance(engine[0], str):
+                            unresponsive_names.add(engine[0])
+                    elif isinstance(engine, dict):
+                        name = engine.get("engine") or engine.get("name")
+                        if isinstance(name, str):
+                            unresponsive_names.add(name)
+            configured_engines = set(SEARXNG_ENGINES.split(","))
+            if configured_engines <= unresponsive_names:
+                _log.warning("SearXNG reported every configured engine as unavailable")
+                return _error(
+                    query,
+                    "SEARCH_UNAVAILABLE",
+                    "Tavily and all configured SearXNG engines are unavailable.",
+                    [],
+                )
         results: list[SearchResult] = []
         for item in raw_results[:max_results]:
             if not isinstance(item, dict) or not item.get("url"):

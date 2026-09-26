@@ -52,6 +52,7 @@ RESEARCH_TURN_STATE_KEY = "__fedotmas_research_turns"
 MAX_CANDIDATES_PER_AGENT = 24
 MAX_CANDIDATE_TITLE_CHARS = 180
 MAX_CANDIDATE_SNIPPET_CHARS = 420
+MAX_CANDIDATE_INSPECTION_PROGRESS = 3
 
 
 def _read_gate_state(state: Any, agent: str) -> dict[str, Any]:
@@ -68,6 +69,35 @@ def _tool_failed(result: dict[str, Any]) -> bool:
         result.get("isError") is True
         or result.get("is_error") is True
         or result.get("error")
+    )
+
+
+def _inspection_has_content(value: Any, *, depth: int = 0) -> bool:
+    """Whether a successful inspection returned text rather than an empty shell."""
+    if depth > 5:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(_inspection_has_content(item, depth=depth + 1) for item in value[:12])
+    if not isinstance(value, dict):
+        return False
+    content_keys = {
+        "content",
+        "text",
+        "markdown",
+        "body",
+        "excerpt",
+        "title",
+        "name",
+        "structuredcontent",
+        "structured_content",
+        "result",
+    }
+    return any(
+        _inspection_has_content(nested, depth=depth + 1)
+        for key, nested in value.items()
+        if str(key).casefold() in content_keys
     )
 
 
@@ -373,7 +403,7 @@ class ResearchTelemetry(BasePlugin):
         candidate_url = _sanitize_url(url)
         for item in ledger:
             if isinstance(item, dict) and item.get("url") == candidate_url:
-                was_inspected = item.get("inspection_status") in {"success", "failed", "blocked"}
+                was_usefully_inspected = item.get("inspection_status") == "success"
                 item["inspected"] = True
                 item["inspection_status"] = status
                 item["inspection_tool"] = tool[:80]
@@ -381,7 +411,7 @@ class ResearchTelemetry(BasePlugin):
                     item["inspection_error"] = error[:240]
                 else:
                     item.pop("inspection_error", None)
-                return not was_inspected
+                return not was_usefully_inspected
         return False
 
     def _mark_progress(self, state: Any, agent: str, kind: str) -> None:
@@ -400,6 +430,35 @@ class ResearchTelemetry(BasePlugin):
         progress["progress_events"] = events[-20:]
         root[agent] = progress
         state[RESEARCH_PROGRESS_STATE_KEY] = root
+
+    def _mark_candidate_inspection_progress(
+        self, state: Any, agent: str, url: str
+    ) -> bool:
+        root = state.get(RESEARCH_PROGRESS_STATE_KEY)
+        if not isinstance(root, dict):
+            root = {}
+        progress = root.get(agent)
+        if not isinstance(progress, dict):
+            progress = {"version": 0, "progress_events": []}
+        count = progress.get("candidate_inspection_progress_count", 0)
+        count = count if isinstance(count, int) and not isinstance(count, bool) else 0
+        urls = progress.get("candidate_inspection_progress_urls", [])
+        urls = urls if isinstance(urls, list) else []
+        candidate_url = _sanitize_url(url)
+        if (
+            not candidate_url
+            or candidate_url in urls
+            or count >= MAX_CANDIDATE_INSPECTION_PROGRESS
+        ):
+            return False
+        progress["candidate_inspection_progress_count"] = count + 1
+        progress["candidate_inspection_progress_urls"] = [*urls, candidate_url][
+            -MAX_CANDIDATE_INSPECTION_PROGRESS:
+        ]
+        root[agent] = progress
+        state[RESEARCH_PROGRESS_STATE_KEY] = root
+        self._mark_progress(state, agent, "candidate_inspection")
+        return True
 
     def _sync_gate_state(
         self,
@@ -474,15 +533,29 @@ class ResearchTelemetry(BasePlugin):
                 # An attempted inspection counts as inspection even if the source
                 # is unavailable; discovery can resume after failed candidates.
                 self.inspected(agent, url.strip())
-                self._mark_candidate_inspected(
+                inspection_has_content = (
+                    not _tool_failed(result) and _inspection_has_content(result)
+                )
+                candidate_progress = self._mark_candidate_inspected(
                     tool_context.state, agent, url,
-                    status="failed" if _tool_failed(result) else "success",
+                    status=(
+                        "failed"
+                        if _tool_failed(result)
+                        else "success" if inspection_has_content else "empty"
+                    ),
                     tool=tool.name,
                     error=_bounded_inspection_error(result),
                 )
                 self._mark_source_inspected(
                     tool_context.state, agent, url
                 )
+                if (
+                    candidate_progress
+                    and inspection_has_content
+                ):
+                    self._mark_candidate_inspection_progress(
+                        tool_context.state, agent, url
+                    )
                 if _research_mode(tool_context.state, agent) == "mixed":
                     self._sync_gate_state(tool_context.state, agent, inspected_url=url)
         self._record_call_result(

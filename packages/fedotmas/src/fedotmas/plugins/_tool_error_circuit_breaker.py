@@ -30,6 +30,42 @@ WEB_BUDGET_EXHAUSTED = "WEB_BUDGET_EXHAUSTED"
 DUPLICATE_TOOL_CALL = "DUPLICATE_TOOL_CALL"
 TOOL_CIRCUIT_OPEN = "TOOL_CIRCUIT_OPEN"
 INVALID_TOOL_INPUT = "INVALID_TOOL_INPUT"
+RESEARCH_CONTROLLER_STATE_REQUIRED = "RESEARCH_CONTROLLER_STATE_REQUIRED"
+RESEARCH_CONVERGENCE_REQUIRED = "RESEARCH_CONVERGENCE_REQUIRED"
+CONTROL_FLOW_ERROR_CODES = frozenset(
+    {
+        WEB_BUDGET_EXHAUSTED,
+        DUPLICATE_TOOL_CALL,
+        TOOL_CIRCUIT_OPEN,
+        INVALID_TOOL_INPUT,
+        "INVALID_VIDEO_URL",
+        "INVALID_CURSOR",
+        RESEARCH_CONTROLLER_STATE_REQUIRED,
+        RESEARCH_CONVERGENCE_REQUIRED,
+        "BROWSER_DISCOVERY_POLICY",
+        "BROWSER_AGENT_POLICY",
+        "EVIDENCE_FIRST_SEARCH_DISABLED",
+        "INSPECTION_ONLY_DISCOVERY_DISABLED",
+        "DISCOVERY_ONLY_INSPECTION_DISABLED",
+        "DISCOVERY_FANOUT_LIMIT",
+        "DISCOVERY_VALIDATION_REQUIRES_CANDIDATE",
+        "DISCOVERY_VALIDATION_LIMIT",
+        "INSPECT_CANDIDATES_FIRST",
+        "SOURCE_CANDIDATES_READY",
+        "TARGETED_RECOVERY_EXHAUSTED",
+        "TARGETED_RECOVERY_REQUIRES_IDENTITY",
+        "TRANSCRIPTS_DISABLED",
+        "NO_TRANSCRIPT_FOUND",
+        "VIDEO_UNAVAILABLE",
+        "AGE_RESTRICTED",
+    }
+)
+
+
+def is_control_flow_error_code(error_code: Any) -> bool:
+    return isinstance(error_code, str) and (
+        error_code in CONTROL_FLOW_ERROR_CODES or error_code.startswith("INVALID_")
+    )
 
 
 class ToolErrorCircuitOpen(RuntimeError):
@@ -114,13 +150,8 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         tool_context: ToolContext,
         result: dict,
     ) -> dict | None:
-        error_code = result.get("error_code") if isinstance(result, dict) else None
-        if isinstance(error_code, str) and error_code in {
-            WEB_BUDGET_EXHAUSTED,
-            DUPLICATE_TOOL_CALL,
-            TOOL_CIRCUIT_OPEN,
-            INVALID_TOOL_INPUT
-        }:
+        error_code = _explicit_error_code(result)
+        if is_control_flow_error_code(error_code):
             return None
         if not _is_error_result(result):
             return None
@@ -223,7 +254,7 @@ def _error_type_from_result(result: dict) -> str:
     ):
         if isinstance(payload, dict):
             code = payload.get("error_code")
-            if isinstance(code, str) and code.startswith("BROWSER_AGENT_"):
+            if isinstance(code, str) and code:
                 return code
     value = result.get("error")
     if isinstance(value, dict):
@@ -233,3 +264,15 @@ def _error_type_from_result(result: dict) -> str:
     if isinstance(value, str) and value.strip():
         return value.split(":", 1)[0][:80]
     return "ToolErrorResult"
+
+
+def _explicit_error_code(result: dict) -> str | None:
+    for payload in (
+        result,
+        *(result.get(key) for key in ("meta", "_meta", "structuredContent", "structured_content")),
+    ):
+        if isinstance(payload, dict):
+            code = payload.get("error_code")
+            if isinstance(code, str):
+                return code
+    return None

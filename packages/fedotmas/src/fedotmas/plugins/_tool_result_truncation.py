@@ -223,7 +223,8 @@ def _truncate_total(value: Any, limit: int) -> tuple[Any, bool]:
         return value, False
     result = deepcopy(value)
     changed = False
-    if _has_research_state(result):
+    research_state_compacted = _has_research_state(result)
+    if research_state_compacted:
         _compact_research_state_slots(result, limit)
         changed = True
     while len(json.dumps(result, ensure_ascii=False, default=str)) > limit:
@@ -242,10 +243,8 @@ def _truncate_total(value: Any, limit: int) -> tuple[Any, bool]:
                 if any(str(key).casefold() != "research_state" for key in item)
             ]
             if not dictionaries:
-                if _has_research_state(result):
-                    _compact_research_state_slots(result, limit)
-                    changed = True
-                    continue
+                if research_state_compacted:
+                    return result, True
                 return (0 if limit == 1 else {}), True
             container = max(
                 dictionaries,
@@ -274,7 +273,7 @@ def _truncate_total(value: Any, limit: int) -> tuple[Any, bool]:
                     for key in container
                     if str(key).casefold() != "research_state"
                 ]
-                if not removable and _has_research_state(result):
+                if not removable and research_state_compacted:
                     return result, True
                 if not removable:
                     removable = list(container)
@@ -316,10 +315,7 @@ def _compact_research_state_slots(value: Any, limit: int) -> None:
                     node[key] = {}
                     overhead = len(json.dumps(root, ensure_ascii=False, default=str))
                     available = limit - overhead + 2
-                    if available > 0:
-                        node[key] = _compact_research_state(original, available)
-                    else:
-                        node[key] = original
+                    node[key] = _compact_research_state(original, max(1, available))
                 else:
                     visit(item)
         elif isinstance(node, list):
@@ -446,9 +442,9 @@ def _compact_research_state(value: Any, limit: int) -> dict[str, Any]:
                 shrunk = True
                 break
         if not shrunk:
-            raise ValueError(
-                "context character limit is too small for valid research_state continuation"
-            )
+            # The continuation snapshot is mandatory. Keep it valid even when the
+            # surrounding envelope alone exceeds the requested aggregate budget.
+            break
     return result
 
 

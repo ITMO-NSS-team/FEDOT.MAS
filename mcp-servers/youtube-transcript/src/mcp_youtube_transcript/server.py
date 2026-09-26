@@ -18,7 +18,9 @@ from youtube_transcript_api import (
     YouTubeTranscriptApi,
 )
 
-TRANSCRIPT_TOOLS = frozenset({"get_transcript", "get_timed_transcript"})
+TRANSCRIPT_TOOLS = frozenset(
+    {"get_transcript", "get_timed_transcript", "get_available_languages"}
+)
 
 VIDEO_URL_TOOLS = frozenset(
     {

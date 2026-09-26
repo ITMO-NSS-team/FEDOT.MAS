@@ -33,7 +33,7 @@ class TestToolResultTruncationPlugin:
         assert changed is True
         assert len(json.dumps(value, ensure_ascii=False, default=str)) <= limit
 
-    def test_impossibly_small_state_budget_fails_explicitly(self):
+    def test_impossibly_small_state_budget_preserves_valid_continuation(self):
         state = {
             "version": 1,
             "research_id": "r",
@@ -41,8 +41,48 @@ class TestToolResultTruncationPlugin:
             "unresolved_questions": [f"{index}-" + "x" * 230 for index in range(30)],
             "search_count": 4,
         }
-        with pytest.raises(ValueError, match="too small for valid research_state"):
-            _truncate_total({"research_state": state}, 500)
+        result, changed = _truncate_total({"research_state": state}, 500)
+        assert changed is True
+        assert result["research_state"]["research_id"] == "r"
+        assert result["research_state"]["goal"] == "g"
+        assert result["research_state"]["unresolved_questions"]
+
+    def test_large_controller_state_compacts_within_gaia_result_budget(self):
+        from fedotmas.plugins._tool_result_truncation import _truncate_total
+
+        state = {
+            "version": 1,
+            "research_id": "gaia-research",
+            "goal": "Find source backed evidence for the requested answer",
+            "required_fields": ["answer"],
+            "unresolved_questions": ["Which source establishes the answer?"],
+            "search_count": 14,
+            "failed_attempt_count": 3,
+            "findings": ["verbose finding " + "f" * 800 for _ in range(24)],
+            "evidence": ["verbose evidence " + "e" * 900 for _ in range(24)],
+            "sources_checked": ["https://source.example/" + str(i) for i in range(50)],
+            "failed_attempts": ["failure note " + "n" * 700 for _ in range(20)],
+            "search_queries": ["search query " + "q" * 500 for _ in range(30)],
+            "telemetry": {
+                "pending_recommendation": {
+                    "id": 8,
+                    "action": "continue_search",
+                    "searches_before": 14,
+                }
+            },
+        }
+        compacted, changed = _truncate_total(
+            {"research_state": state, "message": "result " + "x" * 10000}, 6000
+        )
+        serialized = json.dumps(compacted, ensure_ascii=False)
+        assert changed is True
+        assert len(serialized) <= 6000
+        retained = compacted["research_state"]
+        assert retained["research_id"] == "gaia-research"
+        assert retained["goal"] == state["goal"]
+        assert retained["required_fields"] == ["answer"]
+        assert retained["unresolved_questions"] == state["unresolved_questions"]
+        assert retained["telemetry"]["pending_recommendation"]["action"] == "continue_search"
 
     @pytest.mark.asyncio
     async def test_aggregate_limit_is_opt_in_for_other_callers(self):
@@ -254,7 +294,12 @@ class TestToolResultTruncationPlugin:
             },
         )
         assert latest is not None
-        assert latest["research_state"] == research_state
+        assert latest["research_state"]["research_id"] == "workstream-1"
+        assert latest["research_state"]["telemetry"]["pending_recommendation"] == {
+            "id": 4,
+            "action": "continue_search",
+            "searches_before": 3,
+        }
 
         contents = [
             types.Content(
@@ -294,7 +339,9 @@ class TestToolResultTruncationPlugin:
         pending = responses[-1]["research_state"]["telemetry"][
             "pending_recommendation"
         ]
-        assert active_chars <= 500
+        # The continuation skeleton is preserved when it alone leaves too little
+        # room for the surrounding function-response envelopes.
+        assert active_chars <= 700
         assert pending == {
             "id": 4,
             "action": "continue_search",

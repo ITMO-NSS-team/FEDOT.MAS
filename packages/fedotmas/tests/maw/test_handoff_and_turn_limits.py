@@ -1139,16 +1139,65 @@ async def test_forced_convergence_blocks_controller_and_open_browser_loops():
     controller.name = "get_next_action"
     browser = FunctionTool(func=lambda task: {"status": "ok"})
     browser.name = "complete_browser_task"
-    agent = builder._build_llm_agent(MAWAgentConfig(name="researcher", instruction="Research", output_key="out"), [controller, browser], None, autonomous=False)
+    inspect = FunctionTool(func=lambda url: {"content": ""})
+    inspect.name = "markdown"
+    agent = builder._build_llm_agent(MAWAgentConfig(name="researcher", instruction="Research", output_key="out"), [controller, browser, inspect], None, autonomous=False)
     state: dict = {}
     context = _context(state)
     context._invocation_context.agent.name = "researcher"
     await agent.before_agent_callback(context)
     for _ in range(3):
-        await agent.before_model_callback(context, _research_request(controller, browser))
+        await agent.before_model_callback(context, _research_request(controller, browser, inspect))
+        await agent.after_tool_callback(
+            inspect, {"url": f"https://example.org/{_}"}, context, {"content": ""}
+        )
     assert state["__fedotmas_research_turns"]["researcher"]["force_converge"] is True
     assert (await agent.before_tool_callback(controller, {}, context))["error_code"] == "RESEARCH_CONVERGENCE_REQUIRED"
     assert (await agent.before_tool_callback(browser, {"task": "search the web"}, context))["error_code"] in {"BROWSER_DISCOVERY_POLICY", "RESEARCH_CONVERGENCE_REQUIRED"}
+
+
+@pytest.mark.asyncio
+async def test_controller_errors_before_evidence_do_not_force_research_convergence():
+    update = FunctionTool(func=lambda **kwargs: {"research_state": {"version": 1}})
+    update.name = "update_research_state"
+    controller = FunctionTool(func=lambda research_state: {"action": "continue_search"})
+    controller.name = "get_next_action"
+    search = FunctionTool(func=lambda query: {"results": [{"url": "https://example.org"}]})
+    search.name = "search"
+    search.description = "Search the web"
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(name="researcher", instruction="Research", output_key="out"),
+        [update, controller, search], None, autonomous=False,
+    )
+    state: dict = {}
+    context = _context(state)
+    context._invocation_context.agent.name = "researcher"
+    await agent.before_agent_callback(context)
+
+    for _ in range(3):
+        request = _research_request(update, controller, search)
+        await agent.before_model_callback(context, request)
+        visible = {d.name for group in request.config.tools or [] for d in group.function_declarations or []}
+        assert controller.name not in visible
+    for _ in range(2):
+        blocked = await agent.before_tool_callback(controller, {"research_state": {}}, context)
+        assert blocked["error_code"] == "RESEARCH_CONTROLLER_STATE_REQUIRED"
+        await agent.before_model_callback(context, _research_request(update, controller, search))
+    assert state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is False
+    assert await agent.before_tool_callback(search, {"query": "PubChem"}, context) is None
+
+    await agent.after_tool_callback(
+        update, {}, context, {"research_state": {"version": 1}}
+    )
+    assert await agent.before_tool_callback(controller, {"research_state": {}}, context) is None
+    await agent.after_tool_callback(search, {"query": "PubChem"}, context, {"results": []})
+    assert state[builder.RESEARCH_EVIDENCE_ACTION_STATE_KEY]["researcher"] == 1
+    for _ in range(3):
+        await agent.before_model_callback(context, _research_request(update, controller, search))
+        await agent.after_tool_callback(
+            search, {"query": "another search"}, context, {"results": []}
+        )
+    assert state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is True, state[builder.RESEARCH_PROGRESS_STATE_KEY]
 
 
 @pytest.mark.asyncio
@@ -1325,6 +1374,117 @@ async def test_model_search_fanout_executes_only_one_call_per_response(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_candidate_inspection_progress_is_bounded_during_agent_lifecycle():
+    search = FunctionTool(func=lambda query: {"results": []})
+    search.name = "searxng_search"
+    search.description = "Search the web"
+    inspect = FunctionTool(func=lambda url: {"content": "candidate source text"})
+    inspect.name = "markdown"
+    inspect.description = "Read a known candidate page"
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(name="researcher", instruction="Research", output_key="out"),
+        [search, inspect],
+        None,
+        autonomous=False,
+    )
+    state: dict = {}
+    context = _context(state)
+    context._invocation_context.agent.name = "researcher"
+    telemetry = ResearchTelemetry()
+    tool_context = MagicMock()
+    tool_context._invocation_context.agent.name = "researcher"
+    tool_context.state = state
+    await agent.before_agent_callback(context)
+
+    async def next_turn():
+        request = _research_request(search, inspect)
+        await agent.before_model_callback(context, request)
+        return request
+
+    async def inspect_candidate(url: str):
+        args = {"url": url}
+        assert await agent.before_tool_callback(inspect, args, context) is None
+        await telemetry.before_tool_callback(
+            tool=inspect, tool_args=args, tool_context=tool_context
+        )
+        await telemetry.after_tool_callback(
+            tool=inspect,
+            tool_args=args,
+            tool_context=tool_context,
+            result={"content": "The candidate page identifies the requested source."},
+        )
+        await agent.after_tool_callback(
+            inspect,
+            args,
+            context,
+            {"content": "The candidate page identifies the requested source."},
+        )
+
+    request = await next_turn()
+    assert search.name in {
+        declaration.name
+        for group in request.config.tools or []
+        for declaration in group.function_declarations or []
+    }
+    search_args = {"query": "requested source"}
+    assert await agent.before_tool_callback(search, search_args, context) is None
+    await telemetry.before_tool_callback(
+        tool=search, tool_args=search_args, tool_context=tool_context
+    )
+    candidates = [
+        {
+            "url": f"https://example.org/source-{index}",
+            "title": f"Source {index}",
+            "snippet": f"Evidence identifying source {index}.",
+        }
+        for index in range(3)
+    ]
+    await telemetry.after_tool_callback(
+        tool=search,
+        tool_args=search_args,
+        tool_context=tool_context,
+        result={"results": candidates},
+    )
+
+    for index in range(3):
+        request = await next_turn()
+        assert inspect.name in {
+            declaration.name
+            for group in request.config.tools or []
+            for declaration in group.function_declarations or []
+        }
+        await inspect_candidate(candidates[index]["url"])
+
+    request = await next_turn()
+    visible = {
+        declaration.name
+        for group in request.config.tools or []
+        for declaration in group.function_declarations or []
+    }
+    assert search.name in visible
+    assert state["__fedotmas_research_progress"]["researcher"][
+        "candidate_inspection_progress_count"
+    ] == 3
+    assert request.config.tools
+
+    await inspect_candidate(candidates[0]["url"])
+    await next_turn()
+    await inspect_candidate(candidates[0]["url"])
+    request = await next_turn()
+    assert search.name not in {
+        declaration.name
+        for group in request.config.tools or []
+        for declaration in group.function_declarations or []
+    }
+    assert state["__fedotmas_research_turns"]["researcher"]["force_converge"] is True
+    assert (
+        await agent.before_tool_callback(
+            inspect, {"url": candidates[0]["url"]}, context
+        )
+    )["error_code"] == "RESEARCH_CONVERGENCE_REQUIRED"
+
+
+@pytest.mark.asyncio
 async def test_repeated_no_progress_turns_hide_broad_discovery_and_are_recorded():
     search = FunctionTool(func=lambda query: {"results": []})
     search.name = "searxng_search"
@@ -1339,6 +1499,7 @@ async def test_repeated_no_progress_turns_hide_broad_discovery_and_are_recorded(
         autonomous=False,
     )
     state: dict = {}
+    state[builder.RESEARCH_EVIDENCE_ACTION_STATE_KEY] = {"researcher": 1}
     context = _context(state)
     context._invocation_context.agent.name = "researcher"
     telemetry = ResearchTelemetry()
@@ -1357,6 +1518,12 @@ async def test_repeated_no_progress_turns_hide_broad_discovery_and_are_recorded(
             tool=inspect, tool_args={"url": f"https://example.org/{_ + 1}"},
             tool_context=inspect_context, result={"content": "another page"},
         )
+        await agent.after_tool_callback(
+            inspect,
+            {"url": f"https://example.org/{_ + 1}"},
+            inspect_context,
+            {"content": "another page"},
+        )
 
     trace = state["_fedotmas_execution"]["turn_observability"]["researcher"]
     assert trace[-1]["no_progress_turns"] == 2
@@ -1372,6 +1539,59 @@ async def test_repeated_no_progress_turns_hide_broad_discovery_and_are_recorded(
     assert (await agent.before_tool_callback(
         inspect, {"url": "https://example.org/further-page"}, context
     ))["error_code"] == "RESEARCH_CONVERGENCE_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_invalid_calls_do_not_spend_evidence_stagnation_turns():
+    search = FunctionTool(func=lambda query: {"results": [{"url": "https://example.org/a"}]})
+    search.name = "searxng_search"
+    inspect = FunctionTool(func=lambda url: {"content": ""})
+    inspect.name = "markdown"
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(name="researcher", instruction="Research", output_key="out"),
+        [search, inspect],
+        None,
+        autonomous=False,
+    )
+    state: dict = {}
+    context = _context(state)
+    context._invocation_context.agent.name = "researcher"
+    tool_context = MagicMock()
+    tool_context._invocation_context.agent.name = "researcher"
+    tool_context.state = state
+    await agent.before_agent_callback(context)
+
+    # First turn: a successful discovery and inspection, both without progress.
+    await agent.before_model_callback(context, _research_request(search, inspect))
+    await agent.after_tool_callback(
+        search, {"query": "topic"}, tool_context,
+        {"results": [{"url": "https://example.org/a"}]},
+    )
+    await agent.after_tool_callback(
+        inspect, {"url": "https://example.org/a"}, tool_context, {"content": ""}
+    )
+
+    # The next turn records one stagnant evidence step. Invalid calls don't add
+    # evidence attempts, so a following legitimate inspection remains allowed.
+    await agent.before_model_callback(context, _research_request(search, inspect))
+    assert state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is False
+    for args in ({"url": ""}, {"url": ""}):
+        await agent.after_tool_callback(
+            inspect, args, tool_context,
+            {"isError": True, "error_code": "INVALID_TOOL_INPUT"},
+        )
+    await agent.before_model_callback(context, _research_request(search, inspect))
+    assert state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is False
+    assert await agent.before_tool_callback(
+        inspect, {"url": "https://example.org/b"}, context
+    ) is None
+    await agent.after_tool_callback(
+        inspect, {"url": "https://example.org/b"}, tool_context, {"content": ""}
+    )
+
+    # Three genuine no-progress inspections eventually force convergence.
+    await agent.before_model_callback(context, _research_request(search, inspect))
+    assert state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is True
 
 
 @pytest.mark.asyncio

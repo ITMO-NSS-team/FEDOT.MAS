@@ -55,9 +55,12 @@ from fedotmas.plugins._research_telemetry import (
     RESEARCH_PROGRESS_STATE_KEY,
     RESEARCH_TURN_STATE_KEY,
 )
+from fedotmas.plugins._tool_error_circuit_breaker import is_control_flow_error_code
 
 DISCOVERY_VALIDATION_STATE_KEY = "__fedotmas_discovery_validation"
 MAX_DISCOVERY_VALIDATIONS = 2
+RESEARCH_EVIDENCE_ACTION_STATE_KEY = "__fedotmas_research_evidence_actions"
+RESEARCH_CONTROLLER_STATE_KEY = "__fedotmas_controller_state_ready"
 
 type AgentTree = BaseAgent
 
@@ -978,6 +981,12 @@ def _build_llm_agent(
             elif isinstance(current_turn, dict) and current_turn.get("force_converge"):
                 blocked = ("RESEARCH_CONVERGENCE_REQUIRED", "Inspect a known candidate or hand off; browser exploration is paused.")
         if normalize_tool_name(tool.name) in {"get_next_action", "research_controller_get_next_action"}:
+            ready_root = tool_context.state.get(RESEARCH_CONTROLLER_STATE_KEY)
+            if not isinstance(ready_root, dict) or ready_root.get(cfg.name) is not True:
+                blocked = (
+                    "RESEARCH_CONTROLLER_STATE_REQUIRED",
+                    "Call update_research_state successfully before get_next_action.",
+                )
             turn_root = tool_context.state.get(RESEARCH_TURN_STATE_KEY)
             current_turn = turn_root.get(cfg.name) if isinstance(turn_root, dict) else None
             if isinstance(current_turn, dict) and current_turn.get("force_converge"):
@@ -1071,6 +1080,36 @@ def _build_llm_agent(
         )
         return None
 
+    async def after_tool(tool, args, tool_context, tool_response) -> None:
+        name = normalize_tool_name(tool.name)
+        if name in {"update_research_state", "research_controller_update_research_state"}:
+            snapshot = tool_response.get("research_state") if isinstance(tool_response, dict) else None
+            if isinstance(snapshot, dict) and snapshot.get("version"):
+                ready_root = tool_context.state.get(RESEARCH_CONTROLLER_STATE_KEY)
+                if not isinstance(ready_root, dict):
+                    ready_root = {}
+                ready_root[cfg.name] = True
+                tool_context.state[RESEARCH_CONTROLLER_STATE_KEY] = ready_root
+        capability = _runtime_tool_capability(tool)
+        error_code = tool_response.get("error_code") if isinstance(tool_response, dict) else None
+        control_failure = is_control_flow_error_code(error_code)
+        is_research_action = (
+            capability in {
+                ToolCapability.DISCOVERY,
+                ToolCapability.URL_INSPECTION,
+                ToolCapability.DOCUMENT_INSPECTION,
+                ToolCapability.MEDIA_INSPECTION,
+                ToolCapability.BROWSER_NAVIGATION,
+            }
+            and not control_failure
+        )
+        if is_research_action:
+            evidence_root = tool_context.state.get(RESEARCH_EVIDENCE_ACTION_STATE_KEY)
+            if not isinstance(evidence_root, dict):
+                evidence_root = {}
+            evidence_root[cfg.name] = int(evidence_root.get(cfg.name, 0)) + 1
+            tool_context.state[RESEARCH_EVIDENCE_ACTION_STATE_KEY] = evidence_root
+
     per_agent_limit = (
         cfg.max_llm_turns or max_agent_llm_turns or get_max_agent_llm_turns()
     )
@@ -1129,9 +1168,24 @@ def _build_llm_agent(
         semantic_progress_events = [
             str(signal)[:160] for signal in recorded_progress[-progress_delta:]
         ] if progress_delta else []
-        if turn_index > 1:
+        evidence_root = state.get(RESEARCH_EVIDENCE_ACTION_STATE_KEY)
+        evidence_actions = evidence_root.get(cfg.name, 0) if isinstance(evidence_root, dict) else 0
+        previous_turn_root = state.get(RESEARCH_TURN_STATE_KEY)
+        previous_turn = previous_turn_root.get(cfg.name) if isinstance(previous_turn_root, dict) else None
+        previous_evidence_actions = (
+            previous_turn.get("evidence_actions_at_start", 0)
+            if isinstance(previous_turn, dict)
+            else evidence_actions
+        )
+        previous_evidence_actions = (
+            previous_evidence_actions
+            if isinstance(previous_evidence_actions, int) and not isinstance(previous_evidence_actions, bool)
+            else evidence_actions
+        )
+        evidence_step_executed = evidence_actions > previous_evidence_actions
+        if turn_index > 1 and evidence_step_executed:
             no_progress = no_progress + 1 if version <= previous_version else 0
-        else:
+        elif version > previous_version:
             no_progress = 0
         progress["last_turn_version"] = version
         progress["no_progress_turns"] = no_progress
@@ -1153,6 +1207,7 @@ def _build_llm_agent(
         turn_state = {
             "turn_index": turn_index,
             "discovery_calls": 0,
+            "evidence_actions_at_start": evidence_actions,
             "force_converge": no_progress >= 2,
         }
         turn_root[cfg.name] = turn_state
@@ -1163,6 +1218,10 @@ def _build_llm_agent(
         for name, tool in llm_request.tools_dict.items():
             if _runtime_tool_capability(tool) == ToolCapability.DIAGNOSTIC:
                 removed[name] = "diagnostic/control tools are internal-only"
+            if normalize_tool_name(tool.name) in {"get_next_action", "research_controller_get_next_action"}:
+                ready_root = state.get(RESEARCH_CONTROLLER_STATE_KEY)
+                if not isinstance(ready_root, dict) or ready_root.get(cfg.name) is not True:
+                    removed[name] = "update_research_state must establish a valid snapshot first"
         discovery_names = {
             name
             for name, tool in llm_request.tools_dict.items()
@@ -1299,6 +1358,7 @@ def _build_llm_agent(
         after_agent_callback=after_agent,
         before_model_callback=before_model,
         before_tool_callback=before_tool,
+        after_tool_callback=after_tool,
         **kwargs,
     )
 

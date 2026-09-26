@@ -8,7 +8,12 @@ import pytest
 from fastmcp.server.middleware import MiddlewareContext
 from fastmcp.tools import ToolResult
 from mcp_youtube_transcript import server
-from youtube_transcript_api import TranscriptsDisabled
+from youtube_transcript_api import (
+    AgeRestricted,
+    NoTranscriptFound,
+    TranscriptsDisabled,
+    VideoUnavailable,
+)
 
 
 def _run(name, arguments, response):
@@ -29,7 +34,15 @@ def _payload(result):
     return json.loads(result.content[0].text)
 
 
-def test_disabled_subtitles_are_returned_as_structured_error(monkeypatch):
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("get_transcript", {"url": "https://www.youtube.com/watch?v=abc123"}),
+        ("get_timed_transcript", {"url": "https://www.youtube.com/watch?v=abc123"}),
+        ("get_available_languages", {"url": "https://www.youtube.com/watch?v=abc123"}),
+    ],
+)
+def test_disabled_subtitles_are_returned_as_structured_error(monkeypatch, name, arguments):
     class DisabledApi:
         def list(self, video_id):
             assert video_id == "abc123"
@@ -44,8 +57,8 @@ def test_disabled_subtitles_are_returned_as_structured_error(monkeypatch):
     )
 
     result, calls = _run(
-        "get_transcript",
-        {"url": "https://www.youtube.com/watch?v=abc123"},
+        name,
+        arguments,
         generic_error,
     )
 
@@ -56,6 +69,33 @@ def test_disabled_subtitles_are_returned_as_structured_error(monkeypatch):
         "message": "Subtitles are disabled for this video.",
     }
     assert _payload(result) == result.structured_content
+
+
+@pytest.mark.parametrize(
+    "exception,error_code",
+    [
+        (TranscriptsDisabled, "TRANSCRIPTS_DISABLED"),
+        (NoTranscriptFound, "NO_TRANSCRIPT_FOUND"),
+        (VideoUnavailable, "VIDEO_UNAVAILABLE"),
+        (AgeRestricted, "AGE_RESTRICTED"),
+    ],
+)
+@pytest.mark.parametrize("name", ["get_transcript", "get_available_languages"])
+def test_video_availability_errors_keep_structured_codes(monkeypatch, exception, error_code, name):
+    class UnavailableApi:
+        def list(self, video_id):
+            if exception is NoTranscriptFound:
+                raise exception(video_id, ["en"], None)
+            raise exception(video_id)
+
+    monkeypatch.setattr(server, "YouTubeTranscriptApi", UnavailableApi)
+    result, _ = _run(
+        name,
+        {"url": "https://youtu.be/abc123"},
+        ToolResult(content="generic failure", is_error=True),
+    )
+    assert result.is_error
+    assert result.structured_content["error_code"] == error_code
 
 
 @pytest.mark.parametrize("name", ["get_transcript", "get_timed_transcript"])

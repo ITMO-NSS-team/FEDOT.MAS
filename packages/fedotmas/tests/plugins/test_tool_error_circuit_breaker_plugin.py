@@ -6,6 +6,7 @@ import pytest
 from fedotmas.plugins import ToolErrorCircuitBreakerPlugin
 from fedotmas.plugins._tool_error_circuit_breaker import (
     DUPLICATE_TOOL_CALL,
+    RESEARCH_CONVERGENCE_REQUIRED,
     TOOL_CIRCUIT_OPEN,
     WEB_BUDGET_EXHAUSTED,
 )
@@ -52,6 +53,47 @@ class TestToolErrorCircuitBreakerPlugin:
         )
         assert blocked["error_code"] == TOOL_CIRCUIT_OPEN
         assert "BROWSER_AGENT_FAILED" in blocked["error"]
+
+    @pytest.mark.asyncio
+    async def test_video_source_errors_do_not_open_tool_circuit(self):
+        plugin = ToolErrorCircuitBreakerPlugin(max_same_tool_error_type=2)
+        tool = _tool("get_video_info")
+        ctx = _tool_context()
+        result = {
+            "isError": True,
+            "structuredContent": {
+                "error_code": "TRANSCRIPTS_DISABLED",
+                "error": "Transcript unavailable for this video",
+            },
+        }
+        for _ in range(2):
+            await plugin.after_tool_callback(
+                tool=tool, tool_args={}, tool_context=ctx, result=result
+            )
+        blocked = await plugin.before_tool_callback(
+            tool=tool, tool_args={}, tool_context=ctx
+        )
+        assert blocked is None
+        assert plugin._total_errors == {}
+        assert plugin._open_circuits == {}
+
+    @pytest.mark.asyncio
+    async def test_repeated_research_convergence_blocks_do_not_open_underlying_tool(self):
+        plugin = ToolErrorCircuitBreakerPlugin(max_same_tool_error_type=2)
+        tool = _tool("get_transcript")
+        ctx = _tool_context()
+        for _ in range(5):
+            await plugin.after_tool_callback(
+                tool=tool,
+                tool_args={},
+                tool_context=ctx,
+                result={"isError": True, "error_code": RESEARCH_CONVERGENCE_REQUIRED},
+            )
+        assert await plugin.before_tool_callback(
+            tool=tool, tool_args={}, tool_context=ctx
+        ) is None
+        assert plugin._total_errors == {}
+        assert plugin._open_circuits == {}
 
     @pytest.mark.asyncio
     async def test_ignores_successful_tool_result(self):
