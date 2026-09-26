@@ -13,6 +13,7 @@ import io
 import json
 import os
 import re
+import sys
 import tempfile
 import time
 import uuid
@@ -412,6 +413,18 @@ async def export_synapse(body: SynapseExportIn) -> dict:
                 "tools_checked": False}
     except (ValueError, KeyError) as exc:
         return {"ok": False, "error": f"Ошибка конвертации: {exc}"}
+
+
+@app.get("/api/rubber-quality")
+def rubber_quality() -> dict:
+    """Current predictor quality, independent of any particular MAS run."""
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from experiments.rubber_recipe_mas.open_data_predictor import load_rows, loocv_metrics, TARGETS
+    rows = load_rows()
+    return {"ok": True, "method": "LOOCV", "samples": len(rows),
+            "mape_pct": {target: loocv_metrics(rows, target)["mape_pct"] for target in TARGETS}}
 
 
 @app.post("/api/effort_breakdown")

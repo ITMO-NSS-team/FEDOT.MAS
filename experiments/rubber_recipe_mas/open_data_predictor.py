@@ -105,7 +105,7 @@ def fit_surface(
     return SurfaceModel(tuple(_solve(gram, rhs)))
 
 
-def loocv_metrics(rows: list[dict[str, float]], target: str) -> dict[str, float]:
+def loocv_metrics(rows: list[dict[str, float]], target: str) -> dict[str, float | None]:
     actual: list[float] = []
     predicted: list[float] = []
     for held_out, row in enumerate(rows):
@@ -121,6 +121,8 @@ def loocv_metrics(rows: list[dict[str, float]], target: str) -> dict[str, float]
     total_sum = sum((value - mean) ** 2 for value in actual)
     return {
         "mae": sum(abs(error) for error in errors) / len(errors),
+        "mape_pct": (100 * sum(abs(error / truth) for error, truth in zip(errors, actual, strict=True))
+                     / len(actual)) if all(actual) else None,
         "rmse": math.sqrt(residual_sum / len(errors)),
         "r2": 1.0 - residual_sum / total_sum if total_sum else 0.0,
     }
@@ -182,12 +184,15 @@ def predict_properties(
 
     return {
         "status": "prediction_completed",
+        "recipe_validation": recipe_validation(recipe, predictions, rows),
         "recipe_input_unchanged": {key: float(value) for key, value in recipe.items()},
         "predicted_properties": {
             target: {
                 "value": round(value, 5),
                 "loocv_mae": round(metrics[target]["mae"], 5),
                 "loocv_rmse": round(metrics[target]["rmse"], 5),
+                "loocv_mape_pct": (round(metrics[target]["mape_pct"], 5)
+                                   if metrics[target]["mape_pct"] is not None else None),
                 "approx_95pct_range_from_loocv_rmse": [
                     round(value - 1.96 * metrics[target]["rmse"], 5),
                     round(value + 1.96 * metrics[target]["rmse"], 5),
@@ -220,6 +225,19 @@ def predict_properties(
             "Laboratory validation is required for this exact recipe and processing regime.",
         ],
     }
+
+
+def recipe_validation(recipe: dict, predictions: dict, rows: list[dict]) -> dict:
+    matched = next((r for r in rows if
+        math.isclose(r["nr_phr"], recipe["nr_smr20_phr"], abs_tol=1e-9, rel_tol=0)
+        and math.isclose(r["carbon_black_n220_phr"], recipe["carbon_black_n220_phr"], abs_tol=1e-9, rel_tol=0)), None)
+    if matched is None:
+        return {"mape_pct": None, "reason": "no_exact_reference", "ape_pct": {}}
+    errors = {t: 100 * abs(predictions[t] - matched[t]) / abs(matched[t])
+              if matched[t] else None for t in TARGETS}
+    return {"mape_pct": sum(errors.values()) / len(errors) if all(v is not None for v in errors.values()) else None,
+            "ape_pct": errors, "reference": {t: matched[t] for t in TARGETS},
+            "reference_used_in_training": True, "recipe": recipe}
 
 
 def main() -> None:

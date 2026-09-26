@@ -761,6 +761,55 @@ function displayMeta(value) {
   ).map(part => part.trim()).filter(Boolean).join(" · ");
 }
 
+function rubberQualityHtml(preset) {
+  const agents = preset?.kind === "mas"
+    ? [preset.config?.coordinator, ...(preset.config?.workers || [])]
+    : (preset?.config?.agents || []);
+  if (!preset || ![...(preset.tools || []), ...agents.flatMap(a => a?.tools || [])]
+    .includes("rubber-recipe-predictor")) return "";
+  const quality = preset.rubberQuality;
+  const labels = {
+    thermal_conductivity_w_mk: "Теплопроводность",
+    oil_swelling_pct_1006h: "Набухание в масле после 1006 ч",
+    water_swelling_pct_1006h: "Набухание в воде после 1006 ч",
+    specific_gravity: "Относительная плотность",
+  };
+  const rows = Object.entries(labels).map(([key, label]) => {
+    const value = quality?.mape_pct?.[key];
+    return `<tr><td>${label}</td><td>${Number.isFinite(value) && value >= 0 ? value.toFixed(2).replace(".", ",") + " %" : "нет данных"}</td></tr>`;
+  }).join("");
+  const current = preset.rubberValidation;
+  const currentValue = current?.mape_pct;
+  const currentText = Number.isFinite(currentValue) && currentValue >= 0
+    ? `${currentValue.toFixed(2).replace(".", ",")} % — среднее по четырём характеристикам. Сравнение с точной рецептурой из обучающего набора, не независимая проверка.`
+    : current?.reason === "no_exact_reference"
+      ? "Нет контрольных измерений для этой рецептуры."
+      : "Нет данных проверки текущего расчёта. Выполните новый запуск с обновлённым предиктором.";
+  return `<div class="ans-card"><h4>Качество расчётной модели · MAPE</h4>
+    <table class="ans-table"><thead><tr><th>Характеристика</th><th>MAPE</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="ans-meta">Средняя абсолютная процентная ошибка: среднее |прогноз − наблюдение| / |наблюдение| × 100 %.
+    ${quality ? `LOOCV по ${esc(quality.samples)} оцифрованным точкам: обучение на остальных точках, проверка на исключённой.` : "Для расчёта подключите обновлённый сервер GUI и заново выберите сценарий."}
+    Это оценка расчётной модели на наборе данных, не ошибка конкретной рецептуры и не оценка ответа МАС.
+    Требуется независимая лабораторная проверка.</div>
+    <h4>MAPE текущего расчёта</h4><div class="ans-text">${currentText}</div>
+    ${Number.isFinite(currentValue) ? `<table class="ans-table"><thead><tr><th>Характеристика</th><th>Ошибка, %</th></tr></thead><tbody>${Object.entries(labels).map(([key, label]) => {
+      const value = current.ape_pct?.[key];
+      return `<tr><td>${label}</td><td>${Number.isFinite(value) ? value.toFixed(2).replace(".", ",") : "нет данных"}</td></tr>`;
+    }).join("")}</tbody></table>` : ""}</div>`;
+}
+
+async function loadRubberQuality(preset) {
+  if (!rubberQualityHtml(preset)) return;
+  try {
+    const response = await fetch("api/rubber-quality", {cache: "no-store"});
+    const quality = await readJson(response, "MAPE");
+    if (!quality.ok) return;
+    preset.rubberQuality = quality;
+    storeScenarios();
+    if (S.preset === preset) renderAnswer();
+  } catch { /* Offline: retain the previously saved dataset-level metrics. */ }
+}
+
 function renderAnswer() {
   const host = $("answer");
   const blocks = [];
@@ -777,6 +826,8 @@ function renderAnswer() {
       ${S.answer.meta ? `<div class="ans-meta">${esc(displayMeta(S.answer.meta))}</div>` : ""}
     </div>`);
   }
+  const qualityBlock = rubberQualityHtml(S.preset);
+  if (qualityBlock) blocks.push(qualityBlock);
   if (S.baseline) {
     blocks.push(`<div class="ans-card single">
       <h4>Ответ одной модели, без системы</h4>
@@ -1300,6 +1351,7 @@ function loadPreset(p) {
   renderEffort(p);
   resetRun();
   showRecordedRun(p);
+  loadRubberQuality(p);
   renderMode();
 }
 
@@ -1676,7 +1728,7 @@ async function liveRun() {
   if (!S.preset) return;
   stopLive();
   S.answer = null; S.baseline = null; S.judge = null; S.review = null;
-  Object.assign(S.preset, { answer: null, answerMeta: null, runStats: null,
+  Object.assign(S.preset, { answer: null, answerMeta: null, runStats: null, rubberValidation: null,
     auto: "—", baseline: null, judge: null, review: null, trace: [] });
   renderAnswer();
   showTab("feed");
@@ -1774,6 +1826,10 @@ async function liveRun() {
                        tool: ev.tool, tokens: 0, ms: routing ? 1200 : 1400 });
         }
         else if (ev.type === "tool_result") {
+          if (ev.rubber_validation) {
+            S.preset.rubberValidation = ev.rubber_validation;
+            renderAnswer();
+          }
           const phase = ev.error ? "ошибка инструмента" : "результат инструмента";
           liveMessage(phase, ev.agent, ev.text, ev.tool);
           trace.push({ agent: ev.agent, phase, text: ev.text, tool: ev.tool,

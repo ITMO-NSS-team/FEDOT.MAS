@@ -72,6 +72,12 @@ _OPEN_SOURCE_OPENROUTER = {
     "deepseek/deepseek-v3.2": "DeepSeek V3.2 · MIT",
     "z-ai/glm-5": "GLM-5 · MIT",
     "mistralai/mistral-small-2603": "Mistral Small 4 · Apache 2.0",
+    "qwen/qwen3-32b": "Qwen3 32B · Apache 2.0",
+    "qwen/qwen3-coder": "Qwen3 Coder · Apache 2.0",
+    "deepseek/deepseek-chat-v3.1": "DeepSeek V3.1 · MIT",
+    "meta-llama/llama-3.3-70b-instruct": "Llama 3.3 70B Instruct · открытые веса",
+    "moonshotai/kimi-k2.5": "Kimi K2.5 · открытые веса",
+    "openai/gpt-oss-120b": "GPT-OSS 120B · Apache 2.0",
 }
 MODELS = [
     {"id": "openrouter/" + slug, "label": label + " · OpenRouter", "open": True}

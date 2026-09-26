@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import pytest
 
-from open_data_predictor import DEFAULT_DATA, load_rows, predict_properties
+from open_data_predictor import DEFAULT_DATA, TARGETS, load_rows, predict_properties, loocv_metrics
 
 HERE = Path(__file__).resolve().parent
 
@@ -33,3 +34,31 @@ def test_supplied_recipe_is_returned_unchanged_with_predictions() -> None:
         "water_swelling_pct_1006h",
         "specific_gravity",
     }
+
+
+def test_mape_matches_fixed_loocv_values():
+    rows = load_rows()
+    expected = [4.49396273, 9.68771460, 3.45543630, 0.59404942]
+    for target, value in zip(TARGETS, expected):
+        assert loocv_metrics(rows, target)["mape_pct"] == pytest.approx(value)
+
+
+def test_recipe_error_requires_exact_reference():
+    request = json.loads((HERE / "prototype_request.json").read_text(encoding="utf-8"))
+    request.update(nr_smr20_phr=55, sbr1502_phr=45, carbon_black_n220_phr=55)
+    result = predict_properties(request, load_rows())
+    assert result["recipe_validation"]["mape_pct"] is None
+    assert result["recipe_validation"]["reason"] == "no_exact_reference"
+    request.update(nr_smr20_phr=50, sbr1502_phr=50, carbon_black_n220_phr=60)
+    result = predict_properties(request, load_rows())
+    validation = result["recipe_validation"]
+    assert validation["reference_used_in_training"] is True
+    assert validation["mape_pct"] == pytest.approx(sum(validation["ape_pct"].values()) / 4)
+    for key in TARGETS:
+        assert result["predicted_properties"][key]["loocv_mape_pct"] > 0
+
+
+def test_mape_with_zero_reference_is_unavailable():
+    rows = load_rows()
+    rows[0][TARGETS[0]] = 0
+    assert loocv_metrics(rows, TARGETS[0])["mape_pct"] is None

@@ -52,8 +52,14 @@ JSON; кнопка «Подставить» переносит выбранны�
 запуска той же конфигурации МАС.
 
 Названия моделей видны только в окне «Выбор модели». В нём доступны три модели
-Codex и открытые модели OpenRouter: `qwen/qwen3-235b-a22b-2507`,
-`deepseek/deepseek-v3.2`, `z-ai/glm-5`, `mistralai/mistral-small-2603`.
+Codex и десять моделей с открытыми весами через OpenRouter: `qwen/qwen3-235b-a22b-2507`,
+`deepseek/deepseek-v3.2`, `z-ai/glm-5`, `mistralai/mistral-small-2603`,
+`qwen/qwen3-32b`, `qwen/qwen3-coder`, `deepseek/deepseek-chat-v3.1`,
+`meta-llama/llama-3.3-70b-instruct`, `moonshotai/kimi-k2.5`, `openai/gpt-oss-120b`.
+OpenRouter показан первым, Codex — в конце списка. Идентификаторы и заявленная
+поддержка tools/structured_outputs проверены по каталогу OpenRouter 26.09.2026.
+Наличие в меню не заменяет протокол испытаний совместимости по ТЗ:
+для этого нужны реальные прогоны каждой модели с сохранением результатов.
 Каталог виден без ключа; ключ OpenRouter вводится из того же окна.
 
 «Сравнить с одной моделью» получает одиночный ответ и запускает сравнительного
