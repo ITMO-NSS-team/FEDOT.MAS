@@ -462,6 +462,9 @@ body.zoomed.query-fullscreen{zoom:1}
   outline:none; cursor:pointer; padding:2px 0;
 }
 .model-pick:focus-within{border-color:color-mix(in srgb, var(--coord) 50%, transparent)}
+#models-modal .model-pick{flex-direction:column; align-items:stretch; gap:8px; padding:12px}
+#models-modal .model-pick>span,#models-modal .model-pick select{font-size:15px}
+#models-modal .model-pick select{text-align:left; text-align-last:left; width:100%}
 
 /* ---------- Список инструментов в окне сценария ---------- */
 .tools-box{border:1px solid var(--line); border-radius:var(--r-md); background:var(--bg-soft); padding:8px 10px}

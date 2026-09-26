@@ -150,9 +150,9 @@ def audit_historical_productivity(
             raise ValueError(f"Invalid history row: {row}")
         fact_rate = row["volume"] / row["working_days"]
         if fact_rate > high_boundary:
-            violation_type = "выше нормы более чем в 2 раза"
+            violation_type = f"выше нормы более чем в {upper_multiplier:g} раза"
         elif fact_rate < low_boundary:
-            violation_type = "ниже нормы более чем в 3 раза"
+            violation_type = f"ниже нормы более чем в {lower_divisor:g} раза"
         else:
             continue
         violations.append(

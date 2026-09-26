@@ -27,7 +27,7 @@
     </div>
   </div>
   <div class="topbar-right">
-    <span class="chip hidden" id="codex-status" title="Состояние Codex CLI"></span>
+    <button class="chip" id="btn-models" aria-haspopup="dialog">Выбор модели</button>
     <button class="chip chip-icon" id="btn-theme" title="Светлая / тёмная тема">
       <svg viewBox="0 0 24 24" class="ic"><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg>
     </button>
@@ -58,28 +58,6 @@
           <svg viewBox="0 0 24 24" class="ic"><path d="M7 4l12 8-12 8z"/></svg>
           Запустить
         </button>
-      </div>
-    </section>
-
-    <section class="block">
-      <div class="block-title">Модели</div>
-      <div class="model-picks">
-        <label class="model-pick">
-          <span>Генерация системы</span>
-          <select id="model-gen" title="Модель мета-агента: проектирует состав агентов и пайплайн"></select>
-        </label>
-        <label class="model-pick">
-          <span>Запуск системы</span>
-          <select id="model-run" title="Модель агентов при исполнении и одиночной модели для сравнения"></select>
-        </label>
-        <label class="model-pick">
-          <span>Одна модель</span>
-          <select id="model-single" title="Модель, которая отвечает на ту же задачу одна, без системы"></select>
-        </label>
-        <label class="model-pick">
-          <span>Судья и синтетика</span>
-          <select id="model-judge" title="Модель сравнивает ответы и переформулирует запросы для синтетических тестов"></select>
-        </label>
       </div>
     </section>
 
@@ -177,7 +155,7 @@
         <div class="synthetic-head">
           <div>
             <b>Синтетические тесты</b>
-            <span>Смысл и ограничения запроса сохраняются</span>
+            <span>Новые входные данные для созданной МАС</span>
           </div>
           <label>за раз
             <select id="synthetic-count" title="Количество вариантов за один вызов модели">
@@ -256,6 +234,26 @@
     <div class="modal-foot">
       <button class="btn btn-primary" id="key-submit">Проверить и продолжить</button>
     </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="models-modal" role="dialog" aria-modal="true" aria-labelledby="models-title">
+  <div class="modal-card">
+    <div class="modal-head"><span id="models-title">Выбор модели</span>
+      <button class="zbtn" id="models-close" title="Закрыть">✕</button></div>
+    <div class="modal-body">
+      <p>Три модели Codex и модели с открытым исходным кодом через OpenRouter. Выбор применяется к следующим запускам.</p>
+      <span class="chip hidden" id="codex-status"></span>
+      <div class="model-picks">
+        <label class="model-pick"><span>Генерация системы</span><select id="model-gen"></select></label>
+        <label class="model-pick"><span>Запуск системы</span><select id="model-run"></select></label>
+        <label class="model-pick"><span>Одиночное сравнение</span><select id="model-single"></select></label>
+        <label class="model-pick"><span>Судья и новые примеры</span><select id="model-judge"></select></label>
+      </div>
+      <p class="label-hint">Для OpenRouter нужен ключ с доступом к выбранной модели.</p>
+      <button class="btn" id="models-key">Ввести ключ OpenRouter</button>
+    </div>
+    <div class="modal-foot"><button class="btn btn-primary" id="models-done">Готово</button></div>
   </div>
 </div>
 

@@ -148,7 +148,7 @@ async def test_llm_judge_generates_synthetic_examples():
         mock_call.return_value = LLMCallResult(
             raw_output={
                 "examples": [
-                    "Посчитай сумму 2 и 2.",
+                    "Посчитай сумму 3 и 4.",
                     "Сколько будет 2 + 2?",
                     "Сколько будет 2 + 2?",
                 ]
@@ -158,16 +158,21 @@ async def test_llm_judge_generates_synthetic_examples():
             elapsed=0.2,
         )
         examples = await judge.generate_synthetic_examples(
-            "Сколько будет 2 + 2?", count=3
+            "Сколько будет 2 + 2?", count=3,
+            system_config={"agents": [{"name": "calculator"}]},
+            input_constraints={"numbers": "positive integers"},
+            existing_examples=["Посчитай сумму 5 и 6."],
         )
 
-    assert examples == ["Посчитай сумму 2 и 2."]
+    assert examples == ["Посчитай сумму 3 и 4."]
     assert judge.token_usage == (30, 20)
     call = mock_call.call_args.kwargs
     assert call["agent_name"] == "synthetic_examples"
     assert call["output_schema"].model_json_schema()["additionalProperties"] is False
     assert call["temperature"] == 0.65
     assert json.loads(call["user_message"])["count"] == 3
+    assert json.loads(call["user_message"])["system_config"]["agents"][0]["name"] == "calculator"
+    assert json.loads(call["user_message"])["input_constraints"]["numbers"] == "positive integers"
 
 
 @pytest.mark.asyncio

@@ -76,10 +76,13 @@ class JudgeIn(BaseModel):
 
 
 class SyntheticExamplesIn(BaseModel):
-    """Запрос на тестовые переформулировки для оценщика качества."""
+    """Новые входные данные для уже созданной системы."""
 
     query: str = Field(min_length=1, max_length=12_000)
     count: int = Field(default=3, ge=1, le=10)
+    config: dict
+    tools: list[str] = Field(default_factory=list)
+    existing_examples: list[str] = Field(default_factory=list, max_length=100)
     model: str | None = None
 
 

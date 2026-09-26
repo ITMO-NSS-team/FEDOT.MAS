@@ -123,6 +123,7 @@ async def status() -> dict:
         "mcp_servers": sorted(registry),
         "run_id": SERVER_RUN_ID,
         "has_key": bool(os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")),
+        "openrouter_ready": bool(os.getenv("OPENROUTER_API_KEY")),
         "codex_cli": bool(find_codex_cli()),
         "codex_authenticated": codex_authenticated,
         "codex_status": codex_note,
@@ -608,12 +609,35 @@ async def review(body: ReviewIn) -> dict:
 
 @app.post("/api/synthetic_examples")
 async def synthetic_examples(body: SyntheticExamplesIn) -> dict:
-    """Слегка переформулирует запросы моделью, выбранной для судьи качества."""
+    """Генерирует новые входные данные в области применимости существующей МАС."""
     model = body.model or JUDGE_MODEL
     quality_judge = LLMJudge(model=model)
+    if not body.config:
+        return {"ok": False, "error": "Сначала создайте или выберите МАС."}
+    tool_names = set(body.tools)
+    for agent in body.config.get("agents", []) + body.config.get("workers", []):
+        tool_names.update(agent.get("tools") or [])
+    tool_names.update((body.config.get("coordinator") or {}).get("tools") or [])
+    constraints = {}
+    if "rubber-recipe-predictor" in tool_names:
+        constraints["rubber_recipe"] = {
+            "variable_phr": {"NR SMR-20": [0, 100], "SBR-1502": [0, 100], "N220": [20, 80]},
+            "balance": "NR SMR-20 + SBR-1502 = 100 phr",
+            "fixed_phr": {"оксид цинка": 5, "стеариновая кислота": 2, "TMQ": 1.5,
+                          "6PPD": 1.5, "технологическое масло": 5, "сера": 5,
+                          "TMTD": 2, "регенерат": 5},
+            "properties": "теплопроводность, набухание в масле и воде за 1006 ч, относительная плотность",
+        }
+    if "technology-card-audit" in tool_names:
+        constraints["technology_card"] = {
+            "fixed_card_id": "demo://earthworks/бурение_котлованов",
+            "variable": "upper_multiplier > 1, lower_divisor > 1",
+            "fixed": "Нормы карты и шесть демонстрационных исторических записей не изменяются.",
+        }
     try:
         examples = await quality_judge.generate_synthetic_examples(
-            body.query, count=body.count
+            body.query, count=body.count, system_config=body.config,
+            input_constraints=constraints, existing_examples=body.existing_examples,
         )
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}

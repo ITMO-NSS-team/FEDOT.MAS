@@ -42,7 +42,7 @@ class _SyntheticExamplesOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     examples: list[str] = Field(
-        description="Slightly rephrased requests with unchanged meaning"
+        description="New execution requests with varied inputs for the existing system"
     )
 
 
@@ -107,9 +107,12 @@ class LLMJudge:
         )
 
     async def generate_synthetic_examples(
-        self, query: str, *, count: int = 1
+        self, query: str, *, count: int = 1,
+        system_config: dict[str, Any] | None = None,
+        input_constraints: dict[str, Any] | None = None,
+        existing_examples: list[str] | None = None,
     ) -> list[str]:
-        """Generate meaning-preserving query variants for robustness testing.
+        """Generate new inputs within the existing system's supported domain.
 
         The judge model is reused deliberately: a GUI or an optimization workflow
         needs only one evaluator-model setting. Generated variants do not include
@@ -122,7 +125,9 @@ class LLMJudge:
             raise ValueError("count must be between 1 and 10")
 
         user_message = json.dumps(
-            {"source_request": source, "count": count}, ensure_ascii=False
+            {"source_request": source, "count": count,
+             "system_config": system_config or {}, "input_constraints": input_constraints or {},
+             "existing_examples": existing_examples or []}, ensure_ascii=False
         )
         result: LLMCallResult = await run_meta_agent_call(
             agent_name="synthetic_examples",
@@ -139,6 +144,8 @@ class LLMJudge:
 
         output = _SyntheticExamplesOutput.model_validate(result.raw_output)
         examples = _unique_examples(output.examples, source)
+        known = {" ".join(item.split()).casefold() for item in (existing_examples or [])}
+        examples = [item for item in examples if " ".join(item.split()).casefold() not in known]
         if not examples:
             raise ValueError("model returned no distinct synthetic examples")
         return examples[:count]

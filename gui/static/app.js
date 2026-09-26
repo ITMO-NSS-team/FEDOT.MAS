@@ -615,7 +615,6 @@ function renderInspector() {
       a.isCoord ? '<span class="pill">координатор</span>' : "",
       a.output_key ? `<span class="pill pill-out">${esc(a.output_key)}</span>` : "",
       ...(a.tools || []).map((t) => `<span class="pill pill-tool">${esc(t)}</span>`),
-      a.model ? `<span class="pill">${esc(a.model)}</span>` : "",
     ].join("");
     return `<div class="acard ${cls}">
       <div class="acard-head">
@@ -646,7 +645,8 @@ function renderInspector() {
 
   // JSON
   $("json-label").textContent = p.kind === "mas" ? "MASConfig · config.json" : "MAWConfig · config.json";
-  $("json").innerHTML = highlightJSON(p.config);
+  $("json").innerHTML = highlightJSON(JSON.parse(JSON.stringify(p.config,
+    (key, value) => key === "model" ? undefined : value)));
 }
 
 /** Лёгкий рендер Markdown: агенты отвечают заголовками, списками и таблицами. */
@@ -755,6 +755,12 @@ function shortAnswer(text) {
   return "";
 }
 
+function displayMeta(value) {
+  return String(value || "").split("·").filter(part =>
+    !/host\/|openrouter\/|codex|terra|\bsol\b|\bluna\b|gpt-|claude|gemini|deepseek|qwen|glm-|mistral|kimi/i.test(part)
+  ).map(part => part.trim()).filter(Boolean).join(" · ");
+}
+
 function renderAnswer() {
   const host = $("answer");
   const blocks = [];
@@ -768,14 +774,14 @@ function renderAnswer() {
       <div class="ans-text md">${mdToHtml(S.answer.text)}</div>
       ${short ? `<div class="ans-short"><span class="ans-short-label">Ответ на вопрос</span>
          <div class="ans-text md">${mdToHtml(short)}</div></div>` : ""}
-      ${S.answer.meta ? `<div class="ans-meta">${esc(S.answer.meta)}</div>` : ""}
+      ${S.answer.meta ? `<div class="ans-meta">${esc(displayMeta(S.answer.meta))}</div>` : ""}
     </div>`);
   }
   if (S.baseline) {
     blocks.push(`<div class="ans-card single">
       <h4>Ответ одной модели, без системы</h4>
       <div class="ans-text md">${mdToHtml(S.baseline.answer)}</div>
-      <div class="ans-meta">${esc(S.baseline.model || "")} · ${esc(nfmt(S.baseline.tokens || 0))} токенов · ${esc(String(S.baseline.seconds ?? "—"))} с</div>
+      <div class="ans-meta">${esc(nfmt(S.baseline.tokens || 0))} токенов · ${esc(String(S.baseline.seconds ?? "—"))} с</div>
     </div>`);
   }
   if (S.judge) {
@@ -788,13 +794,13 @@ function renderAnswer() {
       <h4>Сравнение с одной моделью: вердикт судьи</h4>
       <div class="ans-winner ${w}">${esc(label)}</div>
       <div class="ans-text">${esc(S.judge.verdict)}</div>
-      <div class="ans-meta">судья: ${esc(S.judge.model || "")}${S.judge.tokens ? " · " + esc(nfmt(S.judge.tokens)) + " токенов" : ""}</div>
+      <div class="ans-meta">${S.judge.tokens ? esc(nfmt(S.judge.tokens)) + " токенов" : ""}</div>
     </div>`);
   }
   if (S.review) {
     blocks.push(`<div class="ans-card judge"><h4>Проверка результата и журнала МАС</h4>
       <div class="ans-text md">${mdToHtml(S.review.verdict)}</div>
-      <div class="ans-meta">${esc(S.review.model || "")}</div></div>`);
+      </div>`);
   }
   host.innerHTML = blocks.length ? blocks.join("")
     : '<div class="empty">Ответ системы появится после запуска</div>';
@@ -974,7 +980,7 @@ function renderSyntheticExamples() {
     <div class="synthetic-item">
       <div class="synthetic-text">${esc(item.query)}</div>
       <div class="synthetic-meta">
-        <span>${esc(item.model || "модель судьи")}</span>
+        <span>Новый тестовый запрос</span>
         <span class="synthetic-controls">
           <button type="button" data-action="use" data-i="${i}">Подставить</button>
           <button type="button" data-action="remove" data-i="${i}">Удалить</button>
@@ -1003,26 +1009,30 @@ function renderSyntheticExamples() {
   const ready = !!S.backend && !!S.preset && !!$("query").value.trim();
   button.disabled = !ready;
   button.title = ready
-    ? `Варианты создаст выбранная модель судьи: ${S.models.judge || "по умолчанию"}`
+    ? "Новые входные данные в пределах возможностей выбранной МАС"
     : "Выберите сценарий и заполните запрос";
 }
 
 async function generateSyntheticExamples() {
   const query = $("query").value.trim();
   if (!S.backend || !S.preset || !query) return;
+  const preset = S.preset;
   const button = $("btn-synthetic");
   const note = $("synthetic-note");
   button.disabled = true;
-  button.textContent = "Переформулируем…";
+  button.textContent = "Создаём новые входные данные…";
   note.classList.remove("error");
   note.textContent = "";
   try {
     const response = await fetch("api/synthetic_examples", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, count: Number($("synthetic-count").value) || 1,
-                             model: S.models.judge }),
+                             model: S.models.judge, config: preset.config,
+                             tools: preset.tools || [],
+                             existing_examples: S.syntheticExamples.map(item => item.query) }),
     });
     const data = await readJson(response, "синтетические примеры");
+    if (S.preset !== preset) return;
     if (!response.ok || !data.ok) {
       noteKeyNeeded(response.status);
       throw new Error(data.error || `сервер ответил ${response.status}`);
@@ -1203,7 +1213,7 @@ function renderEffort(p) {
        </div>`
     + `<div class="effort-note">Сумма по ${b.subtasks.length} подзадачам.`
     + ` Дни — это часы, делённые на восьмичасовой рабочий день.`
-    + ` Оценил ${esc(b.model || "")}.</div>`;
+    + `</div>`;
 }
 
 
@@ -1260,12 +1270,11 @@ function loadPreset(p) {
     manualRow.title = p.breakdown && p.breakdown.subtasks
       ? `Сумма по ${p.breakdown.subtasks.length} подзадачам: ${hoursText(p.breakdown.total_hours)}.`
         + ` Дни — часы, делённые на восьмичасовой рабочий день.`
-        + (p.breakdown.model ? ` Оценил ${p.breakdown.model}.` : "")
       : p.manualNote
         || "Экспертная оценка: сколько заняла бы разработка такой же системы вручную — "
            + "постановка, подбор инструментов, написание и отладка агентов. Не замерялась.";
   }
-  $("stat-auto").innerHTML = `<b class="hl">${esc(p.auto)}</b>`;
+  $("stat-auto").innerHTML = `<b class="hl">${esc(displayMeta(p.auto)) || "Готов к запуску"}</b>`;
   const genRow = $("stat-gen-row");           // строки может не быть в старой разметке
   if (genRow) {
     genRow.classList.toggle("hidden", !p.gen);
@@ -1409,6 +1418,11 @@ async function probeBackend() {
       single: S.backend.model,
       judge: S.backend.judge_model || S.backend.model,
     };
+    const savedModels = loadStored("fedotmas-models", {});
+    for (const key of Object.keys(S.models)) {
+      if (S.backend.models.some(item => item.id === savedModels[key])) S.models[key] = savedModels[key];
+      if (!S.backend.models.some(item => item.id === S.models[key])) S.models[key] = S.backend.models[0].id;
+    }
     fillModelSelect("model-gen", "gen", S.backend.models, S.models.gen);
     fillModelSelect("model-run", "run", S.backend.models, S.models.run);
     fillModelSelect("model-single", "single", S.backend.models, S.models.single);
@@ -1422,29 +1436,23 @@ async function probeBackend() {
   renderMode();
 }
 
-// У судьи набор шире: его модель задаётся отдельно и в общий список может не входить
 function judgeChoices() {
-  const list = (S.backend?.models || []).slice();
-  const judge = S.backend?.judge_model;
-  if (judge && !list.some((m) => m.id === judge)) list.unshift({ id: judge, label: judge });
-  // В узкой колонке «google/gemini-2.5-pro» не помещается — вендора убираем, id остаётся значением
-  return list.map((m) => ({ id: m.id, label: (m.label || m.id).split("/").pop() }));
+  return S.backend?.models || [];
 }
 
 function fillModelSelect(id, key, models, selected) {
   const sel = $(id);
   if (!sel) return;
-  sel.innerHTML = (models || []).map((m) =>
-    `<option value="${esc(m.id)}"${m.id === selected ? " selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
+  sel.innerHTML = [["Codex", "host/"], ["Open-source · OpenRouter", "openrouter/"]].map(([label, prefix]) =>
+    `<optgroup label="${label}">` + (models || []).filter(m => m.id.startsWith(prefix)).map(m =>
+      `<option value="${esc(m.id)}"${m.id === selected ? " selected" : ""}>${esc(m.label || m.id)}</option>`).join("") + "</optgroup>"
+  ).join("");
   sel.addEventListener("change", () => {
     S.models[key] = sel.value;
+    try { localStorage.setItem("fedotmas-models", JSON.stringify(S.models)); } catch {}
+    renderMode();
     if (key === "judge") renderSyntheticExamples();
   });
-}
-
-function codexOnly() {
-  const models = S.backend?.models || [];
-  return models.length > 0 && models.every((m) => String(m.id || "").startsWith("host/"));
 }
 
 function renderCodexStatus() {
@@ -1466,6 +1474,7 @@ function renderCodexStatus() {
  */
 function keyModal(show) {
   $("key-modal").classList.toggle("hidden", !show);
+  $("key-close").classList.remove("hidden");
   // Код доступа обычно приезжает в ссылке, но страница-предупреждение туннеля
   // может её обрезать — тогда даём ввести код руками, иначе вход в тупике.
   const needToken = !!S.backend?.public && !accessToken();
@@ -1476,8 +1485,7 @@ function keyModal(show) {
 function renderKeyChip() {
   const chip = $("btn-key");
   if (!chip) return;
-  const pub = !!S.backend?.public;
-  chip.classList.toggle("hidden", !pub || codexOnly());
+  chip.classList.add("hidden");
   const ok = !!S.backend?.user_key;
   chip.classList.toggle("key-ok", ok);
   $("btn-key-label").textContent = ok ? "Ключ принят" : "Ввести ключ";
@@ -1511,9 +1519,13 @@ async function sendKey(key, remember) {
       if (remember) localStorage.setItem(LS_KEY, key);
       else localStorage.removeItem(LS_KEY);
     } catch {}
-    if (S.backend) S.backend.user_key = true;
+    if (S.backend) {
+      S.backend.user_key = true;
+      S.backend.openrouter_ready = key.startsWith("sk-or-");
+    }
     note.textContent = "";
     renderKeyChip();
+    renderMode();
     keyModal(false);
     return true;
   } catch (e) {
@@ -1528,10 +1540,9 @@ async function sendKey(key, remember) {
 /* Ключ мог остаться в браузере с прошлого раза, а сервер тем временем
  * перезапустили — тогда отдаём его молча, без формы. */
 async function restoreKey() {
-  if (codexOnly() || !S.backend?.public || S.backend.user_key) return;
+  if (!S.backend || S.backend.openrouter_ready || S.backend.user_key) return;
   const saved = savedKey();
-  if (accessToken() && saved && await sendKey(saved, true)) return;
-  keyModal(true);
+  if (saved && (!S.backend.public || accessToken())) await sendKey(saved, true);
 }
 
 function initKeyForm() {
@@ -1570,19 +1581,21 @@ function noteKeyNeeded(status) {
 
 function renderMode() {
   const online = !!S.backend;
-  const modelReady = !codexOnly() || !!S.backend?.codex_authenticated;
+  const ready = key => String(S.models[key]).startsWith("host/")
+    ? !!S.backend?.codex_authenticated : !!S.backend?.openrouter_ready;
+  const modelReady = ready("gen");
   // Отдельной плашки режима нет — режим всегда живой; о недоступном бэкенде
   // говорят заблокированные кнопки и подсказка на них.
   $("btn-generate").disabled = !online || !modelReady;
   $("btn-generate").title = online && !modelReady
-    ? "Codex CLI не авторизован: выполните codex login и обновите страницу"
+    ? "Настройте подключение в окне «Выбор модели»"
     : online
     ? "Описать задачу и собрать под неё систему"
     : "Бэкенд недоступен: запустите gui/run.py и обновите страницу";
   // Запускать нечего, пока сценарий не создан
-  $("btn-run").disabled = !S.preset || (!online && !S.preset.trace.length) || (online && !modelReady);
-  if (online && !modelReady) {
-    $("btn-run").title = "Codex CLI не авторизован: выполните codex login и обновите страницу";
+  $("btn-run").disabled = !S.preset || (!online && !S.preset.trace.length) || (online && !ready("run"));
+  if (online && !ready("run")) {
+    $("btn-run").title = "Настройте подключение в окне «Выбор модели»";
   }
 }
 
@@ -1637,7 +1650,7 @@ async function liveRun() {
     $("m-time").textContent = fmtTime((performance.now() - t0) / 1000);
   }, 200);
   setPlayIcon(true);
-  liveMessage("запуск", "runner", `Система запущена на реальных моделях (${S.models.run}). Первые ответы агентов появятся здесь.`);
+  liveMessage("запуск", "runner", "Система запущена. Первые ответы агентов появятся здесь.");
 
   S.abort = new AbortController();
   try {
@@ -2061,7 +2074,7 @@ async function submitNewScenario() {
           manual = manualLabel(eff);
           manualNote = `Сумма по ${eff.subtasks.length} подзадачам: ${hoursText(eff.total_hours)}.`
             + ` Дни — часы, делённые на восьмичасовой рабочий день.`
-            + ` Оценил ${eff.model} при создании сценария.`;
+            + ` Оценка выполнена при создании сценария.`;
           ui.note(`Трудоёмкость вручную: ${manual} по ${eff.subtasks.length} подзадачам`);
         } else {
           manualNote = "Разложить задачу не удалось: " + (eff.error || "неизвестная ошибка");
@@ -2308,6 +2321,24 @@ function init() {
   initMcpPicker();
   initFileSources();
   initKeyForm();
+  const modelModal = show => {
+    $("models-modal").classList.toggle("hidden", !show);
+    (show ? $("model-gen") : $("btn-models")).focus();
+  };
+  $("btn-models").addEventListener("click", () => modelModal(true));
+  $("models-close").addEventListener("click", () => modelModal(false));
+  $("models-done").addEventListener("click", () => modelModal(false));
+  $("models-key").addEventListener("click", () => { modelModal(false); keyModal(true); });
+  $("models-modal").addEventListener("click", e => { if (e.target === $("models-modal")) modelModal(false); });
+  $("models-modal").addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.stopPropagation(); modelModal(false); }
+    if (e.key === "Tab") {
+      const fields = [...$("models-modal").querySelectorAll("button,select")];
+      const first = fields[0], last = fields[fields.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
 
   $("btn-query-expand").addEventListener("click", () => {
     setQueryExpanded(!$("query-block").classList.contains("query-expanded"));

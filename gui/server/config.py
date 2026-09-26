@@ -63,30 +63,20 @@ MODELS = [
 ]
 
 # Модели OpenRouter: litellm понимает префикс openrouter/ сам, нужен только
-# OPENROUTER_API_KEY (локально — из .env, в публичном режиме ключ вводит гость,
-# поэтому там пункты показываем даже без ключа в окружении). Слоги проверены по
-# https://openrouter.ai/api/v1/models; свой список — GUI_OPENROUTER_MODELS
-# через запятую, без префикса openrouter/.
-_OPENROUTER_DEFAULT = ("anthropic/claude-sonnet-5,openai/gpt-5.6-terra,"
-                       "google/gemini-2.5-pro,deepseek/deepseek-v4-pro,"
-                       "deepseek/deepseek-v4-flash,qwen/qwen3.8-max-prime,"
-                       "qwen/qwen3.8-flash,z-ai/glm-5,moonshotai/kimi-k2.5,"
-                       "mistralai/mistral-small-2603")
+# OPENROUTER_API_KEY (из .env или окна выбора модели).
+# Идентификаторы: https://openrouter.ai/api/v1/models.
+# Каталог OpenRouter и лицензии карточек разработчиков проверены 2026-09-26.
+# Список виден и без ключа: ключ вводится отдельно в окне выбора модели.
 _OPEN_SOURCE_OPENROUTER = {
-    "z-ai/glm-5",
-    "moonshotai/kimi-k2.5",
-    "mistralai/mistral-small-2603",
+    "qwen/qwen3-235b-a22b-2507": "Qwen3 235B A22B · Apache 2.0",
+    "deepseek/deepseek-v3.2": "DeepSeek V3.2 · MIT",
+    "z-ai/glm-5": "GLM-5 · MIT",
+    "mistralai/mistral-small-2603": "Mistral Small 4 · Apache 2.0",
 }
-if os.getenv("OPENROUTER_API_KEY") or PUBLIC_MODE:
-    MODELS += [
-        {"id": "openrouter/" + slug,
-         "label": (slug.split("/")[-1] + " · OpenRouter"
-                   + (" · открытые веса" if slug in _OPEN_SOURCE_OPENROUTER else "")),
-         "open": True}
-        for slug in (s.strip() for s in
-                     os.getenv("GUI_OPENROUTER_MODELS", _OPENROUTER_DEFAULT).split(","))
-        if slug
-    ]
+MODELS += [
+    {"id": "openrouter/" + slug, "label": label + " · OpenRouter", "open": True}
+    for slug, label in _OPEN_SOURCE_OPENROUTER.items()
+]
 
 # Рассуждающие модели тратят часть лимита на размышления: с запасом по умолчанию
 # агенты не обрываются на середине ответа.
