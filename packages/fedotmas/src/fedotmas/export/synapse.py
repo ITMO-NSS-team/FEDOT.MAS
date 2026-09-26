@@ -219,11 +219,18 @@ def to_synapse_bundle(
         phase_label: Their phase indicator. The requirements/planning/execution/
             output quartet is one bundle's convention, not a fixed vocabulary.
     """
-    source_agents = (
-        [config.coordinator, *config.workers]
-        if isinstance(config, MASConfig)
-        else config.agents
-    )
+    runtime_tools: list[str] = []
+    runtime_agent_name: str | None = None
+    overwritten_fields = _OVERWRITTEN_ON_REUSE
+    if isinstance(config, MASConfig):
+        source_agents = [config.coordinator, *config.workers]
+        runtime_agent_name = config.coordinator.name
+        runtime_tools = ["delegate_to_agent"]
+        if config.coordinator.output_key:
+            runtime_tools.append("context_write")
+        overwritten_fields += ("allowed_delegation_targets", "description")
+    else:
+        source_agents = config.agents
     external = {a.name: a for a in existing_agents.agents} if existing_agents else {}
     wire_workflow_id = to_wire_name(workflow_id)
     scope = _workflow_scope(wire_workflow_id)
@@ -277,10 +284,8 @@ def to_synapse_bundle(
             temperature=temperature,
             phase_label=phase_label,
             tool_catalog=(
-                dict.fromkeys([*tool_catalog, "delegate_to_agent", "context_write"], "")
-                if isinstance(config, MASConfig)
-                and agent is config.coordinator
-                and tool_catalog is not None
+                dict.fromkeys([*tool_catalog, *runtime_tools], "")
+                if agent.name == runtime_agent_name and tool_catalog is not None
                 else tool_catalog
             ),
             unresolved=unresolved,
@@ -290,7 +295,7 @@ def to_synapse_bundle(
 
     walk = _Walk(ids={a.name: a for a in source_agents})
     if isinstance(config, MASConfig):
-        first, last = _emit_mas(config, agents, walk, wire, phase_label)
+        first, last = _emit_mas(config, agents, walk, phase_label, runtime_tools)
     else:
         first, last = _emit(config.pipeline, walk, wire, phase_label)
     walk.nodes.insert(0, {"id": "start", "type": "start"})
@@ -339,16 +344,7 @@ def to_synapse_bundle(
         reused_agents=tuple(reused),
         renamed_ids=tuple(renamed),
         unmatched_agents=unmatched,
-        overwritten_fields=(
-            _OVERWRITTEN_ON_REUSE
-            + (
-                ("allowed_delegation_targets", "description")
-                if isinstance(config, MASConfig)
-                else ()
-            )
-            if reused
-            else ()
-        ),
+        overwritten_fields=overwritten_fields if reused else (),
     )
 
 
@@ -356,8 +352,8 @@ def _emit_mas(
     config: MASConfig,
     agents: list[dict[str, Any]],
     walk: _Walk,
-    wire: dict[str, str],
     phase_label: str,
+    runtime_tools: list[str],
 ) -> tuple[str, str]:
     """Keep routing with the coordinator; workers are delegation targets only."""
     for source, doc in zip([config.coordinator, *config.workers], agents):
@@ -365,22 +361,19 @@ def _emit_mas(
         # Clear stale policies on reused workers as well.
         doc["allowed_delegation_targets"] = []
     coordinator = agents[0]
-    coordinator["allowed_delegation_targets"] = [wire[w.name] for w in config.workers]
-    # These are Synapse runtime tools, independent of the domain-tool catalogue.
-    runtime_tools = ["delegate_to_agent"]
-    if config.coordinator.output_key:
-        runtime_tools.append("context_write")
+    coordinator["allowed_delegation_targets"] = [doc["_id"] for doc in agents[1:]]
+    # Runtime dependencies use the same list as the catalogue exemption.
     coordinator["allowed_tools"] = list(
         dict.fromkeys([*coordinator["allowed_tools"], *runtime_tools])
     )
     roster = [
         {
             "name": w.name,
-            "agent_id": wire[w.name],
+            "agent_id": doc["_id"],
             "description": w.description,
             "output_key": w.output_key,
         }
-        for w in config.workers
+        for w, doc in zip(config.workers, agents[1:])
     ]
     coordinator["system_prompt"] += (
         "\n\nSynapse delegation contract:\n"
@@ -404,7 +397,7 @@ def _emit_mas(
         "type": "phase",
         "description": _describe(config.coordinator.instruction),
         "agent_selection": "direct",
-        "agent_type": wire[config.coordinator.name],
+        "agent_type": coordinator["_id"],
         "phase_label": phase_label,
         "can_delegate": True,
     }

@@ -4,7 +4,10 @@
     "description": "Мастер-оркестратор: распределяет чтение ТТК, расчёт отклонений и аудит доказательств.",
     "instruction": "Зафиксируй карту, пороги и запреты из запроса. Вызови профильных агентов, передавая им исходные условия и результаты предыдущих проверок. Не придумывай нормы и не выдавай демонстрационные строки за реальные. Сформируй technology_card_audit: нормы со ссылками, правило расчёта, сводку, таблицу нарушений, интерпретацию и следующий шаг.",
     "model": "host/gpt-5.6-terra",
-    "tools": ["technology-card-audit"],
+    "tools": [
+      "tca_audit_historical_productivity",
+      "tca_read_technology_card"
+    ],
     "output_key": "technology_card_audit",
     "max_output_tokens": 12000
   },
@@ -12,18 +15,24 @@
     {
       "name": "card_norm_extractor",
       "description": "Извлекает из ТТК количественные нормы и точные ссылки на их источник.",
-      "instruction": "Вызови read_technology_card. Верни только явно присутствующие нормы, единицы и card_ref. Проверь согласованность производительности, численности и трудоёмкости. Обязательно сохрани пометку о происхождении демонстрационных данных.",
+      "instruction": "Вызови tca_read_technology_card. Верни только явно присутствующие нормы, единицы и card_ref. Проверь согласованность производительности, численности и трудоёмкости. Обязательно сохрани пометку о происхождении демонстрационных данных.",
       "model": "host/gpt-5.6-terra",
-      "tools": ["technology-card-audit"],
+      "tools": [
+        "tca_audit_historical_productivity",
+        "tca_read_technology_card"
+      ],
       "output_key": "card_norms",
       "max_output_tokens": 12000
     },
     {
       "name": "historical_productivity_analyst",
       "description": "Программно сопоставляет исторические выполнения с нормой карты.",
-      "instruction": "Вызови audit_historical_productivity с порогами из запроса. Проверь matching_field, количество строк и расчёт fact_rate = volume / working_days. Верни все обязательные поля нарушений без добавления строк от себя.",
+      "instruction": "Вызови tca_audit_historical_productivity с порогами из запроса. Проверь matching_field, количество строк и расчёт fact_rate = volume / working_days. Верни все обязательные поля нарушений без добавления строк от себя.",
       "model": "host/gpt-5.6-terra",
-      "tools": ["technology-card-audit"],
+      "tools": [
+        "tca_audit_historical_productivity",
+        "tca_read_technology_card"
+      ],
       "output_key": "history_audit",
       "max_output_tokens": 12000
     },
@@ -32,7 +41,10 @@
       "description": "Сверяет нормы, расчёты, ссылки и границы допустимой интерпретации.",
       "instruction": "Независимо сверь результаты инструментов. Для каждой строки должны быть work_name, object, dates, fact_rate, norm_rate, deviation_pct и card_ref; norm_rate должен быть положительным. Проверь, что синтетические данные не названы реальными STAIRS/SAMPO.",
       "model": "host/gpt-5.6-terra",
-      "tools": ["technology-card-audit"],
+      "tools": [
+        "tca_audit_historical_productivity",
+        "tca_read_technology_card"
+      ],
       "output_key": "evidence_check",
       "max_output_tokens": 12000
     }

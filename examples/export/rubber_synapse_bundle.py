@@ -1,7 +1,7 @@
-"""Export the technology-card MAS from PR #46 without model calls.
+"""Export the five-agent rubber-recipe MAW from PR #46 without model calls.
 
 Run from the repository root:
-    uv run python examples/export/mas_synapse_bundle.py > /tmp/technology_card_bundle.json
+    uv run python examples/export/rubber_synapse_bundle.py > /tmp/rubber_recipe_bundle.json
 
 The fixture uses the staging tenant tool IDs supplied for the demo. Before
 import, replace the local model ID with a model available in Synapse. Other
@@ -12,14 +12,14 @@ import json
 from pathlib import Path
 
 from fedotmas.export import to_synapse_bundle
-from fedotmas.mas.models import MASConfig
+from fedotmas.maw.models import MAWConfig
 
 
 def main() -> None:
-    config = MASConfig.model_validate_json(
-        Path(__file__).with_name("technology_card_mas.json").read_text(encoding="utf-8")
+    config = MAWConfig.model_validate_json(
+        Path(__file__).with_name("rubber_recipe_maw.json").read_text(encoding="utf-8")
     )
-    export = to_synapse_bundle(config, workflow_id="technology_card_audit")
+    export = to_synapse_bundle(config, workflow_id="rubber_recipe_prediction")
     print(json.dumps(export.bundle, indent=2, ensure_ascii=False))
 
 

@@ -646,7 +646,7 @@ class TestTheirOwnBundleIsAccepted:
 
     def test_hand_built_bundle_passes(self):
         fixture = Path(__file__).parent / "urban_bundle_structure.json"
-        _assert_accepted(json.loads(fixture.read_text()))
+        _assert_accepted(json.loads(fixture.read_text(encoding="utf-8")))
 
 
 class TestMASDelegation:
@@ -655,7 +655,7 @@ class TestMASDelegation:
         from fedotmas.mas.models import MASConfig
 
         fixture = Path(__file__).resolve().parents[4] / "examples/export/technology_card_mas.json"
-        return MASConfig.model_validate_json(fixture.read_text())
+        return MASConfig.model_validate_json(fixture.read_text(encoding="utf-8"))
 
     def test_technology_card_preserves_routing_and_roles(self, mas):
         before = mas.model_dump()
@@ -694,7 +694,7 @@ class TestMASDelegation:
         coordinator, *workers = export.bundle["items"]["agents"]
         assert coordinator["allowed_tools"] == ["delegate_to_agent", "context_write"]
         assert all(w["allowed_tools"] == [] for w in workers)
-        assert export.unresolved_tools == ("technology-card-audit",)
+        assert export.unresolved_tools == ("tca_audit_historical_productivity", "tca_read_technology_card")
 
     def test_reused_and_colliding_ids_resolve_to_actual_targets(self, mas):
         from fedotmas.maw.models import AgentPoolEntry
@@ -714,13 +714,25 @@ class TestMASDelegation:
         assert export.renamed_ids == (("Неверный ID", workers[1]["_id"]),)
         assert coordinator["allowed_delegation_targets"] == [w["_id"] for w in workers]
         assert all(w["allowed_delegation_targets"] == [] for w in workers)
-        assert "technology-card-audit" in workers[0]["allowed_tools"]
+        assert "tca_read_technology_card" in workers[0]["allowed_tools"]
         assert "allowed_delegation_targets" in export.overwritten_fields
         assert "description" in export.overwritten_fields
         collision = to_synapse_bundle(mas, workflow_id="audit")
         ids = [a["_id"] for a in collision.bundle["items"]["agents"]]
         assert len(ids) == len(set(ids))
         assert ids[1] != ids[2]
+
+    @pytest.mark.parametrize("output_key", [None, "", "final"])
+    @pytest.mark.parametrize("listed", [False, True])
+    def test_context_write_catalog_exemption_matches_output_contract(self, mas, output_key, listed):
+        mas.coordinator.output_key = output_key
+        mas.coordinator.tools = ["context_write"]
+        catalog = {"context_write": "Write shared context"} if listed else {}
+        export = to_synapse_bundle(mas, workflow_id="audit", tool_catalog=catalog)
+        coordinator = export.bundle["items"]["agents"][0]
+        permitted = bool(output_key) or listed
+        assert ("context_write" in coordinator["allowed_tools"]) is permitted
+        assert ("context_write" in export.unresolved_tools) is not permitted
 
     def test_nullable_outputs_and_custom_phase(self, mas):
         mas.coordinator.output_key = None
@@ -733,3 +745,28 @@ class TestMASDelegation:
         assert coordinator["output_save_key"] is None
         assert workers[0]["output_save_key"] is None
         assert all(a["allowed_phases"] == ["review"] for a in [coordinator, *workers])
+
+
+def test_rubber_demo_preserves_five_agent_gui_scenario():
+    fixture = Path(__file__).resolve().parents[4] / "examples/export/rubber_recipe_maw.json"
+    config = MAWConfig.model_validate_json(fixture.read_text(encoding="utf-8"))
+    expected_names = [
+        "валидатор_рецепта", "предиктор_свойств", "аналитик_применимости",
+        "финальный_синтезатор", "проверяющий_результат",
+    ]
+    assert [a.name for a in config.agents] == expected_names
+    export = to_synapse_bundle(config, workflow_id="rubber_recipe_prediction")
+    _assert_accepted(export.bundle)
+    agents = export.bundle["items"]["agents"]
+    workflow = export.bundle["items"]["workflows"][0]
+    phases = [n for n in workflow["nodes"] if n["type"] == "phase"]
+    assert len(agents) == len(phases) == 5
+    assert [a["display_name"] for a in agents] == expected_names
+    assert [n["agent_type"] for n in phases] == [a["_id"] for a in agents]
+    chain = ["start", *(n["id"] for n in phases), "end"]
+    assert workflow["edges"] == [
+        {"from": a, "to": b} for a, b in zip(chain, chain[1:])
+    ]
+    assert agents[1]["allowed_tools"] == ["rrp_predict_rubber_properties"]
+    assert all(not a["allowed_tools"] for a in [agents[0], *agents[2:]])
+    assert phases[-1]["writes"] == ["quality_check"]

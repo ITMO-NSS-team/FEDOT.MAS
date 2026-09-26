@@ -64,7 +64,7 @@ they must already be registered in Synapse. Domain tools retain the MAW filterin
 and reuse rules. MAS reuse also overwrites `description` and
 `allowed_delegation_targets`, reported in `overwritten_fields`.
 
-An offline example uses the technology-card audit configuration from
+An offline example adapts the technology-card audit configuration from
 [PR #46](https://github.com/ITMO-NSS-team/FEDOT.MAS/pull/46)
 (commit `4223f3f123fd6e8a7ae72f546748f69695238072`):
 
@@ -72,13 +72,33 @@ An offline example uses the technology-card audit configuration from
 uv run python examples/export/mas_synapse_bundle.py > /tmp/technology_card_bundle.json
 ```
 
-This only exports JSON; it does not call models or MCP servers. The fixture
-retains the PR's `host/gpt-5.6-terra` and `technology-card-audit` identifiers.
-Before importing, replace these with model IDs and individual discovered tool
-IDs available in the target tenant. A local MCP server name is not automatically
-a Synapse tool ID. The fixture's `max_output_tokens` is not part of this branch's
-`MASConfig` schema and is not exported. Tests validate structure and delegation
-contracts offline; they do not establish successful execution in a tenant.
+These examples only export JSON; they do not call models or MCP servers.
+Their tool IDs are configured for the staging tenant supplied for the demo:
+
+| Example | Synapse tool ID and name |
+| --- | --- |
+| Technology-card audit | `tca_audit_historical_productivity`, `tca_read_technology_card` |
+| Rubber-recipe prediction | `rrp_predict_rubber_properties` |
+
+The tool assignments and explicit tool names in the prompts use these IDs.
+They live in the example configurations, not in the universal exporter.
+For another tenant, update the configurations to match its discovered tool IDs.
+Both examples retain the PR's local `host/gpt-5.6-terra` model: replace it with
+an available Synapse model before import. The technology-card fixture's
+`max_output_tokens` is not part of this branch's `MASConfig` schema and is not
+exported.
+
+The rubber example adapts `experiments/rubber_recipe_maw/maw_config_5_agents.json`
+from the same PR, matching the five-agent GUI preset: recipe validator, property
+predictor, applicability analyst, final synthesizer and result checker. It uses
+the existing MAW exporter:
+
+```sh
+uv run python examples/export/rubber_synapse_bundle.py > /tmp/rubber_recipe_bundle.json
+```
+
+Tests validate structure and delegation contracts offline; they do not establish
+successful execution in a tenant.
 
 The topology and agent tables below describe MAW export unless stated otherwise.
 
