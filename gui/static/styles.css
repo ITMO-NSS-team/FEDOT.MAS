@@ -112,6 +112,9 @@ button{font-family:inherit; font-size:inherit; color:inherit; cursor:pointer}
 .block-grow{flex:0 0 auto}
 .row-title{display:flex; align-items:center; justify-content:space-between; gap:8px; text-transform:none}
 .row-title>span:first-child{font-size:11px; letter-spacing:.9px; text-transform:uppercase}
+.scenario-title-row{flex-direction:column; align-items:stretch}
+.scenario-actions{display:flex; flex-wrap:wrap; gap:8px; min-width:0}
+.scenario-actions .btn{flex:1 1 110px; white-space:normal; overflow-wrap:anywhere; letter-spacing:normal}
 .block-title{font-size:11px; letter-spacing:.9px; text-transform:uppercase; color:var(--text-mute); font-weight:600}
 .muted-count{color:var(--line); margin-left:4px}
 textarea#query{

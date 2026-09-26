@@ -62,10 +62,12 @@
     </section>
 
     <section class="block block-grow">
-      <div class="block-title row-title">
+      <div class="block-title row-title scenario-title-row">
         <span>Сценарии <span class="muted-count" id="preset-count"></span></span>
+        <div class="scenario-actions">
         <button class="btn btn-mini" id="btn-new" title="Описать свою задачу и сгенерировать под неё систему">Добавить сценарий</button>
         <button class="btn btn-mini" id="btn-import" title="Загрузить сценарий из файла, сохранённого на компьютере">Импортировать</button>
+        </div>
         <input type="file" id="import-file" accept="application/json,.json" hidden>
       </div>
       <div class="preset-list" id="presets"></div>

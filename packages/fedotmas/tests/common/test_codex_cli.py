@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fedotmas.common import codex_cli
 from fedotmas.maw.models import AgentPoolConfig, MAWConfig
+from fedotmas.mas.models import MASConfig
 
 
 class _FakeProcess:
@@ -87,7 +88,7 @@ def test_decision_part_rejects_unavailable_function():
         )
 
 
-@pytest.mark.parametrize("model", [AgentPoolConfig, MAWConfig])
+@pytest.mark.parametrize("model", [AgentPoolConfig, MAWConfig, MASConfig])
 def test_generation_schemas_are_strict_and_original_is_unchanged(model):
     original = model.model_json_schema()
     before = json.dumps(original)
@@ -108,7 +109,9 @@ def test_generation_schemas_are_strict_and_original_is_unchanged(model):
     check(strict)
     assert json.dumps(original) == before
     assert codex_cli._strict_output_schema(strict) == strict
-    entry = strict["$defs"].get("AgentPoolEntry", strict["$defs"].get("MAWAgentConfig"))
+    entry = next(strict["$defs"][name] for name in
+                 ("AgentPoolEntry", "MAWAgentConfig", "MASAgentConfig")
+                 if name in strict["$defs"])
     assert {"type": "null"} in entry["properties"]["model"]["anyOf"]
     if model is MAWConfig:
         assert strict["$defs"]["MAWStepConfig"]["properties"]["children"]["items"] == {

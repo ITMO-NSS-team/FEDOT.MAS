@@ -4,6 +4,7 @@ from typing import Literal
 
 from google.adk.agents import LlmAgent
 from google.adk.agents.base_agent import BaseAgent
+from google.genai import types
 
 from fedotmas._settings import ModelConfig
 from fedotmas.common.logging import get_logger
@@ -86,6 +87,10 @@ def _build_routing_agent(
         if autonomous
         else cfg.instruction,
         output_key=cfg.output_key,
+        generate_content_config=(
+            types.GenerateContentConfig(max_output_tokens=cfg.max_output_tokens)
+            if cfg.max_output_tokens is not None else None
+        ),
         tools=tools,
         mode=mode,
         sub_agents=sub_agents or [],
