@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fedotmas.common.codex_cli import is_codex_model, run_codex_cli
+from fedotmas.common.openrouter_proxy import openrouter_http_client
 
 
 @dataclass(frozen=True)
@@ -32,12 +33,21 @@ def client(model: str) -> tuple:
     from openai import AsyncOpenAI
 
     if model.startswith("openrouter/"):
+        base_url = "https://openrouter.ai/api/v1"
+        http_client = openrouter_http_client(base_url)
         return AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
+            base_url=base_url,
             api_key=os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY"),
+            **({"http_client": http_client} if http_client is not None else {}),
         ), model.removeprefix("openrouter/")
 
-    return AsyncOpenAI(base_url=os.getenv("OPENAI_BASE_URL"), api_key=os.getenv("OPENAI_API_KEY")), model
+    base_url = os.getenv("OPENAI_BASE_URL")
+    http_client = openrouter_http_client(base_url)
+    return AsyncOpenAI(
+        base_url=base_url,
+        api_key=os.getenv("OPENAI_API_KEY"),
+        **({"http_client": http_client} if http_client is not None else {}),
+    ), model
 
 
 async def complete(
@@ -72,7 +82,8 @@ async def complete(
         kwargs["max_tokens"] = max_tokens
     if json_schema is not None:
         kwargs["response_format"] = {"type": "json_object"}
-    response = await api_client.chat.completions.create(**kwargs)
+    async with api_client:
+        response = await api_client.chat.completions.create(**kwargs)
     usage = response.usage
     return Completion(
         text=response.choices[0].message.content or "",

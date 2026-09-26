@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -10,6 +11,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from fedotmas.common.logging import get_logger
+from fedotmas.common.openrouter_proxy import is_openrouter_url, openrouter_http_client
 
 if TYPE_CHECKING:
     from google.adk.models.base_llm import BaseLlm
@@ -102,13 +104,19 @@ class _ProxyClient:
     """
 
     def __init__(self, base_url: str, api_key: str, extra_body: dict[str, Any] | None):
-        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        http_client = openrouter_http_client(base_url)
+        kwargs = {"http_client": http_client} if http_client is not None else {}
+        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key, **kwargs)
         self._extra_body = dict(extra_body or {})
 
     def __repr__(self) -> str:
         return f"_ProxyClient(base_url={self._client.base_url!r})"
 
     async def acompletion(self, model, messages, tools, **kwargs):
+        if is_openrouter_url(str(self._client.base_url)) and model.startswith(
+            "openrouter/"
+        ):
+            model = model.removeprefix("openrouter/")
         kw = {"model": model, "messages": messages, **kwargs}
         if tools:
             kw["tools"] = tools
@@ -148,11 +156,24 @@ def make_llm(cfg: ModelConfig) -> BaseLlm:
     if is_codex_model(cfg.model):
         return CodexCliLlm(model=cfg.model)
 
-    if cfg.api_base:
+    # An OpenRouter model can also be used without OPENAI_BASE_URL. In that
+    # case LiteLLM would bypass our dedicated HTTP client, so use the same
+    # OpenAI-compatible transport whenever the selective proxy is configured.
+    openrouter_base = "https://openrouter.ai/api/v1"
+    proxied_openrouter = (
+        not cfg.api_base
+        and cfg.model.startswith("openrouter/")
+        and bool(os.getenv("FEDOTMAS_OPENROUTER_PROXY_URL", "").strip())
+    )
+    if cfg.api_base or proxied_openrouter:
+        base_url = cfg.api_base or openrouter_base
+        openrouter_key = (
+            os.getenv("OPENROUTER_API_KEY") if is_openrouter_url(base_url) else None
+        )
         llm = LiteLlm(model=cfg.model)
         llm.llm_client = _ProxyClient(  # type: ignore
-            base_url=cfg.api_base,
-            api_key=cfg.api_key or "no-key",
+            base_url=base_url,
+            api_key=cfg.api_key or openrouter_key or "no-key",
             extra_body=cfg.extra_body,
         )
         return llm

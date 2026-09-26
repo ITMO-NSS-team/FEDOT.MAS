@@ -28,6 +28,18 @@ codex login status
 вызываются через локальный `codex exec`. Это transport подписки Codex, а не
 OpenAI-совместимый API; `OPENAI_API_KEY` для них не нужен.
 
+Если с машины стенда нет прямого доступа к OpenRouter, задайте в `.env`:
+
+```dotenv
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+FEDOTMAS_OPENROUTER_PROXY_URL=http://10.32.11.45:7890
+```
+
+Прокси применяется только к запросам OpenRouter от агентов FEDOT.MAS, прямых
+вызовов GUI и проверки ключа; локальные сервисы и остальные API идут напрямую.
+Для `openrouter/...` базовый URL можно не задавать — при включённом прокси
+FEDOT.MAS направит эти модели на OpenRouter автоматически.
+
 Запустить:
 
 ```bash

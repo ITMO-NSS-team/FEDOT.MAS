@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fedotmas.common.codex_cli import is_codex_model
 from fedotmas.common.logging import get_logger
+from fedotmas.common.openrouter_proxy import openrouter_http_client
 
 from .config import ACCESS_TOKEN, DEFAULT_MODEL, JUDGE_MODEL, MODELS, PUBLIC_MODE
 from .schemas import KeyIn
@@ -181,10 +182,14 @@ async def set_key(body: KeyIn) -> dict:
     try:
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(base_url=base or None, api_key=key, timeout=25)
-        await client.chat.completions.create(
-            model=probe, max_tokens=1,
-            messages=[{"role": "user", "content": "ping"}])
+        http_client = openrouter_http_client(base)
+        async with AsyncOpenAI(
+            base_url=base or None, api_key=key, timeout=25,
+            **({"http_client": http_client} if http_client is not None else {}),
+        ) as client:
+            await client.chat.completions.create(
+                model=probe, max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}])
     except Exception as exc:
         # В тексте ошибки провайдер иногда повторяет присланный ключ — вычищаем.
         note = str(exc).replace(key, mask(key))[:300]
