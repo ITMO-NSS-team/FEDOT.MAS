@@ -95,3 +95,10 @@ class ReviewIn(BaseModel):
 
 class ExportIn(BaseModel):
     presets: list[dict]
+
+
+class SynapseExportIn(BaseModel):
+    config: dict
+    kind: str = "maw"
+    workflow_id: str = Field(min_length=1, max_length=200)
+    workflow_name: str = Field(min_length=1, max_length=300)

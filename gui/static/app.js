@@ -1325,6 +1325,32 @@ function exportScenario() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+async function exportIPR2() {
+  if (!S.preset) { alert("Сначала выберите сценарий."); return; }
+  const preset = S.preset;
+  const button = $("p-export-ipr2");
+  button.disabled = true;
+  try {
+    const r = await fetch("api/export-synapse", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({config: preset.config, kind: preset.kind,
+        workflow_id: preset.id || "workflow", workflow_name: preset.title || "Сценарий"}),
+    });
+    const data = await readJson(r, "экспорт в ИПР-2");
+    if (!data.ok) throw new Error(data.error || "Конвертация не выполнена");
+    const name = (preset.title || "сценарий").replace(/[^\wа-яёА-ЯЁ -]+/g, "").trim() || "сценарий";
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data.bundle, null, 2)], {type: "application/json"}));
+    const a = document.createElement("a");
+    a.href = url; a.download = `${name}_synapse_bundle.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    alert("Не удалось экспортировать в ИПР-2. Убедитесь, что сервер GUI запущен и обновлён.\n" + err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function importScenario(text) {
   let data;
   try {
@@ -1381,16 +1407,28 @@ function importScenario(text) {
   }
 }
 
+function recordedRunStats(preset) {
+  const trace = preset.trace || [];
+  // Older live runs stored the exact total only in the report caption.
+  const legacy = (preset.answerMeta || "").match(/·\s*([\d\s]+)\s+токенов/);
+  return {
+    tokens: preset.runStats?.tokens ?? (legacy ? Number(legacy[1].replace(/\s/g, ""))
+      : trace.reduce((sum, e) => sum + (e.tokens || 0), 0)),
+    elapsed: preset.runStats?.elapsed ?? trace.reduce((sum, e) => sum + (e.ms || 0), 0) * S.factor / 1000,
+  };
+}
+
 function showRecordedRun(preset) {
-  if (!preset.trace || !preset.trace.length) return;
+  if (!preset.runStats && !preset.trace?.length) return;
   const feed = $("feed");
   feed.innerHTML = "";
-  preset.trace.forEach((e) => pushMessage(e));
+  (preset.trace || []).forEach((e) => pushMessage(e));
   feed.scrollTop = 0;                       // журнал показываем с начала, а не с конца
 
-  S.idx = preset.trace.length;              // «Запустить» проиграет запись заново с нуля
-  S.tokens = preset.trace.reduce((sum, e) => sum + (e.tokens || 0), 0);
-  S.seconds = preset.trace.reduce((sum, e) => sum + e.ms, 0) * S.factor / 1000;
+  S.idx = (preset.trace || []).length;       // «Запустить» проиграет запись заново с нуля
+  const stats = recordedRunStats(preset);
+  S.tokens = stats.tokens;
+  S.seconds = stats.elapsed;
   $("m-tokens").textContent = nfmt(S.tokens);
   $("m-time").textContent = fmtTime(S.seconds);
   $("p-fill").style.width = "100%";
@@ -1638,12 +1676,14 @@ async function liveRun() {
   if (!S.preset) return;
   stopLive();
   S.answer = null; S.baseline = null; S.judge = null; S.review = null;
-  Object.assign(S.preset, { answer: null, baseline: null, judge: null, review: null, trace: [] });
+  Object.assign(S.preset, { answer: null, answerMeta: null, runStats: null,
+    auto: "—", baseline: null, judge: null, review: null, trace: [] });
   renderAnswer();
   showTab("feed");
   $("feed").innerHTML = "";
   $("graph").querySelectorAll(".node").forEach((n) => n.classList.remove("active", "done"));
   S.tokens = 0;
+  $("m-tokens").textContent = "0";
   const t0 = performance.now();
   const total = $("graph").querySelectorAll(".node").length || 1;
   let finished = 0;
@@ -1750,7 +1790,10 @@ async function liveRun() {
           S.tokens += ev.tokens || 0;
           $("m-tokens").textContent = nfmt(S.tokens);
         } else if (ev.type === "done") {
-          $("m-tokens").textContent = nfmt(ev.tokens || S.tokens);
+          S.tokens = ev.tokens ?? S.tokens;
+          S.seconds = ev.elapsed;
+          S.preset.runStats = { tokens: S.tokens, elapsed: S.seconds };
+          $("m-tokens").textContent = nfmt(S.tokens);
           $("m-time").textContent = fmtTime(ev.elapsed);
           $("p-fill").style.width = "100%";
           // Итог — артефакт последнего содержательного агента; отзыв критика ответом не является.
@@ -1772,7 +1815,7 @@ async function liveRun() {
           }, "");
           if (longest.length > last.length * 2) last = longest;
           S.answer = { text: last || "(система не вернула текстового результата)",
-                       meta: `${S.preset.kind === "mas" ? "MASConfig" : "MAWConfig"} · ${nfmt(ev.tokens || 0)} токенов · ${String(ev.elapsed).replace(".", ",")} с` };
+                       meta: `${S.preset.kind === "mas" ? "MASConfig" : "MAWConfig"} · ${nfmt(S.tokens)} токенов · ${String(ev.elapsed).replace(".", ",")} с` };
           S.query = $("query").value;
           S.preset.query = S.query;
           S.baseline = null; S.judge = null; S.review = null;
@@ -1783,17 +1826,13 @@ async function liveRun() {
           else prev.closest(".msg").classList.add("final");
 
           // сценарий получает журнал, ответ и стоимость — дальше его можно проигрывать без сети
-          if (trace.length) {
-            trace[trace.length - 1].final = true;
-            S.preset.trace = trace;
-            S.preset.answer = S.answer.text;
-            S.preset.answerMeta = S.answer.meta;
-            S.preset.auto = `${fmtTime(ev.elapsed)} · ${(( ev.tokens || S.tokens) / 1000).toFixed(1).replace(".", ",")}к токенов`;
-            $("stat-auto").innerHTML = `<b class="hl">${esc(S.preset.auto)}</b>`;
-            persistPreset();
-          } else {
-            $("stat-auto").innerHTML = `<b class="hl">${esc(String(ev.elapsed).replace(".", ","))} с · ${esc(nfmt(ev.tokens))} токенов</b>`;
-          }
+          if (trace.length) trace[trace.length - 1].final = true;
+          S.preset.trace = trace;
+          S.preset.answer = S.answer.text;
+          S.preset.answerMeta = S.answer.meta;
+          S.preset.auto = `${fmtTime(ev.elapsed)} · ${(S.tokens / 1000).toFixed(1).replace(".", ",")}к токенов`;
+          $("stat-auto").innerHTML = `<b class="hl">${esc(S.preset.auto)}</b>`;
+          persistPreset();
         } else if (ev.type === "error") {
           liveMessage("ошибка", "runner", ev.error);
         }
@@ -2258,7 +2297,7 @@ function initPresets() {
   renderPresetList();
 }
 
-/** Сценарии живут только в пределах запуска сервера: перезапуск начинает показ с чистого листа. */
+/** Обновляем идентификатор сервера, сохраняя сценарии и статистику запусков. */
 function resetOnServerRestart(runId) {
   if (!runId) return;
   let stored = null;
@@ -2266,13 +2305,7 @@ function resetOnServerRestart(runId) {
   if (stored === runId) return;
   try {
     localStorage.setItem(LS_RUN, runId);
-    localStorage.removeItem(LS_CUSTOM);
-    localStorage.removeItem(LS_HIDDEN);
-  } catch { /* приватный режим — просто очищаем состояние в памяти */ }
-  S.custom = Array.isArray(window.STARTUP_PRESETS) ? window.STARTUP_PRESETS.slice() : [];
-  S.hidden = [];
-  renderPresetList();
-  showEmptyState();
+  } catch { /* приватный режим */ }
 }
 
 
@@ -2379,6 +2412,7 @@ function init() {
     $("p-speed").textContent = "×" + S.speed;
   });
   $("p-export").addEventListener("click", exportScenario);
+  $("p-export-ipr2").addEventListener("click", exportIPR2);
   $("btn-import").addEventListener("click", () => $("import-file").click());
   $("import-file").addEventListener("change", (e) => {
     const file = e.target.files && e.target.files[0];

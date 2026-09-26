@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from fedotmas import MAS, MAW, MASConfig, MAWConfig
 from fedotmas.common.codex_cli import codex_login_status, find_codex_cli
 from fedotmas.common.logging import get_logger
+from fedotmas.export import to_synapse_bundle
 from fedotmas.mcp import get_server_descriptions, resolve_mcp_registry
 from fedotmas.optimize import LLMJudge
 from fedotmas.plugins import LoggingPlugin, UnknownToolRecoveryPlugin
@@ -74,6 +75,7 @@ from .schemas import (
     BaselineIn,
     EffortIn,
     ExportIn,
+    SynapseExportIn,
     GenerateIn,
     JudgeIn,
     PrepareIn,
@@ -374,6 +376,42 @@ async def export_presets(body: ExportIn) -> dict:
     _log.info("Сценарии выгружены | штук={} файл={}", len(body.presets), target.name)
     return {"ok": True, "count": len(body.presets), "file": target.name,
             "bytes": target.stat().st_size}
+
+
+@app.post("/api/export-synapse")
+async def export_synapse(body: SynapseExportIn) -> dict:
+    """Конвертация выбранной конфигурации без исполнения и записи на сервере."""
+    try:
+        if body.kind == "mas" or "coordinator" in body.config:
+            mas = MASConfig.model_validate(body.config)
+            source = [mas.coordinator, *mas.workers]
+            used_keys = {a.output_key for a in source if a.output_key}
+            agents = []
+            for i, agent in enumerate(source):
+                data = agent.model_dump(exclude={"description"})
+                if not data["output_key"]:
+                    key = f"export_result_{i}"
+                    while key in used_keys:
+                        key += "_"
+                    used_keys.add(key)
+                    data["output_key"] = key
+                agents.append(data)
+            config = MAWConfig.model_validate({"agents": agents, "pipeline": {
+                "type": "sequential", "children": [
+                    {"type": "agent", "agent_name": a.name} for a in source]}})
+        elif body.kind == "maw":
+            config = MAWConfig.model_validate(body.config)
+        else:
+            raise ValueError("Неизвестный тип конфигурации")
+        export = to_synapse_bundle(config, workflow_id=body.workflow_id,
+                                   workflow_name=body.workflow_name)
+        return {"ok": True, "bundle": export.bundle,
+                "linearized_branches": export.linearized_branches,
+                "degraded_loops": export.degraded_loops,
+                "unresolved_tools": export.unresolved_tools,
+                "tools_checked": False}
+    except (ValueError, KeyError) as exc:
+        return {"ok": False, "error": f"Ошибка конвертации: {exc}"}
 
 
 @app.post("/api/effort_breakdown")

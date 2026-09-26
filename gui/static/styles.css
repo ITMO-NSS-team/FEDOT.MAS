@@ -226,7 +226,8 @@ textarea#query:focus{border-color:color-mix(in srgb, var(--coord) 50%, transpare
 .metric span{font-size:10.5px; letter-spacing:.6px; text-transform:uppercase; color:var(--text-mute)}
 .metric b{font-size:15px; font-weight:600; font-variant-numeric:tabular-nums}
 
-.player{display:flex; align-items:center; gap:10px; padding:10px 14px; border-top:1px solid var(--line-soft)}
+.player{display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:10px 14px; border-top:1px solid var(--line-soft)}
+.player .pbtn{flex-shrink:0; white-space:nowrap}
 .pbtn{
   width:32px;height:32px; border-radius:9px; border:1px solid var(--line); background:var(--panel-2);
   display:flex; align-items:center; justify-content:center; transition:.15s;
