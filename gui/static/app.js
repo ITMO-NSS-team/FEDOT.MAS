@@ -2213,6 +2213,18 @@ function initPresets() {
   if (!S.custom.length && Array.isArray(window.STARTUP_PRESETS)) {
     S.custom = window.STARTUP_PRESETS.slice();
   }
+  // Обновление постановки встроенного сценария применяется к сохранённой копии
+  // один раз; дальнейшие правки пользователя сохраняются до следующей редакции.
+  let queryUpdated = false;
+  for (const preset of window.STARTUP_PRESETS || []) {
+    const saved = S.custom.find((item) => item.id === preset.id);
+    if (saved && (saved.queryRevision || 0) < (preset.queryRevision || 0)) {
+      saved.query = preset.query;
+      saved.queryRevision = preset.queryRevision;
+      queryUpdated = true;
+    }
+  }
+  if (queryUpdated) storeScenarios();
   // В автономной копии список берётся из localStorage, которого у нового читателя
   // нет, а запускать она не умеет. Показываем всё, что вшито в саму копию:
   // кейс-пресеты первыми, затем остальные записанные прогоны (без дублей по id).
