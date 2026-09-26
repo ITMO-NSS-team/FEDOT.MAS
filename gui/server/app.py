@@ -48,7 +48,7 @@ from .config import (
     STATIC_DIR,
     WEB_SEARCH,
 )
-from .judge import _judge_impl
+from .judge import _judge_impl, _review_impl
 from .llm import complete
 from .normalize import (
     _ensure_calculator,
@@ -70,6 +70,7 @@ from .prompts import (
     TOOL_DESCRIPTIONS,
 )
 from .schemas import (
+    ReviewIn,
     BaselineIn,
     EffortIn,
     ExportIn,
@@ -598,6 +599,11 @@ def _slugify_mcp(name: str) -> str:
 @app.post("/api/judge")
 async def judge(body: JudgeIn) -> dict:
     return await _judge_impl(body)
+
+
+@app.post("/api/review")
+async def review(body: ReviewIn) -> dict:
+    return await _review_impl(body)
 
 
 @app.post("/api/synthetic_examples")

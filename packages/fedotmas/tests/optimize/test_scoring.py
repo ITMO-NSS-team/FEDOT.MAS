@@ -165,6 +165,7 @@ async def test_llm_judge_generates_synthetic_examples():
     assert judge.token_usage == (30, 20)
     call = mock_call.call_args.kwargs
     assert call["agent_name"] == "synthetic_examples"
+    assert call["output_schema"].model_json_schema()["additionalProperties"] is False
     assert call["temperature"] == 0.65
     assert json.loads(call["user_message"])["count"] == 3
 

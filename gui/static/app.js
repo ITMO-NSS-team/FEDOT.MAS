@@ -104,7 +104,7 @@ const S = {
   k: 1, cx: 0, cy: 0, bbox: null, needFit: true, userAdjusted: false, group: null,
   backend: null, live: true, abort: null, liveTimer: null, custom: [], hidden: [],
   models: { gen: "", run: "", single: "", judge: "" }, mcpCustom: [],   // мета-агент, исполнение, судья
-  answer: null, baseline: null, judge: null, query: "", syntheticExamples: [],
+  answer: null, baseline: null, judge: null, review: null, evaluationBusy: false, query: "", syntheticExamples: [],
 };
 
 /* ─────────────────────────── Утилиты ─────────────────────────── */
@@ -785,11 +785,16 @@ function renderAnswer() {
       : w === "single" ? "Судья: лучше ответ одной модели"
       : w === "error" ? "Судья: оценка не получена" : "Судья: ничья";
     blocks.push(`<div class="ans-card judge">
-      <h4>Оценка судьёй</h4>
+      <h4>Сравнение с одной моделью: вердикт судьи</h4>
       <div class="ans-winner ${w}">${esc(label)}</div>
       <div class="ans-text">${esc(S.judge.verdict)}</div>
       <div class="ans-meta">судья: ${esc(S.judge.model || "")}${S.judge.tokens ? " · " + esc(nfmt(S.judge.tokens)) + " токенов" : ""}</div>
     </div>`);
+  }
+  if (S.review) {
+    blocks.push(`<div class="ans-card judge"><h4>Проверка результата и журнала МАС</h4>
+      <div class="ans-text md">${mdToHtml(S.review.verdict)}</div>
+      <div class="ans-meta">${esc(S.review.model || "")}</div></div>`);
   }
   host.innerHTML = blocks.length ? blocks.join("")
     : '<div class="empty">Ответ системы появится после запуска</div>';
@@ -797,35 +802,46 @@ function renderAnswer() {
   // Кнопки живут, пока есть бэкенд: сравнение и оценку можно перезапустить и поверх записанных.
   const live = !!S.backend;
   const bs = $("btn-baseline"), bj = $("btn-judge");
-  bs.disabled = !(live && S.answer);
-  bj.disabled = !(live && S.answer && S.baseline);
+  bs.disabled = S.evaluationBusy || !(live && S.answer);
+  bj.disabled = S.evaluationBusy || !(live && S.answer);
   bs.textContent = S.baseline ? "Сравнить заново" : "Сравнить с одной моделью";
-  bj.textContent = S.judge ? "Оценить заново" : "Оценить судьёй";
-  bs.title = live ? "Решить ту же задачу одной моделью без системы"
+  bj.textContent = S.review ? "Оценить заново" : "Оценить судьёй";
+  bs.title = live ? "Получить ответ одной модели и сравнить оба ответа судьёй"
                   : "Доступно в живом режиме: запустите gui/run.py";
-  bj.title = live ? "Независимый судья сравнит оба ответа"
+  bj.title = live ? "Проверить результат МАС и журнал работы агентов"
                   : "Доступно в живом режиме: запустите gui/run.py";
   renderSyntheticExamples();
 }
 
 async function runBaseline() {
-  if (!S.backend || !S.answer) return;
+  if (!S.backend || !S.answer || S.evaluationBusy) return;
+  const preset = S.preset, answer = S.answer;
+  const query = S.query || $("query").value;
+  S.evaluationBusy = true;
+  S.baseline = null;
   const btn = $("btn-baseline");
   S.judge = null;                       // прошлый вердикт относится к старому сравнению
+  if (preset) { preset.baseline = null; preset.judge = null; persistPreset(); }
+  renderAnswer();
   btn.disabled = true; btn.textContent = "Одна модель отвечает…";
   try {
     const r = await fetch("api/baseline", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: S.query || $("query").value, model: S.models.single }),
+      body: JSON.stringify({ query, model: S.models.single }),
     });
     const d = await readJson(r, "ответ одной модели");
     if (!d.ok) throw new Error(d.error);
+    if (S.preset !== preset || S.answer !== answer) return;
     S.baseline = d;
+    if (preset) { preset.baseline = d; persistPreset(); }
+    renderAnswer();
+    await runComparisonJudge();
   } catch (err) {
-    S.baseline = { answer: "Не удалось получить ответ: " + err.message, model: "—", tokens: 0, seconds: "—" };
+    if (S.preset === preset && S.answer === answer)
+      S.judge = { winner: "error", verdict: "Не удалось сравнить: " + err.message, model: "—" };
   } finally {
+    S.evaluationBusy = false;
     btn.textContent = "Сравнить с одной моделью";
-    if (S.preset) { S.preset.baseline = S.baseline; S.preset.judge = null; persistPreset(); }
     renderAnswer();
   }
 }
@@ -861,9 +877,10 @@ function judgeProgress() {
   };
 }
 
-async function runJudge() {
+async function runComparisonJudge() {
   if (!S.backend || !S.answer || !S.baseline) return;
-  const btn = $("btn-judge");
+  const preset = S.preset, answer = S.answer;
+  const btn = $("btn-baseline");
   btn.disabled = true; btn.textContent = "Судья сравнивает…";
   const ui = judgeProgress();
   let tokens = 0;
@@ -887,16 +904,49 @@ async function runJudge() {
     if (!done) throw new Error("поток прервался");
     if (!done.ok) throw new Error(done.error || "судья не вернул вердикт");
     ui.step("Вердикт вынесен", 100);
-    S.judge = done;
+    if (S.preset === preset && S.answer === answer) S.judge = done;
   } catch (err) {
     // Ошибка — не вердикт: показываем её отдельным статусом и не сохраняем в сценарий,
     // чтобы сбой сети не превращался в «ничью» при экспорте и реплее.
-    S.judge = { verdict: "Не удалось получить оценку: " + err.message, winner: "error", model: "—" };
+    if (S.preset === preset && S.answer === answer)
+      S.judge = { verdict: "Не удалось получить оценку: " + err.message, winner: "error", model: "—" };
   } finally {
     ui.stop();
     btn.disabled = false;
     btn.textContent = "Оценить заново";
-    if (S.preset && S.judge.winner !== "error") { S.preset.judge = S.judge; persistPreset(); }
+    if (S.preset === preset && S.answer === answer && preset && S.judge?.winner !== "error") {
+      preset.judge = S.judge; persistPreset();
+    }
+    renderAnswer();
+  }
+}
+
+async function runJudge() {
+  if (!S.backend || !S.answer || S.evaluationBusy) return;
+  const preset = S.preset, answer = S.answer;
+  const payload = { query: S.query || $("query").value, system_answer: answer.text,
+                    trace: preset?.trace || [], model: S.models.judge };
+  S.evaluationBusy = true;
+  S.review = null;
+  if (preset) { preset.review = null; persistPreset(); }
+  renderAnswer();
+  $("btn-judge").textContent = "Проверка результата и журнала…";
+  const ui = judgeProgress();
+  ui.step("Судья проверяет ответ и журнал МАС", 15);
+  try {
+    const response = await fetch("api/review", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const result = await readJson(response, "проверка результата МАС");
+    if (!result.ok) throw new Error(result.error);
+    if (S.preset !== preset || S.answer !== answer) return;
+    S.review = result;
+    if (preset) { preset.review = result; persistPreset(); }
+  } catch (err) {
+    if (S.preset === preset && S.answer === answer)
+      S.review = { verdict: "Не удалось получить оценку: " + err.message, model: "—" };
+  } finally {
+    S.evaluationBusy = false;
+    ui.stop();
     renderAnswer();
   }
 }
@@ -944,7 +994,7 @@ function renderSyntheticExamples() {
       const query = S.syntheticExamples[i].query;
       $("query").value = query;
       S.query = query;
-      S.answer = null; S.baseline = null; S.judge = null;
+      S.answer = null; S.baseline = null; S.judge = null; S.review = null;
       $("synthetic-note").textContent = "Вариант подставлен. Запустите систему для нового теста.";
       renderAnswer();
       renderMode();
@@ -1187,6 +1237,7 @@ function loadPreset(p) {
   S.answer = p.answer ? { text: p.answer, meta: p.answerMeta || "" } : null;
   S.baseline = p.baseline || null;
   S.judge = p.judge || null;
+  S.review = p.review || null;
   S.syntheticExamples = (Array.isArray(p.syntheticExamples) ? p.syntheticExamples : [])
     .map(normalizedSynthetic).filter((item) => item && item.query.trim()).slice(0, 100);
   $("synthetic-note").textContent = "";
@@ -1571,6 +1622,9 @@ function stopLive() {
 async function liveRun() {
   if (!S.preset) return;
   stopLive();
+  S.answer = null; S.baseline = null; S.judge = null; S.review = null;
+  Object.assign(S.preset, { answer: null, baseline: null, judge: null, review: null, trace: [] });
+  renderAnswer();
   showTab("feed");
   $("feed").innerHTML = "";
   $("graph").querySelectorAll(".node").forEach((n) => n.classList.remove("active", "done"));
@@ -1664,9 +1718,11 @@ async function liveRun() {
           trace.push({ agent: ev.agent, phase: routing ? "маршрутизация" : "инструмент", text,
                        tool: ev.tool, tokens: 0, ms: routing ? 1200 : 1400 });
         }
-        else if (ev.type === "tool_result" && ev.error) {
-          liveMessage("ошибка инструмента", ev.agent, ev.text, ev.tool);
-          trace.push({ agent: ev.agent, phase: "ошибка инструмента", text: ev.text, tool: ev.tool, tokens: 0, ms: 1200 });
+        else if (ev.type === "tool_result") {
+          const phase = ev.error ? "ошибка инструмента" : "результат инструмента";
+          liveMessage(phase, ev.agent, ev.text, ev.tool);
+          trace.push({ agent: ev.agent, phase, text: ev.text, tool: ev.tool,
+                       error: !!ev.error, truncated: !!ev.truncated, tokens: 0, ms: 1200 });
         }
         else if (ev.type === "text") {
           S.tokens += ev.tokens || 0;
@@ -1704,7 +1760,7 @@ async function liveRun() {
                        meta: `${S.preset.kind === "mas" ? "MASConfig" : "MAWConfig"} · ${nfmt(ev.tokens || 0)} токенов · ${String(ev.elapsed).replace(".", ",")} с` };
           S.query = $("query").value;
           S.preset.query = S.query;
-          S.baseline = null; S.judge = null;
+          S.baseline = null; S.judge = null; S.review = null;
           renderAnswer();
           const prev = document.querySelector(".msg:last-child .msg-text");
           const duplicate = prev && last && prev.textContent.trim().startsWith(last.trim().slice(0, 60));
@@ -2074,7 +2130,7 @@ function scenarioList() {
 
 /** Стартовый вид без сценариев: показываем, с чего начать, вместо пустого графа. */
 function showEmptyState() {
-  S.preset = null; S.events = []; S.answer = null; S.baseline = null; S.judge = null;
+  S.preset = null; S.events = []; S.answer = null; S.baseline = null; S.judge = null; S.review = null;
   S.syntheticExamples = [];
   $("synthetic-note").textContent = "";
   $("synthetic-note").classList.remove("error");

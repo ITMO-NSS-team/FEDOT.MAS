@@ -83,5 +83,12 @@ class SyntheticExamplesIn(BaseModel):
     model: str | None = None
 
 
+class ReviewIn(BaseModel):
+    query: str
+    system_answer: str
+    trace: list[dict] = Field(default_factory=list)
+    model: str | None = None
+
+
 class ExportIn(BaseModel):
     presets: list[dict]

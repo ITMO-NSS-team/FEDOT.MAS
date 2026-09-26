@@ -25,7 +25,7 @@ OPEN_API = {"/api/status"}
 # Пути, которые тратят деньги на модели: без ключа пользователя их не пускаем.
 NEEDS_KEY = {"/api/generate", "/api/generate_stream", "/api/run", "/api/prepare",
              "/api/baseline", "/api/effort", "/api/effort_breakdown",
-             "/api/judge", "/api/judge_stream", "/api/synthetic_examples"}
+             "/api/judge", "/api/judge_stream", "/api/review", "/api/synthetic_examples"}
 
 # Ключ пользователя живёт в памяти процесса и подставляется в окружение — оттуда его
 # читают и FEDOT.MAS (resolve_model_config), и прямые вызовы клиента. Расчёт на одного
@@ -135,7 +135,7 @@ def install(app: FastAPI) -> None:
                                     status_code=403)
         if path in NEEDS_KEY:
             selected_model = (JUDGE_MODEL
-                              if path in {"/api/judge", "/api/judge_stream",
+                              if path in {"/api/judge", "/api/judge_stream", "/api/review",
                                           "/api/synthetic_examples"}
                               else DEFAULT_MODEL)
             try:

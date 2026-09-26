@@ -112,12 +112,14 @@ class StreamPlugin(BasePlugin):
             target = args.get("agent_name") or args.get("agent") or ""
             self._put({"type": "tool", "agent": author, "tool": fc.name,
                        "target": self.names.name(str(target)),
-                       "args": self.names.text(str(args)[:120])})
+                       "args": self.names.text(str(args)[:4000])})
         for fr in event.get_function_responses():
-            resp = str(fr.response)[:160] if fr.response is not None else ""
+            raw_response = str(fr.response) if fr.response is not None else ""
+            resp = raw_response[:12000]
             is_error = isinstance(fr.response, dict) and fr.response.get("isError") is True
             self._put({"type": "tool_result", "agent": author, "tool": self.names.name(fr.name),
-                       "error": bool(is_error), "text": self.names.text(resp)})
+                       "error": bool(is_error), "text": self.names.text(resp),
+                       "truncated": len(raw_response) > len(resp)})
 
         text = ""
         content = getattr(event, "content", None)

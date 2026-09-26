@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from fedotmas._settings import ModelConfig, get_meta_model, resolve_model_config
 from fedotmas.common.logging import get_logger
@@ -39,6 +39,8 @@ class _JudgeOutput(BaseModel):
 
 
 class _SyntheticExamplesOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     examples: list[str] = Field(
         description="Slightly rephrased requests with unchanged meaning"
     )
