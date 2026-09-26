@@ -474,18 +474,15 @@ class ResearchTelemetry(BasePlugin):
                 # An attempted inspection counts as inspection even if the source
                 # is unavailable; discovery can resume after failed candidates.
                 self.inspected(agent, url.strip())
-                candidate_progress = self._mark_candidate_inspected(
+                self._mark_candidate_inspected(
                     tool_context.state, agent, url,
                     status="failed" if _tool_failed(result) else "success",
                     tool=tool.name,
                     error=_bounded_inspection_error(result),
                 )
-                source_progress = self._mark_source_inspected(
+                self._mark_source_inspected(
                     tool_context.state, agent, url
                 )
-                if candidate_progress or source_progress:
-                    signal = "candidate_inspected" if candidate_progress else "source_inspected"
-                    self._mark_progress(tool_context.state, agent, signal)
                 if _research_mode(tool_context.state, agent) == "mixed":
                     self._sync_gate_state(tool_context.state, agent, inspected_url=url)
         self._record_call_result(
@@ -517,7 +514,16 @@ class ResearchTelemetry(BasePlugin):
                 metrics = self._agents[agent]
                 if new_urls:
                     metrics["discovery_calls_yielding_new_candidates"] += 1
-                    self._mark_progress(tool_context.state, agent, "new_candidate")
+                    evidence_urls = {
+                        _sanitize_url(item.get("url"))
+                        for item in payload["results"]
+                        if isinstance(item, dict)
+                        and isinstance(item.get("url"), str)
+                        and str(item.get("title") or "").strip()
+                        and str(item.get("snippet") or item.get("content") or "").strip()
+                    }
+                    if set(new_urls) & evidence_urls:
+                        self._mark_progress(tool_context.state, agent, "candidate_evidence")
                     progress_root = tool_context.state.get(RESEARCH_PROGRESS_STATE_KEY, {})
                     if not isinstance(progress_root, dict):
                         progress_root = {}
@@ -686,18 +692,15 @@ class ResearchTelemetry(BasePlugin):
                 url = _inspection_candidate_url(tool.name, tool_args, tool_context.state)
                 if url:
                     self.inspected(agent, url)
-                    candidate_progress = self._mark_candidate_inspected(
+                    self._mark_candidate_inspected(
                         tool_context.state, agent, url,
                         status="failed",
                         tool=tool.name,
                         error=str(error),
                     )
-                    source_progress = self._mark_source_inspected(
+                    self._mark_source_inspected(
                         tool_context.state, agent, url
                     )
-                    if candidate_progress or source_progress:
-                        signal = "candidate_inspected" if candidate_progress else "source_inspected"
-                        self._mark_progress(tool_context.state, agent, signal)
                     if _research_mode(tool_context.state, agent) == "mixed":
                         self._sync_gate_state(
                             tool_context.state, agent, inspected_url=url

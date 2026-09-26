@@ -24,4 +24,4 @@ Web discovery through Tavily Search. Returns ranked, compact results with titles
 URLs, and snippets. API keys rotate internally and are never exposed to agents.
 """
 tags = [ "web", "search", "research" ]
-tool_name_prefix = "tavily"
+tool_name_prefix = ""

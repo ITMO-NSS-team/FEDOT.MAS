@@ -4,6 +4,7 @@ import itertools
 import json
 import re
 from typing import Any, cast
+from urllib.parse import parse_qs, urlsplit
 
 from google.adk.agents import LlmAgent, LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
@@ -54,6 +55,9 @@ from fedotmas.plugins._research_telemetry import (
     RESEARCH_PROGRESS_STATE_KEY,
     RESEARCH_TURN_STATE_KEY,
 )
+
+DISCOVERY_VALIDATION_STATE_KEY = "__fedotmas_discovery_validation"
+MAX_DISCOVERY_VALIDATIONS = 2
 
 type AgentTree = BaseAgent
 
@@ -567,6 +571,16 @@ def _resolve_recovered_handoffs(
                 artifact, required_fields
             )[1]:
                 continue
+        metadata = state.get(EXECUTION_METADATA_KEY)
+        issues = metadata.get("handoff_issues") if isinstance(metadata, dict) else None
+        was_unresolved = any(
+            isinstance(issue, dict)
+            and issue.get("kind") == "incomplete_handoff"
+            and issue.get("agent") == cfg.name
+            and issue.get("source_key") == requirement.source_key
+            and issue.get("resolved") is not True
+            for issue in issues
+        ) if isinstance(issues, list) else False
         resolve_execution_issue(
             state,
             {
@@ -575,6 +589,10 @@ def _resolve_recovered_handoffs(
                 "source_key": requirement.source_key,
             },
         )
+        if was_unresolved:
+            _record_semantic_progress(
+                state, cfg.name, f"resolved_handoff:{requirement.source_key}"
+            )
 
 
 def _build_llm_agent(
@@ -880,11 +898,43 @@ def _build_llm_agent(
     async def before_tool(tool, args, tool_context) -> dict | None:
         capability = _runtime_tool_capability(tool)
         blocked: tuple[str, str] | None = None
-        if cfg.research_mode == "discovery_only" and capability in {
-            ToolCapability.URL_INSPECTION,
-            ToolCapability.DOCUMENT_INSPECTION,
-            ToolCapability.MEDIA_INSPECTION,
-        }:
+        if cfg.research_mode == "discovery_only" and _is_candidate_validation_tool(tool):
+            target = _candidate_validation_target(tool, args)
+            candidates = _candidate_context(tool_context.state, cfg.name)
+            known = bool(target) and any(
+                _candidate_matches_validation(item, target) for item in candidates
+            )
+            validation_root = tool_context.state.get(DISCOVERY_VALIDATION_STATE_KEY)
+            validations = (
+                validation_root.get(cfg.name, [])
+                if isinstance(validation_root, dict)
+                else []
+            )
+            if not known:
+                blocked = (
+                    "DISCOVERY_VALIDATION_REQUIRES_CANDIDATE",
+                    "Validate only a URL or video already returned by discovery.",
+                )
+            elif len(validations) >= MAX_DISCOVERY_VALIDATIONS:
+                blocked = (
+                    "DISCOVERY_VALIDATION_LIMIT",
+                    "Candidate validation allowance is exhausted; hand off the best candidate.",
+                )
+            else:
+                if not isinstance(validation_root, dict):
+                    validation_root = {}
+                validation_root[cfg.name] = [*validations, target]
+                tool_context.state[DISCOVERY_VALIDATION_STATE_KEY] = validation_root
+        if (
+            cfg.research_mode == "discovery_only"
+            and capability
+            in {
+                ToolCapability.URL_INSPECTION,
+                ToolCapability.DOCUMENT_INSPECTION,
+                ToolCapability.MEDIA_INSPECTION,
+            }
+            and not _is_candidate_validation_tool(tool)
+        ):
             blocked = (
                 "DISCOVERY_ONLY_INSPECTION_DISABLED",
                 (
@@ -893,16 +943,34 @@ def _build_llm_agent(
                     "downstream extractor."
                 ),
             )
+        turn_root = tool_context.state.get(RESEARCH_TURN_STATE_KEY)
+        current_turn = turn_root.get(cfg.name) if isinstance(turn_root, dict) else None
         if (
-            cfg.research_mode == "discovery_only"
-            and capability == ToolCapability.MEDIA_INSPECTION
-            and normalize_tool_name(tool.name) == "get_video_info"
+            isinstance(current_turn, dict)
+            and current_turn.get("force_converge") is True
+            and capability in {
+                ToolCapability.URL_INSPECTION,
+                ToolCapability.DOCUMENT_INSPECTION,
+                ToolCapability.MEDIA_INSPECTION,
+            }
+            and not (
+                cfg.research_mode == "discovery_only"
+                and _is_candidate_validation_tool(tool)
+            )
         ):
-            blocked = None
+            blocked = (
+                "RESEARCH_CONVERGENCE_REQUIRED",
+                "Repeated inspection has not resolved an output or handoff obligation. Provide the best supported handoff now.",
+            )
         if capability == ToolCapability.BROWSER_NAVIGATION:
             candidates_for_browser = _candidate_context(tool_context.state, cfg.name)
             args_text = json.dumps(args, ensure_ascii=False).casefold()
-            anchored = any(str(item.get("url", "")).casefold() in args_text for item in candidates_for_browser)
+            anchored = any(
+                anchor.casefold() in args_text
+                for item in candidates_for_browser
+                for anchor in candidate_anchors(item)
+                if len(anchor) >= 6
+            )
             turn_root = tool_context.state.get(RESEARCH_TURN_STATE_KEY)
             current_turn = turn_root.get(cfg.name) if isinstance(turn_root, dict) else None
             if not anchored:
@@ -1135,6 +1203,7 @@ def _build_llm_agent(
                     name: "discovery_only source selection role"
                     for name in inspection_names
                     if normalize_tool_name(llm_request.tools_dict[name].name) != "get_video_info"
+                    and normalize_tool_name(llm_request.tools_dict[name].name) != "markdown"
                 }
             )
 
@@ -1302,6 +1371,40 @@ def _candidate_context(state: Any, agent: str) -> list[dict[str, Any]]:
         if isinstance(item, dict)
         and (isinstance(item.get("url"), str) or item.get("title") or item.get("doi"))
     ]
+
+
+def _is_candidate_validation_tool(tool: Any) -> bool:
+    return normalize_tool_name(getattr(tool, "name", "")) in {
+        "markdown",
+        "get_video_info",
+    }
+
+
+def _candidate_validation_target(tool: Any, args: dict[str, Any]) -> str | None:
+    name = normalize_tool_name(getattr(tool, "name", ""))
+    if name == "markdown":
+        value = args.get("url") or args.get("href")
+        return value.strip().rstrip("/") if isinstance(value, str) else None
+    if name == "get_video_info":
+        value = args.get("video_id") or args.get("id") or args.get("url")
+        if not isinstance(value, str) or not value.strip():
+            return None
+        if value.startswith(("https://", "http://")):
+            parsed = urlsplit(value)
+            value = (parse_qs(parsed.query).get("v") or [parsed.path.rsplit("/", 1)[-1]])[0]
+        return value.strip()
+    return None
+
+
+def _candidate_matches_validation(item: dict[str, Any], target: str) -> bool:
+    url = item.get("url")
+    if not isinstance(url, str):
+        return False
+    if target.startswith(("https://", "http://")):
+        return url.rstrip("/").casefold() == target.rstrip("/").casefold()
+    parsed = urlsplit(url)
+    video_id = (parse_qs(parsed.query).get("v") or [parsed.path.rsplit("/", 1)[-1]])[0]
+    return video_id == target
 
 
 def _seed_upstream_candidates(state: Any, cfg: MAWAgentConfig) -> None:
@@ -1585,3 +1688,21 @@ def _targeted_recovery_used(state: Any, agent: str) -> bool:
     root = state.get(RESEARCH_PROGRESS_STATE_KEY, {}) if hasattr(state, "get") else {}
     item = root.get(agent, {}) if isinstance(root, dict) else {}
     return bool(item.get("targeted_recovery_used")) if isinstance(item, dict) else False
+
+def candidate_anchors(item: dict) -> list[str]:
+    anchors = []
+
+    for key in ("url", "doi"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            anchors.append(value.strip())
+
+    identity = item.get("identity")
+    if isinstance(identity, dict):
+        anchors.extend(
+            str(value).strip()
+            for value in identity.values()
+            if isinstance(value, (str, int)) and str(value).strip()
+        )
+
+    return anchors

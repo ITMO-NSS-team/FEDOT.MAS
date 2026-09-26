@@ -42,7 +42,7 @@ load_dotenv()
 RUN_ID = uuid.uuid4()
 _log = get_logger("fedotmas.benchmarks.gaia")
 GAIA_BASE_MCP_SERVERS = [
-    "websearch-searxng",
+    "websearch-tavily",
     "web-scraping",
     "browser-agent",
     "download",
@@ -197,17 +197,24 @@ def _env_list(name: str) -> list[str] | None:
 def _gaia_mcp_servers() -> list[str] | str:
     value = os.getenv("FEDOTMAS_GAIA_MCP_SERVERS")
     if value is not None and value.strip().lower() == "all":
-        if os.getenv("E2B_API_KEY"):
-            return "all"
         e2b_servers = {"sandbox", "code-agent", "sampo-python"}
+        all_servers = list(resolve_mcp_registry("all"))
         servers = [
-            name for name in resolve_mcp_registry("all") if name not in e2b_servers
+            name for name in all_servers
+            if name != "websearch-searxng"
+            and (os.getenv("E2B_API_KEY") or name not in e2b_servers)
         ]
+        if "websearch-tavily" not in servers:
+            servers.insert(0, "websearch-tavily")
         if "sandbox-light" not in servers:
             servers.append("sandbox-light")
         return servers
     if value is not None:
         servers = [name.strip() for name in value.split(",") if name.strip()]
+        if "websearch-searxng" in servers:
+            servers = [name for name in servers if name != "websearch-searxng"]
+            if "websearch-tavily" not in servers:
+                servers.insert(0, "websearch-tavily")
         if not os.getenv("E2B_API_KEY"):
             servers = [
                 "sandbox-light" if name == "sandbox" else name
@@ -216,52 +223,13 @@ def _gaia_mcp_servers() -> list[str] | str:
             ]
         return servers
 
-    provider_setting = os.getenv("FEDOTMAS_GAIA_SEARCH_PROVIDERS")
-    if provider_setting is None:
-        providers = {"searxng"}
-        if _tavily_configured():
-            providers.add("tavily")
-    else:
-        requested = {
-            name.strip().lower() for name in provider_setting.split(",") if name.strip()
-        }
-        valid = {"searxng", "tavily"}
-        if requested and requested <= valid:
-            providers = requested
-        else:
-            _log.warning(
-                "Invalid FEDOTMAS_GAIA_SEARCH_PROVIDERS; using configured defaults"
-            )
-            providers = {"searxng"}
-            if _tavily_configured():
-                providers.add("tavily")
-
     servers = list(GAIA_BASE_MCP_SERVERS)
-    servers.remove("websearch-searxng")
-    if "searxng" in providers:
-        servers.insert(0, "websearch-searxng")
-    if "tavily" in providers:
-        tavily_index = (
-            servers.index("websearch-searxng") + 1
-            if "websearch-searxng" in servers
-            else 0
-        )
-        servers.insert(tavily_index, "websearch-tavily")
     sandbox = "sandbox" if os.getenv("E2B_API_KEY") else "sandbox-light"
     insertion_index = servers.index("youtube-transcript") + 1
     servers.insert(insertion_index, sandbox)
     if os.getenv("E2B_API_KEY"):
         servers.append("code-agent")
     return servers
-
-
-def _tavily_configured() -> bool:
-    keys = [
-        key.strip()
-        for key in os.getenv("TAVILY_API_KEYS", "").split(",")
-        if key.strip()
-    ]
-    return bool(keys or os.getenv("TAVILY_API_KEY", "").strip())
 
 
 def _gaia_mcp_registry(

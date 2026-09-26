@@ -217,8 +217,8 @@ class SearchResponse(BaseModel):
 
 
 DESCRIPTION = """
-Search the web with Tavily and return ranked results with compact snippets. Use
-this as one search provider; API key rotation and fallback are handled internally.
+Search the web with Tavily first and SearXNG only when Tavily is unavailable.
+Return the same compact result shape whichever backend serves the request.
 """
 
 tavily_server = FastMCP("websearch-tavily", instructions=DESCRIPTION)
@@ -235,6 +235,45 @@ def _error(query: str, code: str, message: str, attempted: list[str]) -> SearchR
             attempted_keys=attempted,
         ),
     )
+
+
+async def _searxng_fallback(query: str, max_results: int) -> SearchResponse:
+    """Use SearXNG only after Tavily cannot serve this request."""
+    instance_url = os.getenv("SEARXNG_URL", "http://localhost:18888").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{instance_url}/search",
+                params={"q": query, "format": "json", "engines": "bing,duckduckgo,brave,mullvadleta,yahoo,presearch", "categories": "general", "safesearch": 1},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        raw_results = payload.get("results") if isinstance(payload, dict) else None
+        if not isinstance(raw_results, list):
+            raise TypeError("invalid results payload")
+        results: list[SearchResult] = []
+        for item in raw_results[:max_results]:
+            if not isinstance(item, dict) or not item.get("url"):
+                continue
+            url = KEY_POOL.redact(str(item["url"]))
+            if len(url) > MAX_URL_CHARS:
+                continue
+            results.append(
+                SearchResult(
+                    title=KEY_POOL.redact(str(item.get("title") or ""))[
+                        :MAX_TITLE_CHARS
+                    ],
+                    url=url,
+                    snippet=KEY_POOL.redact(str(item.get("content") or ""))[
+                        :MAX_SNIPPET_CHARS
+                    ],
+                )
+            )
+        _log.info("SearXNG fallback completed: %d results", len(results))
+        return SearchResponse(query=KEY_POOL.redact(query)[:MAX_QUERY_CHARS], results=results)
+    except (httpx.HTTPError, TypeError, ValueError) as exc:
+        _log.warning("SearXNG fallback failed: %s", type(exc).__name__)
+        return _error(query, "SEARCH_UNAVAILABLE", "Tavily and SearXNG are unavailable.", [])
 
 
 @tavily_server.tool
@@ -255,23 +294,13 @@ async def search(
     del ctx
     safe_query = KEY_POOL.redact(query)[:MAX_QUERY_CHARS]
     if not KEY_POOL.configured:
-        return _error(
-            safe_query,
-            "TAVILY_UNAVAILABLE",
-            "Tavily is unavailable: configure TAVILY_API_KEYS or TAVILY_API_KEY.",
-            [],
-        )
+        return await _searxng_fallback(safe_query, max_results)
 
     attempted: list[str] = []
     excluded: set[int] = set()
     lease = KEY_POOL.begin_request()
     if lease is None:
-        return _error(
-            safe_query,
-            "TAVILY_KEYS_EXHAUSTED",
-            "All configured Tavily keys are temporarily unavailable.",
-            attempted,
-        )
+        return await _searxng_fallback(safe_query, max_results)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         while lease is not None:
@@ -291,12 +320,7 @@ async def search(
             except httpx.RequestError:
                 KEY_POOL.record_provider_failure()
                 _log.warning("Tavily provider request failed with %s", lease.label)
-                return _error(
-                    safe_query,
-                    "TAVILY_PROVIDER_ERROR",
-                    "Tavily could not complete the search request.",
-                    attempted,
-                )
+                return await _searxng_fallback(safe_query, max_results)
 
             status = response.status_code
             if status in KEY_FAILURE_STATUSES:
@@ -309,14 +333,20 @@ async def search(
                     after_index=lease.index,
                     excluded=excluded,
                 )
+                if lease is None:
+                    return await _searxng_fallback(safe_query, max_results)
                 continue
-            if status >= 400:
+            if status >= 500:
                 KEY_POOL.record_provider_failure()
                 _log.warning("Tavily provider returned HTTP %d", status)
+                return await _searxng_fallback(safe_query, max_results)
+            if status >= 400:
+                KEY_POOL.record_provider_failure()
+                _log.warning("Tavily rejected the search request with HTTP %d", status)
                 return _error(
                     safe_query,
                     "TAVILY_PROVIDER_ERROR",
-                    f"Tavily returned HTTP {status}.",
+                    f"Tavily rejected the search request with HTTP {status}.",
                     attempted,
                 )
 
@@ -348,12 +378,7 @@ async def search(
             except (AttributeError, TypeError, ValueError):
                 KEY_POOL.record_provider_failure()
                 _log.warning("Tavily returned an invalid search response")
-                return _error(
-                    safe_query,
-                    "TAVILY_PROVIDER_ERROR",
-                    "Tavily returned an invalid search response.",
-                    attempted,
-                )
+                return await _searxng_fallback(safe_query, max_results)
 
             KEY_POOL.record_success(zero_results=not results)
             _log.info(
@@ -361,12 +386,7 @@ async def search(
             )
             return SearchResponse(query=safe_query, results=results)
 
-    return _error(
-        safe_query,
-        "TAVILY_KEYS_EXHAUSTED",
-        "All configured Tavily keys are temporarily unavailable.",
-        attempted,
-    )
+    return await _searxng_fallback(safe_query, max_results)
 
 
 @tavily_server.tool

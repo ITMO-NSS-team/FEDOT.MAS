@@ -16,20 +16,20 @@ Whitespace around list entries is ignored, as are empty entries. When both
 forms contain keys, TAVILY_API_KEYS takes priority. The default rotation
 interval is 50 actual Tavily HTTP request attempts.
 
-GAIA keeps SearXNG enabled by default. It adds Tavily by default when a key is
-configured. Set FEDOTMAS_GAIA_SEARCH_PROVIDERS to searxng, tavily, or
-searxng,tavily to choose the providers while retaining the rest of GAIA's MCP
-servers. The existing FEDOTMAS_GAIA_MCP_SERVERS setting still overrides the
-full server list.
+GAIA exposes one unprefixed `search` tool. It tries Tavily first and uses
+SearXNG (`SEARXNG_URL`, default `http://localhost:18888`) only when Tavily is
+unavailable. `FEDOTMAS_GAIA_MCP_SERVERS` still overrides the other server
+choices; the separate SearXNG search tool is removed from this worker surface.
 
 ## Behavior
 
 Each API request attempt consumes one rotation slot, including an attempt that
-fails. A 401, 402, 403, or 429 response marks that key unavailable until this
-server process restarts and retries on the next usable key. One search tries
-each usable key at most once. Other provider failures return a structured
-TAVILY_PROVIDER_ERROR; a successful search with no results returns an empty
-results list and no error.
+fails. HTTP 401, 402, 403, 429, 432, and 433 mark that key unavailable until
+this server process restarts. The current search retries each remaining
+usable key once, then falls back to SearXNG after Tavily keys are exhausted.
+Transport errors and Tavily 5xx responses also use SearXNG; other non-key 4xx
+responses are returned as request errors. A successful search with no results
+returns an empty results list and no error.
 
-The tavily_telemetry tool reports aggregate counts and safe labels such as
+The telemetry tool reports aggregate counts and safe labels such as
 key_0. It never includes API key values.

@@ -98,7 +98,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 10. **Include state references** in instructions using curly braces around the state key name, e.g. the output_key of an upstream agent.
 11. **Keep final formatting at the boundary.** Designate `final_answer_agent`; do not place benchmark submission tags or bare-answer rules in intermediate instructions.
 12. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and this follow-up in a `sequential` node.
-13. **Route web work by task and cost.** Use `websearch-searxng` or `websearch-tavily` for discovery, `web-scraping` to inspect known ordinary static pages, and download/document tools for known documents. Reserve `browser-agent` for genuinely interactive or dynamic navigation, or when cheaper inspection fails; do not assign it to every research role. If one lightweight search provider returns empty or poor results, try another available provider instead of repeatedly retrying the same one.
+13. **Route web work by task and cost.** Use the worker-facing `search` tool for discovery; provider routing and fallback are handled internally. Use `web-scraping` to inspect known ordinary static pages, and download/document tools for known documents. Reserve `browser-agent` for genuinely interactive or dynamic navigation, or when cheaper inspection fails; do not assign it to every research role.
 14. For numerical computation, spreadsheet or structured-file analysis, programmatic filtering, transformations, or multi-step calculations, assign `code-agent` to a suitable specialist only when execution materially helps. For document retrieval, prefer `document`; do not add `code-agent` to every research role by default.
 
 ---
@@ -404,7 +404,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 - Assign MCP tools only when actually needed.
 - **ONLY use exact tool names from the AVAILABLE MCP TOOLS list. NEVER invent tool names.** If no listed tool fits, use `"tools": []`.
 - Use the minimum sufficient number of agents. A single agent can try a second search provider; do not create provider-specific duplicate workers. Keep a source finder followed by an extractor only when deep extraction materially benefits from that split.
-- Route web work by task and cost: use `websearch-searxng` or `websearch-tavily` for discovery, `web-scraping` to inspect known ordinary static pages, and download/document tools for known documents. Reserve `browser-agent` for genuinely interactive or dynamic navigation, or when cheaper inspection fails; do not assign it to every research role. If one lightweight search provider returns empty or poor results, try another available provider instead of repeatedly retrying the same one.
+- Route web work by task and cost: use the worker-facing `search` tool for discovery; provider routing and fallback are handled internally. Use `web-scraping` to inspect known ordinary static pages, and download/document tools for known documents. Reserve `browser-agent` for genuinely interactive or dynamic navigation, or when cheaper inspection fails; do not assign it to every research role.
 - Do NOT include output_key or any curly-brace state references in instructions.
 - The pipeline stage will assign `research_mode`: source finders use `discovery_only`, structured extractors use `inspection_only`, and general researchers use `mixed`. Recommend those roles only when the task benefits from them.
 
@@ -515,7 +515,7 @@ Use single curly braces around the state key name. In the examples below, angle 
 7. **Instructions must include state references** using curly braces around the state key name, so agents can read concise upstream outputs.
 8. Include final formatting only through the designated terminal answer stage, never in intermediate worker instructions.
 9. **Never end with parallel.** A `parallel` node MUST be followed by an appropriate synthesizer or verifier that reads the `output_key` of every parallel sub-agent. Wrap the parallel node and follow-up in a `sequential` node.
-10. **Route web work by task and cost.** Use `websearch-searxng` or `websearch-tavily` for discovery, `web-scraping` to inspect known ordinary static pages, and download/document tools for known documents. Reserve `browser-agent` for genuinely interactive or dynamic navigation, or when cheaper inspection fails; do not assign it to every research role. If one lightweight search provider returns empty or poor results, try another available provider instead of repeatedly retrying the same one.
+10. **Route web work by task and cost.** Use the worker-facing `search` tool for discovery; provider routing and fallback are handled internally. Use `web-scraping` to inspect known ordinary static pages, and download/document tools for known documents. Reserve `browser-agent` for genuinely interactive or dynamic navigation, or when cheaper inspection fails; do not assign it to every research role.
 11. Use `code-agent` when iterative Python execution materially helps with calculations or structured files; keep it with the relevant specialist and use pageable `document` tools for document retrieval.
 
 ---

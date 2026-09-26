@@ -110,10 +110,9 @@ def test_maw_prompts_use_current_browser_and_search_routing():
     ):
         assert "browser-agent" in prompt
         assert "browser-usage" not in prompt
-        assert "websearch-searxng" in prompt
-        assert "websearch-tavily" in prompt
+        assert "worker-facing `search` tool" in prompt
+        assert "provider routing and fallback are handled internally" in prompt
         assert "web-scraping" in prompt
-        assert "empty or poor results" in prompt
         assert "do not assign it to every research role" in prompt
         assert "download/document tools" in prompt
 

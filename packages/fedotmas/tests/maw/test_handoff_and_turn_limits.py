@@ -1036,7 +1036,7 @@ async def test_discovery_only_source_finder_does_not_wait_for_inspection():
         for declaration in group.function_declarations or []
     }
     assert search.name in exposed
-    assert inspect.name not in exposed
+    assert inspect.name in exposed
     args = {"query": "candidate sources"}
     assert await telemetry.before_tool_callback(
         tool=search, tool_args=args, tool_context=context
@@ -1065,7 +1065,9 @@ async def test_source_finder_can_validate_video_identity_but_not_read_transcript
     transcript = FunctionTool(func=lambda video_id: {"text": "long transcript"})
     transcript.name = "get_transcript"
     agent = builder._build_llm_agent(MAWAgentConfig(name="finder", instruction="Find source", output_key="out", research_mode="discovery_only"), [search, info, transcript], None, autonomous=False)
-    context = _context({})
+    context = _context({"__fedotmas_research_candidates": {"finder": [
+        {"url": "https://www.youtube.com/watch?v=abc", "title": "Known video"}
+    ]}})
     context._invocation_context.agent.name = "finder"
     await agent.before_agent_callback(context)
     request = _research_request(search, info, transcript)
@@ -1075,6 +1077,38 @@ async def test_source_finder_can_validate_video_identity_but_not_read_transcript
     assert transcript.name not in visible
     assert await agent.before_tool_callback(info, {"video_id": "abc"}, context) is None
     assert (await agent.before_tool_callback(transcript, {"video_id": "abc"}, context))["error_code"] == "DISCOVERY_ONLY_INSPECTION_DISABLED"
+
+
+@pytest.mark.asyncio
+async def test_discovery_only_can_validate_two_known_markdown_candidates_only():
+    search = FunctionTool(func=lambda query: {"results": []})
+    search.name = "search"
+    markdown = FunctionTool(func=lambda url: {"content": "candidate page"})
+    markdown.name = "markdown"
+    interactive = [FunctionTool(func=dict) for _ in range(5)]
+    for tool, name in zip(
+        interactive, ["click", "scroll", "semantic_tree", "findElement", "nodeDetails"]
+    ):
+        tool.name = name
+    state = {"__fedotmas_research_candidates": {"finder": [
+        {"url": "https://example.org/a"}, {"url": "https://example.org/b"}
+    ]}}
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(name="finder", instruction="Find source", output_key="out", research_mode="discovery_only"),
+        [search, markdown, *interactive], None, autonomous=False,
+    )
+    context = _context(state)
+    context._invocation_context.agent.name = "finder"
+    await agent.before_agent_callback(context)
+    request = _research_request(search, markdown)
+    await agent.before_model_callback(context, request)
+    visible = {d.name for g in request.config.tools or [] for d in g.function_declarations or []}
+    assert markdown.name in visible
+    assert not {tool.name for tool in interactive} & visible
+    assert await agent.before_tool_callback(markdown, {"url": "https://unknown.example"}, context)
+    assert await agent.before_tool_callback(markdown, {"url": "https://example.org/a"}, context) is None
+    assert await agent.before_tool_callback(markdown, {"url": "https://example.org/b"}, context) is None
+    assert (await agent.before_tool_callback(markdown, {"url": "https://example.org/a"}, context))["error_code"] == "DISCOVERY_VALIDATION_LIMIT"
 
 
 @pytest.mark.asyncio
@@ -1172,7 +1206,7 @@ async def test_discovery_only_source_finder_gets_second_productive_wave_before_h
         for declaration in group.function_declarations or []
     }
     assert search.name in exposed
-    assert inspect.name not in exposed
+    assert inspect.name in exposed
     assert "Source 0" in request.config.system_instruction
     assert await agent.before_tool_callback(search, {"query": "exact DOI source"}, context) is None
     await telemetry.before_tool_callback(tool=search, tool_args={"query": "exact DOI source"}, tool_context=context)
@@ -1187,7 +1221,10 @@ async def test_discovery_only_source_finder_gets_second_productive_wave_before_h
     blocked_inspection = await agent.before_tool_callback(
         inspect, {"url": "https://example.org/source-0"}, context
     )
-    assert blocked_inspection["error_code"] == "DISCOVERY_ONLY_INSPECTION_DISABLED"
+    assert blocked_inspection is None
+    assert (await agent.before_tool_callback(
+        inspect, {"url": "https://not-discovered.example"}, context
+    ))["error_code"] == "DISCOVERY_VALIDATION_REQUIRES_CANDIDATE"
 
 
 @pytest.mark.asyncio
@@ -1284,7 +1321,7 @@ async def test_model_search_fanout_executes_only_one_call_per_response(monkeypat
     ]
     assert turn["visible_tool_declarations"][0]["name"] == "search"
     assert "Search broadly for candidate sources" in turn["visible_tool_declarations"][0]["description"]
-    assert "new_candidate" in turns[1]["semantic_progress_events"]
+    assert "candidate_evidence" not in turns[1]["semantic_progress_events"]
 
 
 @pytest.mark.asyncio
@@ -1304,10 +1341,22 @@ async def test_repeated_no_progress_turns_hide_broad_discovery_and_are_recorded(
     state: dict = {}
     context = _context(state)
     context._invocation_context.agent.name = "researcher"
+    telemetry = ResearchTelemetry()
+    inspect_context = MagicMock()
+    inspect_context._invocation_context.agent.name = "researcher"
+    inspect_context.state = state
     await agent.before_agent_callback(context)
     for _ in range(3):
         request = _research_request(search, inspect)
         await agent.before_model_callback(context, request)
+        await telemetry.before_tool_callback(
+            tool=inspect, tool_args={"url": f"https://example.org/{_ + 1}"},
+            tool_context=inspect_context,
+        )
+        await telemetry.after_tool_callback(
+            tool=inspect, tool_args={"url": f"https://example.org/{_ + 1}"},
+            tool_context=inspect_context, result={"content": "another page"},
+        )
 
     trace = state["_fedotmas_execution"]["turn_observability"]["researcher"]
     assert trace[-1]["no_progress_turns"] == 2
@@ -1320,6 +1369,39 @@ async def test_repeated_no_progress_turns_hide_broad_discovery_and_are_recorded(
     assert "repeated turns without semantic progress" in {
         item["reason"] for item in trace[-1]["removed_tools"]
     }
+    assert (await agent.before_tool_callback(
+        inspect, {"url": "https://example.org/further-page"}, context
+    ))["error_code"] == "RESEARCH_CONVERGENCE_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_resolved_required_output_field_resets_no_progress():
+    search = FunctionTool(func=lambda query: {"results": []})
+    search.name = "search"
+    cfg = MAWAgentConfig(
+        name="researcher", instruction="Research", output_key="artifact",
+        output_contract=ArtifactContract(required_fields=["finding"]),
+    )
+    agent = builder._build_llm_agent(cfg, [search], None, autonomous=False)
+    state = {
+        "artifact": '{"finding":"supported by evidence"}',
+        "__fedotmas_execution": {"agent_llm_turns": {"researcher": 1}},
+        "__fedotmas_research_progress": {
+            "researcher": {"version": 0, "last_turn_version": 0, "no_progress_turns": 2}
+        },
+    }
+    await agent.after_agent_callback(_context(state))
+    request = _research_request(search)
+    await agent.before_model_callback(_context(state), request)
+
+    progress = state["__fedotmas_research_progress"]["researcher"]
+    assert progress["version"] == 1
+    assert progress["last_turn_version"] == 1
+    assert state["__fedotmas_research_turns"]["researcher"]["force_converge"] is False
+    assert any(
+        item.startswith("handoff_field:finding")
+        for item in state["__fedotmas_research_progress"]["researcher"]["progress_events"]
+    )
 
 
 @pytest.mark.asyncio

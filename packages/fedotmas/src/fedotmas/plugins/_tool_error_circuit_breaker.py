@@ -29,6 +29,7 @@ RESCUED_META_KEY = "fedotmas/rescued"
 WEB_BUDGET_EXHAUSTED = "WEB_BUDGET_EXHAUSTED"
 DUPLICATE_TOOL_CALL = "DUPLICATE_TOOL_CALL"
 TOOL_CIRCUIT_OPEN = "TOOL_CIRCUIT_OPEN"
+INVALID_TOOL_INPUT = "INVALID_TOOL_INPUT"
 
 
 class ToolErrorCircuitOpen(RuntimeError):
@@ -118,6 +119,7 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
             WEB_BUDGET_EXHAUSTED,
             DUPLICATE_TOOL_CALL,
             TOOL_CIRCUIT_OPEN,
+            INVALID_TOOL_INPUT
         }:
             return None
         if not _is_error_result(result):

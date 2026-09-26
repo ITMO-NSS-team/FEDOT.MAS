@@ -26,7 +26,30 @@ _DISCOVERY = frozenset(
     }
 )
 _URL_INSPECTION = frozenset(
-    {"goto", "markdown", "extract", "links", "eval", "evaluate", "screenshot"}
+    {
+        "goto",
+        "markdown",
+        "extract",
+        "links",
+        "eval",
+        "evaluate",
+        "screenshot",
+        "click",
+        "detectforms",
+        "fill",
+        "findelement",
+        "hover",
+        "interactiveelements",
+        "navigate",
+        "nodedetails",
+        "press",
+        "scroll",
+        "selectoption",
+        "semantic_tree",
+        "setchecked",
+        "structureddata",
+        "waitforselector",
+    }
 )
 _DOCUMENT_INSPECTION = frozenset(
     {

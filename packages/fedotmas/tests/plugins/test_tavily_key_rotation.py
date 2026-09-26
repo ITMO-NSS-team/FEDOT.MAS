@@ -44,6 +44,7 @@ def _client(responses):
     client.__aenter__ = AsyncMock(return_value=client)
     client.__aexit__ = AsyncMock(return_value=None)
     client.post = AsyncMock(side_effect=responses)
+    client.get = AsyncMock(return_value=_response(payload={"results": []}))
     return client
 
 
@@ -73,14 +74,22 @@ def test_single_key_fallback():
     assert pool.telemetry()["configured_keys"] == 1
 
 
+def test_tavily_quota_statuses_disable_the_key():
+    for status in (402, 432, 433):
+        assert server.KEY_FAILURE_STATUSES[status] == "quota"
+
+
 @pytest.mark.asyncio
 async def test_missing_key_is_structured_unavailable_without_network(monkeypatch):
     pool = server.KeyPool([])
     monkeypatch.setattr(server, "KEY_POOL", pool)
+    fallback = AsyncMock(return_value=server.SearchResponse(query="query", results=[]))
+    monkeypatch.setattr(server, "_searxng_fallback", fallback)
 
     result = await server.search("query", AsyncMock())
 
-    assert result.error.code == "TAVILY_UNAVAILABLE"
+    fallback.assert_awaited_once_with("query", 5)
+    assert result.error is None
     assert result.results == []
     assert pool.telemetry()["total_requests"] == 0
 
@@ -141,17 +150,34 @@ async def test_rate_limited_key_retries_with_next_usable_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_all_keys_unavailable_returns_structured_error(monkeypatch):
+async def test_tavily_success_does_not_call_searxng(monkeypatch):
+    pool = server.KeyPool(["key-A"])
+    monkeypatch.setattr(server, "KEY_POOL", pool)
+    tavily = _client([_response(payload={
+        "results": [{"title": "Tavily result", "url": "https://tavily.example", "content": "found"}]
+    })])
+    searx = _client([])
+
+    with patch.object(server.httpx, "AsyncClient", side_effect=[tavily, searx]):
+        result = await server.search("query", AsyncMock())
+
+    assert result.results[0].title == "Tavily result"
+    assert tavily.post.await_count == 1
+    assert searx.get.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_all_keys_unavailable_falls_back_to_searxng(monkeypatch):
     pool = server.KeyPool(["key-one", "key-two"], rotate_every=50)
     monkeypatch.setattr(server, "KEY_POOL", pool)
     client = _client([_response(401), _response(429)])
+    fallback_client = _client([_response(payload={"results": []})])
 
-    with patch.object(server.httpx, "AsyncClient", return_value=client):
+    with patch.object(server.httpx, "AsyncClient", side_effect=[client, fallback_client]):
         result = await server.search("query", AsyncMock())
 
+    assert result.error is None
     assert result.results == []
-    assert result.error.code == "TAVILY_KEYS_EXHAUSTED"
-    assert result.error.attempted_keys == ["key_0", "key_1"]
     assert pool.telemetry()["currently_usable_keys"] == 0
     assert pool.telemetry()["auth_failures"] == 1
     assert pool.telemetry()["rate_limit_failures"] == 1
@@ -208,18 +234,33 @@ async def test_results_are_bounded_and_keep_tavily_order(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_provider_failure_is_distinct_from_zero_results(monkeypatch):
+async def test_server_failure_falls_back_instead_of_becoming_empty_results(monkeypatch):
     pool = server.KeyPool(["key-one"])
     monkeypatch.setattr(server, "KEY_POOL", pool)
     client = _client([_response(503)])
+    fallback_client = _client([_response(payload={"results": []})])
 
-    with patch.object(server.httpx, "AsyncClient", return_value=client):
+    with patch.object(server.httpx, "AsyncClient", side_effect=[client, fallback_client]):
         result = await server.search("query", AsyncMock())
 
-    assert result.error.code == "TAVILY_PROVIDER_ERROR"
+    assert result.error is None
     assert result.results == []
     assert pool.telemetry()["provider_failures"] == 1
     assert pool.telemetry()["successful_requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_invalid_request_does_not_fall_back_to_searxng(monkeypatch):
+    pool = server.KeyPool(["key-one"])
+    monkeypatch.setattr(server, "KEY_POOL", pool)
+    tavily = _client([_response(400)])
+    searxng = _client([])
+
+    with patch.object(server.httpx, "AsyncClient", side_effect=[tavily, searxng]):
+        result = await server.search("invalid query", AsyncMock())
+
+    assert result.error.code == "TAVILY_PROVIDER_ERROR"
+    assert searxng.get.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -261,10 +302,11 @@ async def test_api_keys_never_appear_in_logs_errors_or_results(
     monkeypatch.setattr(server, "KEY_POOL", denied_pool)
     denied = _response(401)
     denied.text = f"Invalid key: {secret}"
-    with patch.object(server.httpx, "AsyncClient", return_value=_client([denied])):
+    fallback_client = _client([_response(payload={"results": []})])
+    with patch.object(server.httpx, "AsyncClient", side_effect=[_client([denied]), fallback_client]):
         error_result = await server.search("query", AsyncMock())
 
-    assert error_result.error.code == "TAVILY_KEYS_EXHAUSTED"
+    assert error_result.error is None
     assert secret not in error_result.model_dump_json()
     assert secret not in caplog.text
 
@@ -280,3 +322,58 @@ def test_invalid_rotation_interval_uses_default(value, caplog):
     assert pool.rotate_every == server.DEFAULT_ROTATE_EVERY
     assert "Invalid TAVILY_ROTATE_EVERY" in caplog.text
     assert "key-one" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("statuses", [(432, 429, 200), (432, 403, 429)])
+async def test_actual_search_rotates_failed_keys_in_order_then_falls_back(
+    monkeypatch, statuses
+):
+    keys = ["key-A", "key-B", "key-C"]
+    pool = server.KeyPool(keys)
+    monkeypatch.setattr(server, "KEY_POOL", pool)
+    responses = [_response(status) for status in statuses]
+    if statuses[-1] == 200:
+        responses[-1] = _response(
+            payload={"results": [{"title": "C result", "url": "https://c.example", "content": "from C"}]}
+        )
+    tavily = _client(responses)
+    searx = _client([])
+    searx.get.return_value = _response(payload={"results": [{"title": "fallback", "url": "https://fallback.example", "content": "fallback"}]})
+
+    with patch.object(server.httpx, "AsyncClient", side_effect=[tavily, searx]):
+        result = await server.search("query", AsyncMock())
+
+    sent_keys = [call.kwargs["json"]["api_key"] for call in tavily.post.await_args_list]
+    assert sent_keys == keys[: len(statuses)]
+    telemetry = pool.telemetry()
+    assert [item["usable"] for item in telemetry["keys"]] == [
+        status not in server.KEY_FAILURE_STATUSES for status in statuses
+    ]
+    if statuses[-1] == 200:
+        assert result.results[0].title == "C result"
+        assert searx.get.await_count == 0
+    else:
+        assert searx.get.await_count == 1
+        assert result.results[0].title == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_exhausted_keys_are_skipped_on_later_search(monkeypatch):
+    pool = server.KeyPool(["key-A", "key-B", "key-C"])
+    monkeypatch.setattr(server, "KEY_POOL", pool)
+    client = _client([
+        _response(432), _response(429),
+        _response(payload={"results": [{"title": "C first", "url": "https://c.example"}]}),
+        _response(payload={"results": [{"title": "C second", "url": "https://c.example"}]}),
+    ])
+    with patch.object(server.httpx, "AsyncClient", return_value=client):
+        first = await server.search("first", AsyncMock())
+        second = await server.search("second", AsyncMock())
+
+    assert [call.kwargs["json"]["api_key"] for call in client.post.await_args_list] == [
+        "key-A", "key-B", "key-C", "key-C"
+    ]
+    assert first.results[0].title == "C first"
+    assert second.results[0].title == "C second"
+    assert [item["usable"] for item in pool.telemetry()["keys"]] == [False, False, True]

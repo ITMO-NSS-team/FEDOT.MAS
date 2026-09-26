@@ -23,6 +23,7 @@ from fedotmas.plugins._research_telemetry import ResearchTelemetry
 from fedotmas.plugins._tool_error_circuit_breaker import (
     DUPLICATE_TOOL_CALL,
     WEB_BUDGET_EXHAUSTED,
+    INVALID_TOOL_INPUT
 )
 
 _log = get_logger("fedotmas.plugins.web_search_limit")
@@ -177,7 +178,8 @@ class WebSearchLimitPlugin(BasePlugin):
                 )
             return _limit_result(
                 "Empty URL rejected for web tool "
-                f"'{tool.name}' on agent '{agent_name}'."
+                f"'{tool.name}' on agent '{agent_name}'.",
+                error_code=INVALID_TOOL_INPUT,
             )
         if self.ignore_local_urls and _is_local_url(url):
             _log.debug(

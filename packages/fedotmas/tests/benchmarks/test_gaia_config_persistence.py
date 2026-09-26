@@ -85,7 +85,7 @@ def test_gaia_default_mcp_servers_include_web_task_tools_and_light_sandbox(
     assert "get_next_action" in registry["research-controller"].description
 
 
-def test_gaia_adds_tavily_when_configured_and_supports_search_ab_modes(
+def test_gaia_uses_one_tavily_search_interface_with_internal_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.delenv("FEDOTMAS_GAIA_MCP_SERVERS", raising=False)
@@ -95,19 +95,16 @@ def test_gaia_adds_tavily_when_configured_and_supports_search_ab_modes(
     monkeypatch.delenv("FEDOTMAS_GAIA_SEARCH_PROVIDERS", raising=False)
 
     defaults = _gaia_mcp_servers()
-    assert "websearch-searxng" in defaults
     assert "websearch-tavily" in defaults
+    assert "websearch-searxng" not in defaults
     assert "websearch-tavily" in _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
+    assert "websearch-searxng" not in _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
 
-    for setting, expected in (
-        ("searxng", {"websearch-searxng"}),
-        ("tavily", {"websearch-tavily"}),
-        ("searxng,tavily", {"websearch-searxng", "websearch-tavily"}),
-    ):
+    for setting in ("searxng", "tavily", "searxng,tavily"):
         monkeypatch.setenv("FEDOTMAS_GAIA_SEARCH_PROVIDERS", setting)
         servers = _gaia_mcp_servers()
-        assert expected <= set(servers)
-        assert {"websearch-searxng", "websearch-tavily"} & set(servers) == expected
+        assert "websearch-tavily" in servers
+        assert "websearch-searxng" not in servers
 
 
 def test_gaia_uses_full_sandbox_when_e2b_key_is_set(monkeypatch: pytest.MonkeyPatch):
