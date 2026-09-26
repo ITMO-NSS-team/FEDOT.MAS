@@ -1443,7 +1443,8 @@ function judgeChoices() {
 function fillModelSelect(id, key, models, selected) {
   const sel = $(id);
   if (!sel) return;
-  sel.innerHTML = [["Codex", "host/"], ["Open-source · OpenRouter", "openrouter/"]].map(([label, prefix]) =>
+  // Каталог не зависит от авторизации: ключ нужен для запуска, не для выбора.
+  sel.innerHTML = [["Open-source · OpenRouter", "openrouter/"], ["Codex", "host/"]].map(([label, prefix]) =>
     `<optgroup label="${label}">` + (models || []).filter(m => m.id.startsWith(prefix)).map(m =>
       `<option value="${esc(m.id)}"${m.id === selected ? " selected" : ""}>${esc(m.label || m.id)}</option>`).join("") + "</optgroup>"
   ).join("");

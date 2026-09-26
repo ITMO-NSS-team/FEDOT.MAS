@@ -85,3 +85,21 @@ def test_custom_tools_are_preserved_only_when_connected():
     sanitize_config(config, "mas", ["custom_calculator"],
                     available_tools={"custom_calculator": object()})
     assert all(a.tools == ["custom_calculator"] for a in agents(config))
+
+
+@pytest.mark.asyncio
+async def test_model_catalog_without_keys_lists_openrouter_before_codex(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    async def logged_out():
+        return False, "Not logged in"
+
+    monkeypatch.setattr(app, "codex_login_status", logged_out)
+    result = await app.status()
+    ids = [m["id"] for m in result["models"]]
+    assert not result["openrouter_ready"]
+    assert len([m for m in ids if m.startswith("openrouter/")]) == 4
+    assert len([m for m in ids if m.startswith("host/")]) == 3
+    assert all(m.startswith("openrouter/") for m in ids[:4])
+    assert all(m.startswith("host/") for m in ids[4:])

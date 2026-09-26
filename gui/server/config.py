@@ -56,7 +56,7 @@ if PUBLIC_MODE:
 DEFAULT_MODEL = os.getenv("GUI_MODEL", "host/gpt-5.6-terra")
 JUDGE_MODEL = os.getenv("GUI_JUDGE_MODEL", "host/gpt-5.6-terra")
 
-MODELS = [
+_CODEX_MODELS = [
     {"id": "host/gpt-5.6-terra", "label": "GPT-5.6 Terra · подписка Codex", "open": False},
     {"id": "host/gpt-5.6-sol", "label": "GPT-5.6 Sol · подписка Codex", "open": False},
     {"id": "host/gpt-5.6-luna", "label": "GPT-5.6 Luna · подписка Codex", "open": False},
@@ -73,10 +73,10 @@ _OPEN_SOURCE_OPENROUTER = {
     "z-ai/glm-5": "GLM-5 · MIT",
     "mistralai/mistral-small-2603": "Mistral Small 4 · Apache 2.0",
 }
-MODELS += [
+MODELS = [
     {"id": "openrouter/" + slug, "label": label + " · OpenRouter", "open": True}
     for slug, label in _OPEN_SOURCE_OPENROUTER.items()
-]
+] + _CODEX_MODELS
 
 # Рассуждающие модели тратят часть лимита на размышления: с запасом по умолчанию
 # агенты не обрываются на середине ответа.
