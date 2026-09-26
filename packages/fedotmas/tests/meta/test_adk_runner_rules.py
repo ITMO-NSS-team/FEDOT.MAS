@@ -5,10 +5,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import BaseModel
-
 from fedotmas.meta._adk_runner import _resolve_max_output_tokens, run_meta_agent_call
-
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -84,6 +82,55 @@ class TestRetryOnTransientError:
             assert result.raw_output == {"result": "ok"}
             assert call_count == 2
 
+    async def test_invalid_structured_output_feedback_and_usage_survive_retry(
+        self, model_config
+    ):
+        calls: list[tuple[str, dict[str, int | float]]] = []
+
+        async def _fake_execute(**kwargs):
+            usage = kwargs["usage_totals"]
+            message = kwargs["user_message"]
+            calls.append((message, usage))
+            if len(calls) == 1:
+                usage.update(prompt=11, completion=5)
+                raise RuntimeError(
+                    "ValidationError: Pipeline references unknown agent 'bad'. "
+                    "Available: ['solver']"
+                )
+            usage.update(prompt=7, completion=3)
+            from fedotmas.meta._adk_runner import LLMCallResult
+
+            return LLMCallResult(
+                raw_output={"name": "ok"},
+                prompt_tokens=7,
+                completion_tokens=3,
+                elapsed=1.0,
+            )
+
+        with (
+            patch(
+                "fedotmas.meta._adk_runner._execute_meta_call",
+                side_effect=_fake_execute,
+            ),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            result = await run_meta_agent_call(
+                agent_name="test",
+                instruction="test",
+                user_message="generate config",
+                output_schema=_DummySchema,
+                output_key="result",
+                model=model_config,
+                temperature=0.3,
+                max_retries=1,
+            )
+
+        assert "unknown agent 'bad'" in calls[1][0]
+        assert "Available: ['solver']" in calls[1][0]
+        assert "agent_name values exactly as declared" in calls[1][0]
+        assert result.prompt_tokens == 18
+        assert result.completion_tokens == 8
+
 
 class TestRetriesExhausted:
     """Rule 6: raises after all retries exhausted."""
@@ -97,18 +144,18 @@ class TestRetriesExhausted:
                 "fedotmas.meta._adk_runner._execute_meta_call", side_effect=_always_fail
             ),
             patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(RuntimeError, match="permanent failure"),
         ):
-            with pytest.raises(RuntimeError, match="permanent failure"):
-                await run_meta_agent_call(
-                    agent_name="test",
-                    instruction="test",
-                    user_message="test",
-                    output_schema=_DummySchema,
-                    output_key="result",
-                    model=model_config,
-                    temperature=0.3,
-                    max_retries=1,
-                )
+            await run_meta_agent_call(
+                agent_name="test",
+                instruction="test",
+                user_message="test",
+                output_schema=_DummySchema,
+                output_key="result",
+                model=model_config,
+                temperature=0.3,
+                max_retries=1,
+            )
 
 
 class TestTimeoutFailFast:
@@ -125,18 +172,18 @@ class TestTimeoutFailFast:
         with (
             patch("fedotmas.meta._adk_runner._execute_meta_call", side_effect=_timeout),
             patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            pytest.raises(TimeoutError),
         ):
-            with pytest.raises(TimeoutError):
-                await run_meta_agent_call(
-                    agent_name="test",
-                    instruction="test",
-                    user_message="test",
-                    output_schema=_DummySchema,
-                    output_key="result",
-                    model=model_config,
-                    temperature=0.3,
-                    max_retries=3,
-                )
+            await run_meta_agent_call(
+                agent_name="test",
+                instruction="test",
+                user_message="test",
+                output_schema=_DummySchema,
+                output_key="result",
+                model=model_config,
+                temperature=0.3,
+                max_retries=3,
+            )
 
         assert call_count == 1
         mock_sleep.assert_not_called()
@@ -220,6 +267,49 @@ class TestOutputKeyMissing:
                     user_message="test",
                     output_schema=_DummySchema,
                     output_key="missing_key",
+                    model=model_config,
+                    temperature=0.3,
+                    session_service=mock_session_service,
+                    max_retries=0,
+                )
+
+
+class TestRunnerCleanupFailure:
+    async def test_cleanup_error_does_not_mask_primary_llm_validation_error(
+        self, mock_session_service, model_config
+    ):
+        fake_event = MagicMock()
+        fake_event.partial = False
+        fake_event.usage_metadata = None
+        fake_event.content = None
+        fake_event.error_code = "ValidationError"
+        fake_event.error_message = "invalid MAWConfig"
+
+        async def _fake_run_async(**kwargs):
+            yield fake_event
+
+        with (
+            patch("fedotmas.meta._adk_runner.LlmAgent"),
+            patch("fedotmas.meta._adk_runner.make_llm"),
+            patch("fedotmas.meta._adk_runner.Runner") as mock_runner_cls,
+        ):
+            mock_runner = MagicMock()
+            mock_runner.run_async = _fake_run_async
+            mock_runner.__aenter__ = AsyncMock(return_value=mock_runner)
+            mock_runner.__aexit__ = AsyncMock(
+                side_effect=ValueError("OpenTelemetry context cleanup failed")
+            )
+            mock_runner_cls.return_value = mock_runner
+
+            with pytest.raises(
+                RuntimeError, match="ValidationError.*invalid MAWConfig"
+            ):
+                await run_meta_agent_call(
+                    agent_name="test",
+                    instruction="test",
+                    user_message="test",
+                    output_schema=_DummySchema,
+                    output_key="result",
                     model=model_config,
                     temperature=0.3,
                     session_service=mock_session_service,

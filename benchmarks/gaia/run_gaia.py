@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from fedotmas import MAW, ModelConfig
 from fedotmas._settings import get_meta_model
 from fedotmas.common.logging import get_logger
+from fedotmas.maw._validators import _find_terminal_node
 from fedotmas.mcp import MCPServerConfig, StdioMCPServer, resolve_mcp_registry
 from fedotmas.plugins import (
     BrowserFallbackPolicyPlugin,
@@ -35,7 +36,7 @@ from tenacity import (
 )
 from tqdm import tqdm
 
-from benchmarks.gaia.data import GaiaBenchmark
+from benchmarks.gaia.data import BenchmarkTask, GaiaBenchmark
 
 load_dotenv()
 
@@ -77,6 +78,19 @@ PROVIDER_ERROR_PATTERNS = (
 
 class ProviderErrorCooldown(RuntimeError):
     """Raised when the model provider asks us to back off."""
+
+
+class CompletedPipelinePostProcessingError(RuntimeError):
+    """A completed pipeline had an error after producing its terminal output."""
+
+    def __init__(self, cause: Exception, artifact: dict[str, Any]) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.artifact = artifact
+
+
+def _is_custom_task(task: Any) -> bool:
+    return (getattr(task, "metadata", None) or {}).get("source") == "custom_task_file"
 
 
 @dataclass(frozen=True)
@@ -200,7 +214,8 @@ def _gaia_mcp_servers() -> list[str] | str:
         e2b_servers = {"sandbox", "code-agent", "sampo-python"}
         all_servers = list(resolve_mcp_registry("all"))
         servers = [
-            name for name in all_servers
+            name
+            for name in all_servers
             if name != "websearch-searxng"
             and (os.getenv("E2B_API_KEY") or name not in e2b_servers)
         ]
@@ -612,6 +627,8 @@ def compute_metrics_by_level(results: list) -> dict:
     difficulty_stats: dict[int, dict] = {}
 
     for result in results:
+        if result["is_correct"] is None:
+            continue
         difficulty = int(result["difficulty"])
         is_correct = result["is_correct"]
 
@@ -774,9 +791,12 @@ def print_score_by_level(metrics_by_level: dict) -> None:
             )
 
     overall = metrics_by_level["overall"]
-    print(
-        f"Overall:   {overall['accuracy']:.2f}%  ({overall['correct']}/{overall['total_tasks']})"
-    )
+    if overall["total_tasks"]:
+        print(
+            f"Overall:   {overall['accuracy']:.2f}%  ({overall['correct']}/{overall['total_tasks']})"
+        )
+    else:
+        print("Overall:   N/A (no scored tasks)")
     print("=" * 50)
 
 
@@ -825,6 +845,25 @@ async def process_task(
                 enable_langfuse=enable_langfuse,
                 attempt_number=attempt_number,
             )
+        except CompletedPipelinePostProcessingError as exc:
+            attempt_results.append(exc.artifact)
+            cause = root_cause_summary(exc)
+            result = {
+                "task_id": task.task_id,
+                "question": task.question,
+                "response": exc.artifact.get("response", ""),
+                "ground_truth": task.ground_truth,
+                "difficulty": task.difficulty,
+                "is_correct": None if _is_custom_task(task) else False,
+                "error": str(exc.cause),
+                **cause,
+                **_attempt_diagnostics(attempt_results),
+            }
+            _copy_attempt_fields(result, exc.artifact)
+            await _write_task_result(
+                task_log_dir, result, leaderboard_answer=result["response"]
+            )
+            return result
         except Exception as exc:
             attempt_record = _read_attempt_record(task_log_dir, attempt_number)
             attempt_results.append(attempt_record)
@@ -836,7 +875,7 @@ async def process_task(
                     "response": "",
                     "ground_truth": task.ground_truth,
                     "difficulty": task.difficulty,
-                    "is_correct": False,
+                    "is_correct": (None if _is_custom_task(task) else False),
                     "error": str(exc),
                     **cause,
                     **_attempt_diagnostics(attempt_results),
@@ -903,6 +942,8 @@ async def _process_task_attempt(
     maw = None
     telemetry = None
     state: dict[str, Any] = {}
+    answer = ""
+    terminal_output_ready = False
     try:
         meta_model = _gaia_meta_model()
         worker_model = _gaia_worker_model()
@@ -942,9 +983,18 @@ async def _process_task_attempt(
                 "partial state is retained for diagnostics"
             )
         config = getattr(maw, "generated_config", None)
+        if config is None:
+            raise ValueError("Completed MAW has no generated configuration")
         final_agent = getattr(config, "final_answer_agent", None)
+        if final_agent is None:
+            terminal_node = _find_terminal_node(config.pipeline)
+            final_agent = (
+                terminal_node.agent_name if terminal_node.type == "agent" else None
+            )
         if not final_agent:
-            raise ValueError("Generated MAWConfig has no final_answer_agent")
+            raise ValueError(
+                "Cannot infer final_answer_agent: the pipeline must end in one agent"
+            )
         agents = {agent.name: agent for agent in config.agents}
         terminal = agents.get(final_agent)
         if terminal is None:
@@ -956,7 +1006,12 @@ async def _process_task_attempt(
             raise ValueError(
                 f"Configured terminal output '{terminal.output_key}' is missing"
             )
-        is_correct = gaia_benchmark.is_correct_answer(answer, task.ground_truth)
+        terminal_output_ready = True
+        is_correct = (
+            None
+            if _is_custom_task(task)
+            else gaia_benchmark.is_correct_answer(answer, task.ground_truth)
+        )
 
         result = {
             "task_id": task.task_id,
@@ -996,6 +1051,7 @@ async def _process_task_attempt(
             "question": task.question,
             "difficulty": task.difficulty,
             "attempt": attempt_number,
+            "response": answer,
             "attempt_status": (
                 "incomplete"
                 if pipeline_status in {"timed_out", "limited", "incomplete"}
@@ -1015,6 +1071,17 @@ async def _process_task_attempt(
             "elapsed": getattr(maw, "elapsed", 0.0) if maw is not None else 0.0,
             "research_telemetry": telemetry.snapshot() if telemetry else {},
         }
+        if terminal_output_ready:
+            artifact["attempt_status"] = "postprocessing_failed"
+            try:
+                await _write_attempt(task_log_dir, attempt_number, artifact)
+            except Exception as artifact_error:  # noqa: BLE001 - preserve completed run
+                artifact["artifact_write_error"] = str(artifact_error)
+                _log.error(
+                    "Could not persist completed pipeline diagnostics: {}",
+                    artifact_error,
+                )
+            raise CompletedPipelinePostProcessingError(exc, artifact) from exc
         await _write_attempt(task_log_dir, attempt_number, artifact)
         if _is_provider_error(exc):
             raise ProviderErrorCooldown(str(exc)) from exc
@@ -1202,19 +1269,35 @@ async def run_gaia(
     *,
     enable_langfuse: bool,
     task_ids: list[str] | None = None,
+    task_file: str | None = None,
 ) -> Any:
     """Run GAIA benchmark using FEDOT.MAS MAW."""
     base_log_dir = Path(__file__).resolve().parent / "gaia_logs" / f"run_{RUN_ID}"
     base_log_dir.mkdir(parents=True, exist_ok=True)
 
     _log.info("Logs will be saved to: {}", base_log_dir)
-    _log.info("Loading GAIA benchmark (difficulty={}, split={})", difficulty, split)
     await preflight_startup_models()
 
     gaia = GaiaBenchmark({"difficulty": difficulty, "split": split})
-    gaia.download()
-
-    tasks = list(gaia)
+    if task_file:
+        task_path = Path(task_file)
+        question = task_path.read_text(encoding="utf-8")
+        tasks = [
+            BenchmarkTask(
+                task_id="custom_exact_optimization",
+                question=question,
+                file_path="",
+                file_name="",
+                ground_truth="",
+                difficulty="0",
+                metadata={"source": "custom_task_file"},
+            )
+        ]
+        _log.info("Loading custom task from {}", task_path)
+    else:
+        _log.info("Loading GAIA benchmark (difficulty={}, split={})", difficulty, split)
+        gaia.download()
+        tasks = list(gaia)
 
     if task_ids:
         wanted = set(task_ids)
@@ -1242,14 +1325,21 @@ async def run_gaia(
                 task_log_dir,
                 enable_langfuse=enable_langfuse,
             )
-            status = "CORRECT" if result["is_correct"] else "WRONG"
-            _log.info(
-                "[{}] task={} answer='{}' gt='{}'",
-                status,
-                task.task_id,
-                result["response"][:60],
-                task.ground_truth,
-            )
+            if _is_custom_task(task):
+                _log.info(
+                    "[CUSTOM] task={} answer='{}'",
+                    task.task_id,
+                    result["response"][:60],
+                )
+            else:
+                status = "CORRECT" if result["is_correct"] else "WRONG"
+                _log.info(
+                    "[{}] task={} answer='{}' gt='{}'",
+                    status,
+                    task.task_id,
+                    result["response"][:60],
+                    task.ground_truth,
+                )
         except Exception as e:  # noqa: BLE001 - retain an artifact for every task failure
             cause = root_cause_summary(e)
             if isinstance(e, ProviderErrorCooldown) or _is_provider_error(e):
@@ -1269,7 +1359,7 @@ async def run_gaia(
                 "response": "",
                 "ground_truth": task.ground_truth,
                 "difficulty": task.difficulty,
-                "is_correct": False,
+                "is_correct": None if _is_custom_task(task) else False,
                 "error": str(e),
                 **cause,
             }
@@ -1309,6 +1399,7 @@ async def run_gaia(
             "split": split,
             "num_tasks": len(results),
             "langfuse_enabled": enable_langfuse,
+            "task_file": task_file,
         },
         "metrics": metrics_by_level,
         "token_summary": token_summary,
@@ -1353,6 +1444,11 @@ def main():
         default=None,
         help="Run only this GAIA task_id. Can be specified multiple times.",
     )
+    parser.add_argument(
+        "--task-file",
+        type=str,
+        help="Run one local UTF-8 text task instead of loading GAIA.",
+    )
     args = parser.parse_args()
 
     enable_langfuse = _env_flag("GAIA_ENABLE_LANGFUSE", True) and not args.no_langfuse
@@ -1362,6 +1458,7 @@ def main():
             split=args.split,
             enable_langfuse=enable_langfuse,
             task_ids=args.task_id,
+            task_file=args.task_file,
         )
     )
 

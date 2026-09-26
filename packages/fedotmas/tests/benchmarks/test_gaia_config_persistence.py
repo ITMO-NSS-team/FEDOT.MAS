@@ -18,9 +18,11 @@ from benchmarks.gaia.run_gaia import (
     _gaia_mcp_registry,
     _gaia_mcp_servers,
     build_plugins,
+    compute_metrics_by_level,
     compute_token_summary,
     extract_answer_from_state,
     extract_terminal_answer,
+    print_score_by_level,
     process_task,
     root_cause_summary,
 )
@@ -98,7 +100,9 @@ def test_gaia_uses_one_tavily_search_interface_with_internal_fallback(
     assert "websearch-tavily" in defaults
     assert "websearch-searxng" not in defaults
     assert "websearch-tavily" in _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
-    assert "websearch-searxng" not in _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
+    assert "websearch-searxng" not in _gaia_mcp_registry(
+        ModelConfig(model="openai/gpt-4o")
+    )
 
     for setting in ("searxng", "tavily", "searxng,tavily"):
         monkeypatch.setenv("FEDOTMAS_GAIA_SEARCH_PROVIDERS", setting)
@@ -121,15 +125,11 @@ def test_gaia_uses_full_sandbox_when_e2b_key_is_set(monkeypatch: pytest.MonkeyPa
 def test_gaia_mcp_override_cannot_enable_code_agent_without_e2b(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setenv(
-        "FEDOTMAS_GAIA_MCP_SERVERS", "download, sandbox, code-agent"
-    )
+    monkeypatch.setenv("FEDOTMAS_GAIA_MCP_SERVERS", "download, sandbox, code-agent")
     monkeypatch.delenv("E2B_API_KEY", raising=False)
 
     assert _gaia_mcp_servers() == ["download", "sandbox-light"]
-    assert "code-agent" not in _gaia_mcp_registry(
-        ModelConfig(model="openai/gpt-4o")
-    )
+    assert "code-agent" not in _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
 
 
 def test_gaia_all_mcp_servers_excludes_e2b_servers_without_key(
@@ -177,6 +177,16 @@ def test_gaia_mcp_server_override_is_preserved(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("E2B_API_KEY", "test-key")
 
     assert _gaia_mcp_servers() == ["download", "browser-agent"]
+
+
+def test_explicit_sandbox_mcp_selection_is_preserved_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("FEDOTMAS_GAIA_MCP_SERVERS", "sandbox")
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+
+    assert _gaia_mcp_servers() == ["sandbox"]
+    assert list(_gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))) == ["sandbox"]
 
 
 def test_gaia_research_budget_defaults(monkeypatch: pytest.MonkeyPatch):
@@ -382,6 +392,112 @@ async def test_successful_gaia_result_persists_serializable_generated_config(
     assert isinstance(artifact["research_telemetry"], dict)
     assert artifact["attempts"][0]["attempt_status"] == "succeeded"
     assert attempt["maw_config"] == _config().model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_terminal_agent_is_inferred_when_config_omits_optional_field(
+    tmp_path: Path,
+):
+    class OmittedTerminalMAW(_FakeMAW):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.generated_config = _config().model_copy(
+                update={"final_answer_agent": None}
+            )
+
+    task = SimpleNamespace(
+        task_id="task-inferred-terminal",
+        question="Question?",
+        ground_truth="42",
+        file_path="",
+        file_name="",
+        difficulty="1",
+    )
+    with patch("benchmarks.gaia.run_gaia.MAW", OmittedTerminalMAW):
+        result = await process_task(
+            task,
+            SimpleNamespace(is_correct_answer=lambda answer, truth: answer == truth),
+            tmp_path,
+            enable_langfuse=False,
+        )
+    assert result["response"] == "42"
+    assert result["is_correct"] is True
+
+
+@pytest.mark.asyncio
+async def test_custom_task_has_no_score_and_is_excluded_from_accuracy(
+    tmp_path: Path,
+):
+    task = SimpleNamespace(
+        task_id="custom_exact_optimization",
+        question="Raw task",
+        ground_truth="",
+        file_path="",
+        file_name="",
+        difficulty="0",
+        metadata={"source": "custom_task_file"},
+    )
+    with patch("benchmarks.gaia.run_gaia.MAW", _FakeMAW):
+        result = await process_task(
+            task,
+            SimpleNamespace(
+                is_correct_answer=lambda *_: pytest.fail("custom tasks are unscored")
+            ),
+            tmp_path,
+            enable_langfuse=False,
+        )
+    assert result["is_correct"] is None
+    assert compute_metrics_by_level([result])["overall"] == {
+        "total_tasks": 0,
+        "correct": 0,
+        "accuracy": 0,
+    }
+
+
+def test_empty_scored_summary_reports_na(capsys):
+    print_score_by_level(
+        compute_metrics_by_level([{"difficulty": "0", "is_correct": None}])
+    )
+    output = capsys.readouterr().out
+    assert "Overall:   N/A (no scored tasks)" in output
+    assert "0.00%  (0/0)" not in output
+
+
+@pytest.mark.asyncio
+async def test_postprocessing_failure_does_not_rerun_completed_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    class CountedMAW(_FakeMAW):
+        calls = 0
+
+        async def run(self, *args, **kwargs):
+            type(self).calls += 1
+            return await super().run(*args, **kwargs)
+
+    monkeypatch.setenv("FEDOTMAS_GAIA_TASK_ATTEMPTS", "3")
+    task = SimpleNamespace(
+        task_id="task-postprocessing",
+        question="Question?",
+        ground_truth="42",
+        file_path="",
+        file_name="",
+        difficulty="1",
+    )
+    with patch("benchmarks.gaia.run_gaia.MAW", CountedMAW):
+        result = await process_task(
+            task,
+            SimpleNamespace(
+                is_correct_answer=lambda *_: (_ for _ in ()).throw(
+                    ValueError("scoring failed")
+                )
+            ),
+            tmp_path,
+            enable_langfuse=False,
+        )
+    assert CountedMAW.calls == 1
+    assert result["response"] == "42"
+    assert result["error"] == "scoring failed"
+    assert result["is_correct"] is False
 
 
 @pytest.mark.asyncio

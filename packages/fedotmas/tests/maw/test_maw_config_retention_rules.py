@@ -45,20 +45,49 @@ async def test_generate_config_is_retained_on_maw():
 
 
 @pytest.mark.asyncio
-async def test_generate_config_preserves_explicit_discovery_only_with_video_tools():
-    config = MAWConfig.model_validate({
-        "agents": [{
-            "name": "source_finder",
-            "instruction": "Find and identify video sources",
-            "output_key": "sources",
-            "tools": ["websearch-tavily", "youtube-transcript"],
-            "research_mode": "discovery_only",
-        }],
-        "pipeline": {"type": "agent", "agent_name": "source_finder"},
-    })
+async def test_failed_meta_generation_usage_is_retained_on_maw():
+    error = RuntimeError("invalid structured response")
+    error.prompt_tokens = 11
+    error.completion_tokens = 7
+    error.elapsed = 2.5
     with (
         patch("fedotmas.core.base.setup_logging"),
-        patch("fedotmas.maw.maw.generate_pipeline_config", new=AsyncMock(return_value=MetaAgentResult(config=config))),
+        patch(
+            "fedotmas.maw.maw.generate_pipeline_config",
+            new=AsyncMock(side_effect=error),
+        ),
+    ):
+        maw = MAW(two_stage=False, mcp_servers=[])
+        with pytest.raises(RuntimeError, match="invalid structured response"):
+            await maw.generate_config("task")
+
+    assert maw.meta_prompt_tokens == 11
+    assert maw.meta_completion_tokens == 7
+    assert maw.meta_elapsed == 2.5
+
+
+@pytest.mark.asyncio
+async def test_generate_config_preserves_explicit_discovery_only_with_video_tools():
+    config = MAWConfig.model_validate(
+        {
+            "agents": [
+                {
+                    "name": "source_finder",
+                    "instruction": "Find and identify video sources",
+                    "output_key": "sources",
+                    "tools": ["websearch-tavily", "youtube-transcript"],
+                    "research_mode": "discovery_only",
+                }
+            ],
+            "pipeline": {"type": "agent", "agent_name": "source_finder"},
+        }
+    )
+    with (
+        patch("fedotmas.core.base.setup_logging"),
+        patch(
+            "fedotmas.maw.maw.generate_pipeline_config",
+            new=AsyncMock(return_value=MetaAgentResult(config=config)),
+        ),
     ):
         maw = MAW(two_stage=False, mcp_servers=[])
         generated = await maw.generate_config("Find a video source")

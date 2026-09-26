@@ -32,7 +32,7 @@ TOOL_CIRCUIT_OPEN = "TOOL_CIRCUIT_OPEN"
 INVALID_TOOL_INPUT = "INVALID_TOOL_INPUT"
 RESEARCH_CONTROLLER_STATE_REQUIRED = "RESEARCH_CONTROLLER_STATE_REQUIRED"
 RESEARCH_CONVERGENCE_REQUIRED = "RESEARCH_CONVERGENCE_REQUIRED"
-CONTROL_FLOW_ERROR_CODES = frozenset(
+NON_EXECUTED_POLICY_ERROR_CODES = frozenset(
     {
         WEB_BUDGET_EXHAUSTED,
         DUPLICATE_TOOL_CALL,
@@ -54,17 +54,23 @@ CONTROL_FLOW_ERROR_CODES = frozenset(
         "SOURCE_CANDIDATES_READY",
         "TARGETED_RECOVERY_EXHAUSTED",
         "TARGETED_RECOVERY_REQUIRES_IDENTITY",
-        "TRANSCRIPTS_DISABLED",
-        "NO_TRANSCRIPT_FOUND",
-        "VIDEO_UNAVAILABLE",
-        "AGE_RESTRICTED",
     }
+)
+SOURCE_LEVEL_ERROR_CODES = frozenset(
+    {"TRANSCRIPTS_DISABLED", "NO_TRANSCRIPT_FOUND", "VIDEO_UNAVAILABLE", "AGE_RESTRICTED"}
 )
 
 
-def is_control_flow_error_code(error_code: Any) -> bool:
+def is_non_executed_policy_block(error_code: Any) -> bool:
     return isinstance(error_code, str) and (
-        error_code in CONTROL_FLOW_ERROR_CODES or error_code.startswith("INVALID_")
+        error_code in NON_EXECUTED_POLICY_ERROR_CODES
+        or error_code.startswith("INVALID_")
+    )
+
+
+def is_breaker_exempt_error_code(error_code: Any) -> bool:
+    return is_non_executed_policy_block(error_code) or (
+        isinstance(error_code, str) and error_code in SOURCE_LEVEL_ERROR_CODES
     )
 
 
@@ -150,8 +156,8 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         tool_context: ToolContext,
         result: dict,
     ) -> dict | None:
-        error_code = _explicit_error_code(result)
-        if is_control_flow_error_code(error_code):
+        error_code = get_explicit_error_code(result)
+        if is_breaker_exempt_error_code(error_code):
             return None
         if not _is_error_result(result):
             return None
@@ -266,7 +272,7 @@ def _error_type_from_result(result: dict) -> str:
     return "ToolErrorResult"
 
 
-def _explicit_error_code(result: dict) -> str | None:
+def get_explicit_error_code(result: dict) -> str | None:
     for payload in (
         result,
         *(result.get(key) for key in ("meta", "_meta", "structuredContent", "structured_content")),

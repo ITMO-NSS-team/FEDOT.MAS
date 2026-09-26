@@ -5,20 +5,20 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from google.adk import Runner
 from google.adk.agents import LlmAgent
 from google.adk.apps.app import App
+from google.adk.planners import BuiltInPlanner
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService, InMemorySessionService
-from google.adk.planners import BuiltInPlanner
 from google.genai import types
 from pydantic import BaseModel
 
-from fedotmas.common.logging import get_logger
 from fedotmas._settings import ModelConfig
 from fedotmas.common.llm import make_llm
+from fedotmas.common.logging import get_logger
 from fedotmas.meta._helpers import validate_allowed_models
 
 _log = get_logger("fedotmas.meta._adk_runner")
@@ -61,9 +61,17 @@ async def run_meta_agent_call(
         raise ValueError(f"max_retries must be >= 0, got {max_retries}")
     last_error: Exception | None = None
     effective_message = user_message
+    failed_prompt_tokens = 0
+    failed_completion_tokens = 0
+    failed_elapsed = 0.0
     effective_timeout_s = _resolve_timeout(timeout_s)
     max_output_tokens = _resolve_max_output_tokens()
     for attempt in range(max_retries + 1):
+        attempt_usage: dict[str, int | float] = {
+            "prompt": 0,
+            "completion": 0,
+            "elapsed": 0.0,
+        }
         try:
             call = _execute_meta_call(
                 agent_name=agent_name,
@@ -77,13 +85,30 @@ async def run_meta_agent_call(
                 allowed_models=allowed_models,
                 plugins=plugins,
                 max_output_tokens=max_output_tokens,
+                usage_totals=attempt_usage,
             )
             if effective_timeout_s is None:
-                return await call
-            async with asyncio.timeout(effective_timeout_s):
-                return await call
+                result = await call
+            else:
+                async with asyncio.timeout(effective_timeout_s):
+                    result = await call
+            return LLMCallResult(
+                raw_output=result.raw_output,
+                prompt_tokens=failed_prompt_tokens + result.prompt_tokens,
+                completion_tokens=failed_completion_tokens + result.completion_tokens,
+                elapsed=failed_elapsed + result.elapsed,
+            )
         except (RuntimeError, ValueError, TypeError, TimeoutError) as e:
             last_error = e
+            failed_prompt_tokens += int(attempt_usage.get("prompt", 0))
+            failed_completion_tokens += int(attempt_usage.get("completion", 0))
+            failed_elapsed += float(attempt_usage.get("elapsed", 0.0))
+            # Retain usage when all structured-output attempts fail so the
+            # caller can include billed generations in its run diagnostics.
+            error_with_usage = cast(Any, e)
+            error_with_usage.prompt_tokens = failed_prompt_tokens
+            error_with_usage.completion_tokens = failed_completion_tokens
+            error_with_usage.elapsed = failed_elapsed
             if isinstance(e, TimeoutError):
                 _log.error(
                     "{} timed out after {:.1f}s; not retrying the same prompt",
@@ -102,11 +127,7 @@ async def run_meta_agent_call(
                     delay,
                 )
                 await asyncio.sleep(delay)
-                effective_message = (
-                    f"{user_message}\n\n"
-                    f"PREVIOUS ATTEMPT FAILED: {e}\n"
-                    f"Please fix this error in your response."
-                )
+                effective_message = _retry_message(user_message, e)
             else:
                 _log.error(
                     "{} failed after {} attempts: {}",
@@ -132,6 +153,7 @@ async def _execute_meta_call(
     allowed_models: list[str] | None = None,
     plugins: list[BasePlugin] | None = None,
     max_output_tokens: int | None = None,
+    usage_totals: dict[str, int | float] | None = None,
 ) -> LLMCallResult:
     """Core execution logic for a single meta-agent LLM call."""
     _log.info(
@@ -197,7 +219,10 @@ async def _execute_meta_call(
             session_service=session_service,
         )
 
-    async with runner:
+    await runner.__aenter__()
+    primary_error: BaseException | None = None
+    suppressed = False
+    try:
         async for event in runner.run_async(
             user_id="system",
             session_id=session.id,
@@ -212,6 +237,9 @@ async def _execute_meta_call(
                 completion = um.candidates_token_count or 0
                 total_prompt += prompt
                 total_completion += completion
+                if usage_totals is not None:
+                    usage_totals["prompt"] = total_prompt
+                    usage_totals["completion"] = total_completion
                 if prompt or completion:
                     _log.info("Tokens | prompt={} completion={}", prompt, completion)
 
@@ -230,8 +258,28 @@ async def _execute_meta_call(
                 raise RuntimeError(
                     f"{agent_name} LLM error {event.error_code}: {event.error_message}"
                 )
+    except BaseException as exc:  # noqa: BLE001 - preserve primary errors on cleanup
+        primary_error = exc
+    finally:
+        try:
+            suppressed = await runner.__aexit__(
+                type(primary_error) if primary_error else None,
+                primary_error,
+                primary_error.__traceback__ if primary_error else None,
+            )
+        except BaseException as cleanup_error:
+            if primary_error is None:
+                raise
+            _log.warning(
+                "Meta-agent runner cleanup failed after primary error: {}",
+                cleanup_error,
+            )
+    if primary_error is not None and not suppressed:
+        raise primary_error
 
     elapsed = time.monotonic() - start
+    if usage_totals is not None:
+        usage_totals["elapsed"] = elapsed
     _log.info(
         "{} complete | elapsed={:.1f}s prompt={} completion={}",
         agent_name,
@@ -272,6 +320,24 @@ async def _execute_meta_call(
         completion_tokens=total_completion,
         elapsed=elapsed,
     )
+
+
+def _retry_message(user_message: str, error: Exception) -> str:
+    details = str(error)
+    if (
+        "validationerror" in details.lower()
+        or "references unknown agent" in details.lower()
+    ):
+        feedback = (
+            "The previous structured configuration was invalid:\n"
+            f"{details}\n"
+            "Regenerate the complete config and correct every validation error. "
+            "For pipeline references, use agent_name values exactly as declared "
+            "in the agents list; do not add or alter agent names."
+        )
+    else:
+        feedback = f"PREVIOUS ATTEMPT FAILED: {details}\nPlease fix this error in your response."
+    return f"{user_message}\n\n{feedback}"
 
 
 def _resolve_timeout(timeout_s: float | None) -> float | None:

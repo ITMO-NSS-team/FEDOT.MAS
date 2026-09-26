@@ -72,6 +72,23 @@ def test_disabled_subtitles_are_returned_as_structured_error(monkeypatch, name, 
 
 
 @pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.youtube.com/",
+        "https://www.youtube.com/@channel",
+        "https://www.youtube.com/results?search_query=topic",
+    ],
+)
+def test_video_info_rejects_non_video_youtube_urls_before_upstream(url):
+    result, calls = _run(
+        "get_video_info", {"url": url}, ToolResult(content="unused")
+    )
+    assert calls == []
+    assert result.is_error
+    assert result.structured_content["error_code"] == "INVALID_VIDEO_URL"
+
+
+@pytest.mark.parametrize(
     "exception,error_code",
     [
         (TranscriptsDisabled, "TRANSCRIPTS_DISABLED"),

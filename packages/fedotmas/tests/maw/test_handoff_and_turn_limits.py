@@ -1595,6 +1595,36 @@ async def test_invalid_calls_do_not_spend_evidence_stagnation_turns():
 
 
 @pytest.mark.asyncio
+async def test_source_level_transcript_error_counts_as_executed_evidence_attempt():
+    inspect = FunctionTool(func=lambda url: {})
+    inspect.name = "get_transcript"
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(name="researcher", instruction="Research", output_key="out"),
+        [inspect], None, autonomous=False,
+    )
+    state: dict = {}
+    context = _context(state)
+    context._invocation_context.agent.name = "researcher"
+    await agent.before_agent_callback(context)
+    tool_context = MagicMock()
+    tool_context._invocation_context.agent.name = "researcher"
+    tool_context.state = state
+
+    await agent.before_model_callback(context, _research_request(inspect))
+    await agent.after_tool_callback(
+        inspect,
+        {"url": "https://youtube.com/watch?v=video123"},
+        tool_context,
+        {"isError": True, "error_code": "TRANSCRIPTS_DISABLED"},
+    )
+    assert state[builder.RESEARCH_EVIDENCE_ACTION_STATE_KEY]["researcher"] == 1
+
+    await agent.before_model_callback(context, _research_request(inspect))
+    progress = state[builder.RESEARCH_PROGRESS_STATE_KEY]["researcher"]
+    assert progress["no_progress_turns"] == 1
+
+
+@pytest.mark.asyncio
 async def test_resolved_required_output_field_resets_no_progress():
     search = FunctionTool(func=lambda query: {"results": []})
     search.name = "search"

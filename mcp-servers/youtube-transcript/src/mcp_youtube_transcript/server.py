@@ -79,9 +79,6 @@ class TranscriptErrors(Middleware):
         context: MiddlewareContext[mt.CallToolRequestParams],
         call_next: CallNext[mt.CallToolRequestParams, ToolResult],
     ) -> ToolResult:
-        if context.message.name not in TRANSCRIPT_TOOLS:
-            return await call_next(context)
-
         arguments = context.message.arguments or {}
         if context.message.name in VIDEO_URL_TOOLS:
             url = arguments.get("url")
@@ -90,6 +87,8 @@ class TranscriptErrors(Middleware):
                     "INVALID_VIDEO_URL",
                     "Expected a direct YouTube video URL, not a homepage, channel, or search page.",
                 )
+        if context.message.name not in TRANSCRIPT_TOOLS:
+            return await call_next(context)
         if "next_cursor" in arguments and arguments["next_cursor"] is not None:
             cursor = arguments["next_cursor"]
             if (

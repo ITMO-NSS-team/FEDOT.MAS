@@ -1,0 +1,62 @@
+[
+  {
+    "task_id": "9b54f9d9-35ee-4a14-b62f-d130ea00317f",
+    "input_tokens": 240677,
+    "cached_input_tokens": 199680,
+    "output_tokens": 1840,
+    "total_tokens": 242517,
+    "web_search_calls": 0,
+    "token_cost_usd": 0.14401,
+    "web_cost_usd": 0.0,
+    "estimated_cost_usd": 0.14401,
+    "exit_code": 0
+  },
+  {
+    "task_id": "56db2318-640f-477a-a82f-bc93ad13e882",
+    "input_tokens": 33744,
+    "cached_input_tokens": 27136,
+    "output_tokens": 453,
+    "total_tokens": 34197,
+    "web_search_calls": 0,
+    "token_cost_usd": 0.024079200000000002,
+    "web_cost_usd": 0.0,
+    "estimated_cost_usd": 0.024079200000000002,
+    "exit_code": 0
+  },
+  {
+    "task_id": "e961a717-6b25-4175-8a68-874d28190ee4",
+    "input_tokens": 83253,
+    "cached_input_tokens": 56320,
+    "output_tokens": 595,
+    "total_tokens": 83848,
+    "web_search_calls": 6,
+    "token_cost_usd": 0.07226999999999999,
+    "web_cost_usd": 0.06,
+    "estimated_cost_usd": 0.13227,
+    "exit_code": 0
+  },
+  {
+    "task_id": "851e570a-e3de-4d84-bcfa-cc85578baa59",
+    "input_tokens": 85040,
+    "cached_input_tokens": 72448,
+    "output_tokens": 1002,
+    "total_tokens": 86042,
+    "web_search_calls": 2,
+    "token_cost_usd": 0.0516976,
+    "web_cost_usd": 0.02,
+    "estimated_cost_usd": 0.0716976,
+    "exit_code": 0
+  },
+  {
+    "task_id": "0bdb7c40-671d-4ad1-9ce3-986b159c0ddc",
+    "input_tokens": 112584,
+    "cached_input_tokens": 89856,
+    "output_tokens": 1375,
+    "total_tokens": 113959,
+    "web_search_calls": 8,
+    "token_cost_usd": 0.0799272,
+    "web_cost_usd": 0.08,
+    "estimated_cost_usd": 0.1599272,
+    "exit_code": 0
+  }
+]

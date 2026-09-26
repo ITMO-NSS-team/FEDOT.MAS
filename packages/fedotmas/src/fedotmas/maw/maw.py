@@ -112,24 +112,35 @@ class MAW(BaseMAS[MAWConfig]):
             task,
         )
 
-        if existing_agents is not None and reuse == "only":
-            meta_result = await self._generate_from_pool(task, existing_agents)
-        # A caller-supplied pool has no place in the single-stage prompt, so it
-        # forces the staged path regardless of how this instance was built.
-        elif existing_agents is not None or self._two_stage:
-            meta_result = await self._generate_two_stage(task, existing_agents)
-        else:
-            meta_result = await generate_pipeline_config(
-                task,
-                meta_model=self._meta_model,
-                worker_models=self._worker_models,
-                temperature=self._temperature,
-                mcp_registry=self._mcp_registry,
-                tool_catalog=self._tool_catalog,
-                session_service=self._session_service,
-                max_retries=self._max_retries,
-                plugins=self._plugins,
+        try:
+            if existing_agents is not None and reuse == "only":
+                meta_result = await self._generate_from_pool(task, existing_agents)
+            # A caller-supplied pool has no place in the single-stage prompt, so it
+            # forces the staged path regardless of how this instance was built.
+            elif existing_agents is not None or self._two_stage:
+                meta_result = await self._generate_two_stage(task, existing_agents)
+            else:
+                meta_result = await generate_pipeline_config(
+                    task,
+                    meta_model=self._meta_model,
+                    worker_models=self._worker_models,
+                    temperature=self._temperature,
+                    mcp_registry=self._mcp_registry,
+                    tool_catalog=self._tool_catalog,
+                    session_service=self._session_service,
+                    max_retries=self._max_retries,
+                    plugins=self._plugins,
+                )
+        except Exception as exc:
+            # A failed structured generation has no MetaAgentResult, but its
+            # provider usage still belongs in the benchmark's run accounting.
+            self._last_meta_result = MetaAgentResult(
+                config=None,
+                total_prompt_tokens=int(getattr(exc, "prompt_tokens", 0)),
+                total_completion_tokens=int(getattr(exc, "completion_tokens", 0)),
+                elapsed=float(getattr(exc, "elapsed", 0.0)),
             )
+            raise
 
         self._last_meta_result = meta_result
         self._resolved_workers = meta_result.worker_models

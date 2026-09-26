@@ -180,6 +180,85 @@ async def test_discovery_gate_is_stateful_and_reopens_after_failed_candidate_ins
 
 
 @pytest.mark.asyncio
+async def test_policy_block_does_not_mark_candidate_inspected_or_reopen_gate():
+    telemetry = ResearchTelemetry()
+    context = _context()
+    search = MagicMock(name="search")
+    search.name = "search"
+    search.description = "Search the web for candidate sources."
+    args = {"query": "source"}
+    await telemetry.before_tool_callback(tool=search, tool_args=args, tool_context=context)
+    await telemetry.after_tool_callback(
+        tool=search,
+        tool_args=args,
+        tool_context=context,
+        result={"results": [{"url": "https://example.org/evidence"}]},
+    )
+    candidate = context.state["__fedotmas_research_candidates"]["researcher"][0]
+    before_candidate = dict(candidate)
+    before_gate = dict(context.state["__fedotmas_research_gate"]["researcher"])
+
+    inspect = MagicMock(name="markdown")
+    inspect.name = "markdown"
+    url = "https://example.org/evidence"
+    await telemetry.before_tool_callback(
+        tool=inspect, tool_args={"url": url}, tool_context=context
+    )
+    await telemetry.after_tool_callback(
+        tool=inspect,
+        tool_args={"url": url},
+        tool_context=context,
+        result={"isError": True, "error_code": "RESEARCH_CONVERGENCE_REQUIRED"},
+    )
+
+    assert candidate == before_candidate
+    assert context.state["__fedotmas_research_gate"]["researcher"] == before_gate
+    assert url not in telemetry._inspected["researcher"]
+    assert telemetry.snapshot()["researcher"]["tool_calls"][-1]["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_transcript_source_error_is_an_executed_failed_inspection():
+    telemetry = ResearchTelemetry()
+    context = _context()
+    search = MagicMock(name="search")
+    search.name = "search"
+    search.description = "Search the web for candidate sources."
+    args = {"query": "video"}
+    await telemetry.before_tool_callback(tool=search, tool_args=args, tool_context=context)
+    await telemetry.after_tool_callback(
+        tool=search,
+        tool_args=args,
+        tool_context=context,
+        result={"results": [{"url": "https://youtube.com/watch?v=video123"}]},
+    )
+    inspect = MagicMock(name="get_transcript")
+    inspect.name = "get_transcript"
+    url = "https://youtube.com/watch?v=video123"
+    await telemetry.before_tool_callback(
+        tool=inspect, tool_args={"url": url}, tool_context=context
+    )
+    await telemetry.after_tool_callback(
+        tool=inspect,
+        tool_args={"url": url},
+        tool_context=context,
+        result={
+            "isError": True,
+            "structuredContent": {
+                "error_code": "TRANSCRIPTS_DISABLED",
+                "message": "Subtitles are disabled for this video.",
+            },
+        },
+    )
+    candidate = context.state["__fedotmas_research_candidates"]["researcher"][0]
+    assert candidate["inspected"] is True
+    assert candidate["inspection_status"] == "failed"
+    assert url in telemetry._inspected["researcher"]
+    calls = telemetry.snapshot()["researcher"]["tool_calls"]
+    assert calls[-1]["status"] == "executed_error"
+
+
+@pytest.mark.asyncio
 async def test_unrelated_scrape_does_not_count_as_candidate_inspection():
     telemetry = ResearchTelemetry()
     context = _context()

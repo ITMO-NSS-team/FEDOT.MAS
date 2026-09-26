@@ -55,7 +55,7 @@ from fedotmas.plugins._research_telemetry import (
     RESEARCH_PROGRESS_STATE_KEY,
     RESEARCH_TURN_STATE_KEY,
 )
-from fedotmas.plugins._tool_error_circuit_breaker import is_control_flow_error_code
+from fedotmas.plugins._tool_error_circuit_breaker import is_non_executed_policy_block
 
 DISCOVERY_VALIDATION_STATE_KEY = "__fedotmas_discovery_validation"
 MAX_DISCOVERY_VALIDATIONS = 2
@@ -1092,7 +1092,7 @@ def _build_llm_agent(
                 tool_context.state[RESEARCH_CONTROLLER_STATE_KEY] = ready_root
         capability = _runtime_tool_capability(tool)
         error_code = tool_response.get("error_code") if isinstance(tool_response, dict) else None
-        control_failure = is_control_flow_error_code(error_code)
+        control_failure = is_non_executed_policy_block(error_code)
         is_research_action = (
             capability in {
                 ToolCapability.DISCOVERY,

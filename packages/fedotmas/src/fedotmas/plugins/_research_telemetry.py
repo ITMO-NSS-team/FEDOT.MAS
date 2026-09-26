@@ -23,25 +23,10 @@ from fedotmas.mcp.capabilities import (
     tool_capability,
 )
 from fedotmas.plugins._tool_error_circuit_breaker import (
-    DUPLICATE_TOOL_CALL,
-    TOOL_CIRCUIT_OPEN,
-    WEB_BUDGET_EXHAUSTED,
+    get_explicit_error_code,
+    is_non_executed_policy_block,
 )
 
-CONTROL_CODES = frozenset(
-    {
-        DUPLICATE_TOOL_CALL,
-        WEB_BUDGET_EXHAUSTED,
-        TOOL_CIRCUIT_OPEN,
-        "INSPECT_CANDIDATES_FIRST",
-        "DISCOVERY_FANOUT_LIMIT",
-        "SOURCE_CANDIDATES_READY",
-        "RESEARCH_CONVERGENCE_REQUIRED",
-        "EVIDENCE_FIRST_SEARCH_DISABLED",
-        "INSPECTION_ONLY_DISCOVERY_DISABLED",
-        "DISCOVERY_ONLY_INSPECTION_DISABLED",
-    }
-)
 RESEARCH_GATE_STATE_KEY = "__fedotmas_research_gate"
 RESEARCH_MODE_STATE_KEY = "__fedotmas_research_modes"
 RESEARCH_POLICY_STATE_KEY = "__fedotmas_research_policies"
@@ -521,6 +506,24 @@ class ResearchTelemetry(BasePlugin):
         if kind is None and tool_capability(tool.name, description=getattr(tool, "description", "") or "") == ToolCapability.DISCOVERY:
             kind = "search"
         agent = tool_context._invocation_context.agent.name
+        error_code = get_explicit_error_code(result)
+        if is_non_executed_policy_block(error_code):
+            self._record_call_result(
+                agent,
+                tool.name,
+                tool_args,
+                result,
+                call_id=_tool_call_id(tool_context),
+                is_discovery=kind == "search",
+            )
+            _record_control_block(
+                tool_context.state,
+                agent,
+                tool.name,
+                error_code,
+                _tool_call_id(tool_context),
+            )
+            return
         if normalize_tool_name(strip_tool_name_prefix(tool.name)) == "get_next_action":
             action = _find_controller_action(result)
             if action:
@@ -618,18 +621,6 @@ class ResearchTelemetry(BasePlugin):
                 metrics["candidate_urls_discovered"] = len(
                     tool_context.state.get(RESEARCH_CANDIDATE_LEDGER_KEY, {}).get(agent, [])
                 ) if had_ledger else metrics["candidate_urls_discovered"]
-        if (
-            isinstance(result.get("error_code"), str)
-            and result["error_code"] in CONTROL_CODES
-        ):
-            _record_control_block(
-                tool_context.state,
-                agent,
-                tool.name,
-                result["error_code"],
-                _tool_call_id(tool_context),
-            )
-            return
         if kind == "browser_agent":
             payload = _browser_payload(result)
             usage = payload.get("usage", {}) if payload else {}
@@ -881,7 +872,7 @@ class ResearchTelemetry(BasePlugin):
         item["elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
         item["result_chars"] = len(json.dumps(result, ensure_ascii=False, default=str))
         item["result_count"] = _result_count(result)
-        code = result.get("error_code")
+        code = get_explicit_error_code(result)
         error = str(result.get("error", result.get("message", "")))
         is_error = (
             result.get("isError") is True
@@ -895,7 +886,7 @@ class ResearchTelemetry(BasePlugin):
                 error = str(
                     browser_result.get("error", browser_result.get("message", ""))
                 )
-        if isinstance(code, str) and code in CONTROL_CODES:
+        if is_non_executed_policy_block(code):
             item["status"] = "blocked"
             item["error_category"] = _error_category(code)
         elif is_error:
