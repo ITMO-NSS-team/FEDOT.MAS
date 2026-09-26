@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import tempfile
+from copy import deepcopy
 from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -130,7 +131,8 @@ async def run_codex_cli(
         if output_schema is not None:
             schema_path = Path(temp_dir) / "schema.json"
             schema_path.write_text(
-                json.dumps(output_schema, ensure_ascii=False), encoding="utf-8"
+                json.dumps(_strict_output_schema(output_schema), ensure_ascii=False),
+                encoding="utf-8",
             )
             command.extend(["--output-schema", str(schema_path)])
         command.append("-")
@@ -260,6 +262,40 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list | tuple):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _strict_output_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Adapt fixed-shape schemas to Codex strict output without mutating callers.
+
+    Defaulted fields become required on the wire, retaining their original types
+    (including nullable unions). Recursive references remain references. Dynamic
+    dictionaries cannot be closed without losing data, so reject them explicitly.
+    """
+    result = deepcopy(schema)
+
+    def visit(node: dict[str, Any]) -> None:
+        node.pop("default", None)
+        if node.get("type") == "object" or "properties" in node:
+            if node.get("additionalProperties") not in (None, False):
+                raise ValueError(
+                    "Codex structured output requires fixed object properties; "
+                    "dynamic additionalProperties are not supported"
+                )
+            if "patternProperties" in node:
+                raise ValueError("Codex structured output does not support patternProperties")
+            node["additionalProperties"] = False
+            node["required"] = list(node.get("properties", {}))
+        for key in ("properties", "$defs", "definitions"):
+            for child in node.get(key, {}).values():
+                visit(child)
+        if isinstance(node.get("items"), dict):
+            visit(node["items"])
+        for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
+            for child in node.get(key, []):
+                visit(child)
+
+    visit(result)
+    return result
 
 
 def _response_schema(request: LlmRequest) -> dict[str, Any] | None:
