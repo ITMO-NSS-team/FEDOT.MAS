@@ -180,7 +180,7 @@ textarea#query:focus{border-color:color-mix(in srgb, var(--coord) 50%, transpare
 .tag-maw{color:var(--worker); border-color:color-mix(in srgb, var(--worker) 35%, transparent)}
 
 .block-foot{border-top:1px solid var(--line-soft); padding-top:11px; gap:5px; margin-top:auto; flex:0 0 auto}
-.stat-line{display:flex; justify-content:space-between; font-size:12px; color:var(--text-mute)}
+.stat-line{display:flex; flex-wrap:wrap; gap:4px 8px; justify-content:space-between; font-size:12px; color:var(--text-mute)}
 .stat-line b{color:var(--text-dim); font-weight:560}
 .stat-line b.hl{color:var(--coord)}
 

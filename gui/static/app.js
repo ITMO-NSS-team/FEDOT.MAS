@@ -1202,7 +1202,8 @@ function renderEffort(p) {
     box.innerHTML = `<div class="empty">${esc(p.manualNote || "Разбор не запрашивался.")}</div>`;
     return;
   }
-  box.innerHTML = b.subtasks.map((t) => `
+  box.innerHTML = (p.manualNote ? `<div class="effort-note">${esc(p.manualNote)}</div>` : "")
+    + b.subtasks.map((t) => `
     <div class="effort-row">
       <b>${esc(t.name)}</b>
       <span class="h">${num(t.hours)} ч</span>
@@ -1268,7 +1269,7 @@ function loadPreset(p) {
     // Подсказку у сценариев с разбором собираем заново, а не берём сохранённую:
     // в старых записях осталась неверная фраза про «без допущения о длине дня».
     manualRow.title = p.breakdown && p.breakdown.subtasks
-      ? `Сумма по ${p.breakdown.subtasks.length} подзадачам: ${hoursText(p.breakdown.total_hours)}.`
+      ? `${p.manualNote || ""} Сумма по ${p.breakdown.subtasks.length} подзадачам: ${hoursText(p.breakdown.total_hours)}.`
         + ` Дни — часы, делённые на восьмичасовой рабочий день.`
       : p.manualNote
         || "Экспертная оценка: сколько заняла бы разработка такой же системы вручную — "
@@ -2235,6 +2236,13 @@ function initPresets() {
     if (saved && (saved.queryRevision || 0) < (preset.queryRevision || 0)) {
       saved.query = preset.query;
       saved.queryRevision = preset.queryRevision;
+      queryUpdated = true;
+    }
+    if (saved && (saved.effortRevision || 0) < (preset.effortRevision || 0)) {
+      saved.manual = preset.manual;
+      saved.manualNote = preset.manualNote;
+      saved.breakdown = JSON.parse(JSON.stringify(preset.breakdown));
+      saved.effortRevision = preset.effortRevision;
       queryUpdated = true;
     }
   }
