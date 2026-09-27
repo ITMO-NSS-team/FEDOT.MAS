@@ -79,6 +79,10 @@ def test_mcp_exposes_only_solve_with_code():
 
     tools = asyncio.run(list_tools())
     assert [tool.name for tool in tools] == ["solve_with_code"]
+    description = tools[0].description or ""
+    assert "host path" in description
+    assert "fresh, independent" in description
+    assert "do not persist" in description
 
 
 @pytest.mark.asyncio
@@ -116,6 +120,7 @@ async def test_csv_filter_stages_only_explicit_file(monkeypatch, tmp_path):
     source.write_text("region,amount\neast,40\nwest,80\neast,15\n")
     sandbox = FakeSandbox([execution(stdout=["row 3: west, 80"])])
     configure(monkeypatch, sandbox)
+    captured = []
     script_model(
         monkeypatch,
         [
@@ -129,6 +134,7 @@ async def test_csv_filter_stages_only_explicit_file(monkeypatch, tmp_path):
                 "evidence": ["orders.csv row 3 has region west and amount 80"],
             },
         ],
+        captured=captured,
     )
 
     result = await server._solve(
@@ -143,6 +149,63 @@ async def test_csv_filter_stages_only_explicit_file(monkeypatch, tmp_path):
     assert result.answer == "80"
     assert result.files_used == ["orders.csv"]
     assert sandbox.uploads == {"/tmp/code_agent/input_0.csv": source.read_bytes()}
+    tool_input = json.loads(captured[0][1]["content"])
+    assert tool_input["task"] == "Find the west-region order amount"
+    assert tool_input["files"][0]["sandbox_path"] == "/tmp/code_agent/input_0.csv"
+    assert "west,80" not in tool_input["task"]
+    assert result.session_persistent is False
+
+
+@pytest.mark.asyncio
+async def test_oversized_task_is_actionable_and_does_not_poison_later_calls(monkeypatch):
+    sandbox = FakeSandbox([execution(stdout=["42"])])
+    configure(monkeypatch, sandbox)
+    captured = []
+    script_model(
+        monkeypatch,
+        [{"action": "execute", "code": "print(6 * 7)"},
+         {"action": "finish", "status": "completed", "answer": "42"}],
+        captured=captured,
+    )
+
+    oversized = await server._solve("x" * 8_001, [], "", 2, 5, 1_000)
+    repeated = await server._solve("y" * 8_001, [], "", 2, 5, 1_000)
+    normal = await server._solve("Calculate 6 times 7", [], "", 2, 5, 1_000)
+
+    assert oversized.status == repeated.status == "blocked"
+    assert oversized.error_code == repeated.error_code == "CODE_AGENT_TASK_TOO_LARGE"
+    assert "files parameter" in oversized.errors[0]
+    assert normal.status == "completed"
+    assert normal.answer == "42"
+    assert len(captured) == 2
+    assert sandbox.killed
+
+
+@pytest.mark.asyncio
+async def test_large_file_is_staged_without_inline_task_or_context(monkeypatch, tmp_path):
+    source = tmp_path / "large.txt"
+    source.write_text("constraint=" + "x" * 30_000)
+    sandbox = FakeSandbox([execution(stdout=["30,012 characters"] )])
+    configure(monkeypatch, sandbox)
+    captured = []
+    script_model(
+        monkeypatch,
+        [
+            {"action": "execute", "code": "print(len(open('/tmp/code_agent/input_0.txt').read()))"},
+            {"action": "finish", "status": "completed", "answer": "30012"},
+        ],
+        captured=captured,
+    )
+
+    result = await server._solve(
+        "Count characters in the supplied file", [str(source)], "", 2, 5, 1_000
+    )
+
+    first_user_message = captured[0][1]["content"]
+    assert str(source) not in first_user_message
+    assert "constraint=" not in first_user_message
+    assert "/tmp/code_agent/input_0.txt" in first_user_message
+    assert result.files_used == ["large.txt"]
 
 
 @pytest.mark.asyncio

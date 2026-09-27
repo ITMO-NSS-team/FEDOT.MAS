@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import re
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
@@ -69,6 +70,7 @@ _log = get_logger("fedotmas.maw.builder")
 #: A reference to another step's output inside an instruction.  ``\w+`` keeps
 #: this to plain state keys, leaving ADK to handle ``{artifact.name}``.
 _STATE_REF_RE = re.compile(r"(?<!\{)\{(\w+)\??\}(?!\})")
+MAX_CONTRACT_REPAIR_SOURCE_CHARS = 8_000
 
 
 def _missing_input_marker(key: str) -> str:
@@ -259,7 +261,7 @@ async def _repair_contract_once(
     previous: Any,
     missing: list[str],
     upstream_identity_values: dict[str, Any],
-) -> tuple[Any, dict[str, int]]:
+) -> tuple[Any, dict[str, int], str | None]:
     """Make one tools-free formatting repair using only the existing artifact."""
     llm = LLMRegistry.new_llm(model) if isinstance(model, str) else model
     prompt = (
@@ -277,6 +279,7 @@ async def _repair_contract_once(
         "Previous output:\n"
         f"{previous}"
     )
+    max_output_tokens = _contract_repair_output_budget(cfg)
     request = LlmRequest(
         contents=[
             genai_types.Content(
@@ -285,11 +288,19 @@ async def _repair_contract_once(
         ],
         config=genai_types.GenerateContentConfig(
             temperature=0,
-            max_output_tokens=cfg.max_output_tokens or 8192,
+            max_output_tokens=max_output_tokens,
         ),
     )
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    content_text = ""
+    finish_reason: str | None = None
     async for response in llm.generate_content_async(request):
+        reason = getattr(response, "finish_reason", None)
+        candidates = getattr(response, "candidates", None) or []
+        if reason is None and candidates:
+            reason = getattr(candidates[0], "finish_reason", None)
+        if reason is not None:
+            finish_reason = getattr(reason, "name", None) or str(reason)
         if response.usage_metadata is not None:
             usage["prompt_tokens"] = (
                 response.usage_metadata.prompt_token_count or 0
@@ -297,11 +308,54 @@ async def _repair_contract_once(
             usage["completion_tokens"] = (
                 response.usage_metadata.candidates_token_count or 0
             )
-        parts = response.content.parts if response.content else []
+        parts = (response.content.parts or []) if response.content else []
         text = "".join(part.text or "" for part in parts if part.text)
         if text:
-            return text, usage
-    return None, usage
+            content_text += text
+    _log.info(
+        "Contract repair response | agent={} finish_reason={} prompt_tokens={} "
+        "completion_tokens={} content_chars={}",
+        cfg.name,
+        finish_reason or "unknown",
+        usage["prompt_tokens"],
+        usage["completion_tokens"],
+        len(content_text),
+    )
+    if not content_text:
+        _log.warning(
+            "Contract repair returned no content | agent={} finish_reason={} "
+            "prompt_tokens={} completion_tokens={}",
+            cfg.name,
+            finish_reason or "unknown",
+            usage["prompt_tokens"],
+            usage["completion_tokens"],
+        )
+        return None, usage, finish_reason
+    return content_text, usage, finish_reason
+
+
+def _contract_repair_output_budget(cfg: MAWAgentConfig) -> int:
+    """Use an agent-specific cap, then the effective worker cap, then default."""
+    if cfg.max_output_tokens is not None:
+        return cfg.max_output_tokens
+    raw = os.getenv("FEDOTMAS_WORKER_MAX_OUTPUT_TOKENS", "8192")
+    try:
+        parsed = int(raw)
+    except ValueError:
+        _log.warning(
+            "Invalid FEDOTMAS_WORKER_MAX_OUTPUT_TOKENS={!r}; contract repair "
+            "uses the 8192 token default",
+            raw,
+        )
+        return 8192
+    if parsed < 1:
+        _log.warning(
+            "Invalid FEDOTMAS_WORKER_MAX_OUTPUT_TOKENS={!r}; contract repair "
+            "uses the 8192 token default",
+            raw,
+        )
+        return 8192
+    return parsed
 
 
 def _repair_values_supported(
@@ -616,6 +670,25 @@ def _build_llm_agent(
     model = _resolve_llm(cfg.model, worker_models)
     _log.debug("Built agent | name={} model={}", cfg.name, model)
     instruction_text = cfg.instruction
+    if "sandbox" in cfg.tools:
+        instruction_text += (
+            "\n\nSandbox file handling: upload_file(path=...) reads a file from the HOST; "
+            "run_code and run_command execute INSIDE E2B, where host paths are not "
+            "directly accessible. Upload each needed file once, then parse it "
+            "programmatically inside E2B. Do not repeatedly print the full file "
+            "through tool results."
+        )
+    if "code-agent" in cfg.tools:
+        instruction_text += (
+            "\n\nCode-agent file and session semantics: for computation over a local "
+            "file, pass its HOST path through solve_with_code(files=[path]). Do not "
+            "copy file contents into task or context; those fields are instructions, "
+            "not data transport. Files are staged automatically. Each solve_with_code "
+            "call uses a fresh independent sandbox: filesystem, packages, Python state, "
+            "scripts, and solver progress do not persist between calls. Prefer one "
+            "complete bounded call; if another call is needed, pass every required "
+            "file again."
+        )
     terminal_boundary = (
         final_answer_contract is not None and cfg.name == final_answer_agent
     )
@@ -758,48 +831,80 @@ def _build_llm_agent(
             repaired = None
             repaired_missing = missing
             if not _is_blank(value):
-                try:
-                    repaired, usage = await _repair_contract_once(
-                        model,
-                        cfg,
-                        value,
-                        missing,
-                        _upstream_identity_values(callback_context.state, cfg),
-                    )
-                    metadata = callback_context.state.setdefault(
-                        EXECUTION_METADATA_KEY, {}
-                    )
-                    repair_tokens = metadata.setdefault(
-                        "contract_repair_tokens",
-                        {"prompt_tokens": 0, "completion_tokens": 0},
-                    )
-                    if isinstance(repair_tokens, dict):
-                        for key, count in usage.items():
-                            repair_tokens[key] = repair_tokens.get(key, 0) + count
-                    repaired_missing = validate_output_contract(
-                        repaired, cfg.output_contract
-                    )
-                    upstream_identity = _upstream_identity_values(
-                        callback_context.state, cfg
-                    )
-                    unsupported = _repair_values_supported(
-                        value,
-                        repaired,
-                        cfg,
-                        upstream_identity,
-                    )
-                    repaired_missing = list(
-                        dict.fromkeys([*repaired_missing, *unsupported])
-                    )
-                except Exception as exc:  # noqa: BLE001 - one bounded repair is best-effort
+                source_chars = (
+                    len(value)
+                    if isinstance(value, str)
+                    else len(json.dumps(value, ensure_ascii=False, default=str))
+                )
+                if source_chars > MAX_CONTRACT_REPAIR_SOURCE_CHARS:
                     _record_contract_repair(
                         callback_context.state,
                         cfg.name,
-                        {"status": "repair_failed", "error": str(exc)[:300]},
+                        {
+                            "status": "repair_skipped_output_too_large",
+                            "source_chars": source_chars,
+                            "max_source_chars": MAX_CONTRACT_REPAIR_SOURCE_CHARS,
+                            "missing_fields": missing,
+                        },
                     )
-                    _log.warning(
-                        "Contract repair failed | agent={} error={}", cfg.name, exc
-                    )
+                else:
+                    try:
+                        repaired, usage, finish_reason = await _repair_contract_once(
+                            model,
+                            cfg,
+                            value,
+                            missing,
+                            _upstream_identity_values(callback_context.state, cfg),
+                        )
+                        metadata = callback_context.state.setdefault(
+                            EXECUTION_METADATA_KEY, {}
+                        )
+                        repair_tokens = metadata.setdefault(
+                            "contract_repair_tokens",
+                            {"prompt_tokens": 0, "completion_tokens": 0},
+                        )
+                        if isinstance(repair_tokens, dict):
+                            for key, count in usage.items():
+                                repair_tokens[key] = repair_tokens.get(key, 0) + count
+                        if repaired is None:
+                            # A failed formatting request is not evidence that
+                            # the source artifact was semantically invalid. Keep
+                            # only the original contract failures unresolved.
+                            repaired_missing = missing
+                            _record_contract_repair(
+                                callback_context.state,
+                                cfg.name,
+                                {
+                                    "status": "repair_no_content",
+                                    "finish_reason": finish_reason,
+                                    "missing_fields": missing,
+                                },
+                            )
+                        else:
+                            repaired_missing = validate_output_contract(
+                                repaired, cfg.output_contract
+                            )
+                            upstream_identity = _upstream_identity_values(
+                                callback_context.state, cfg
+                            )
+                            unsupported = _repair_values_supported(
+                                value,
+                                repaired,
+                                cfg,
+                                upstream_identity,
+                            )
+                            repaired_missing = list(
+                                dict.fromkeys([*repaired_missing, *unsupported])
+                            )
+                    except Exception as exc:  # noqa: BLE001 - one bounded repair is best-effort
+                        _record_contract_repair(
+                            callback_context.state,
+                            cfg.name,
+                            {"status": "repair_failed", "error": str(exc)[:300]},
+                        )
+                        _log.warning(
+                            "Contract repair failed | agent={} error={}", cfg.name, exc
+                        )
             if repaired is not None and not repaired_missing:
                 callback_context.state[cfg.output_key] = repaired
                 value = repaired
@@ -1127,20 +1232,36 @@ def _build_llm_agent(
         if used >= per_agent_limit:
             limited = metadata.setdefault("limited_agents", {})
             if isinstance(limited, dict):
-                limited[cfg.name] = {"limit": per_agent_limit, "turns": used}
+                limited[cfg.name] = {
+                    "limit": per_agent_limit,
+                    "turns": used,
+                    "node": cfg.name,
+                }
+            _log.warning(
+                "Agent model-turn limit reached | agent={} used={} limit={} node={}",
+                cfg.name,
+                used,
+                per_agent_limit,
+                cfg.name,
+            )
+            limit_parts = (
+                [genai_types.Part.from_function_call(name="exit_loop", args={})]
+                if any(getattr(tool, "__name__", "") == "exit_loop" for tool in tools)
+                else [
+                    genai_types.Part.from_text(
+                        text=(
+                            f"INCOMPLETE: agent '{cfg.name}' reached its "
+                            f"{per_agent_limit}-turn model limit before finishing. "
+                            "Preserve this result as limited; do not claim the "
+                            "task is complete."
+                        )
+                    )
+                ]
+            )
             return LlmResponse(
                 content=genai_types.Content(
                     role="model",
-                    parts=[
-                        genai_types.Part.from_text(
-                            text=(
-                                f"INCOMPLETE: agent '{cfg.name}' reached its "
-                                f"{per_agent_limit}-turn model limit before finishing. "
-                                "Preserve this result as limited; do not claim the "
-                                "task is complete."
-                            )
-                        )
-                    ],
+                    parts=limit_parts,
                 ),
                 turnComplete=True,
                 finishReason=genai_types.FinishReason.STOP,
@@ -1703,15 +1824,14 @@ def _abstention_reason(value: Any) -> str:
 
 
 def _inject_exit_loop(children: list[BaseAgent]) -> None:
-    """Add ``exit_loop`` tool to the last LlmAgent in a loop's children."""
-    for agent in reversed(children):
+    """Add ``exit_loop`` to every LLM loop child so limits stop the loop."""
+    for agent in children:
         if isinstance(agent, LlmAgent):
             if agent.tools is None:
                 agent.tools = [exit_loop]
             elif exit_loop not in agent.tools:
                 agent.tools.append(cast(Any, exit_loop))
             _log.debug("Injected exit_loop into agent={}", agent.name)
-            break
 
 
 WORKFLOW_PREFIXES = ("seq_", "par_", "loop_")

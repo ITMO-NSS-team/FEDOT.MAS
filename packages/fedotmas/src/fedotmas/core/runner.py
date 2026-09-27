@@ -134,29 +134,39 @@ async def run_pipeline(
     failure: Exception | None = None
     timed_out = False
 
-    async with Runner(
-        app=app,
-        session_service=session_service,
-        memory_service=memory_service,
-    ) as runner:
-        try:
-            await _consume_with_timeout(
-                runner=runner,
-                user_id=user_id,
-                session_id=session.id,
-                message=message,
-                usage=usage,
-                truncated_agents=truncated_agents,
-                timeout=timeout,
-            )
-        except TimeoutError:
-            timed_out = True
+    try:
+        async with Runner(
+            app=app,
+            session_service=session_service,
+            memory_service=memory_service,
+        ) as runner:
+            try:
+                await _consume_with_timeout(
+                    runner=runner,
+                    user_id=user_id,
+                    session_id=session.id,
+                    message=message,
+                    usage=usage,
+                    truncated_agents=truncated_agents,
+                    timeout=timeout,
+                )
+            except TimeoutError:
+                timed_out = True
+                _log.warning(
+                    "Pipeline execution exceeded {}s budget; preserving partial state",
+                    timeout,
+                )
+            except Exception as exc:  # noqa: BLE001 - retain partial accounting for any agent failure
+                failure = exc
+    except Exception as cleanup_or_runner_error:  # noqa: BLE001
+        if timed_out or failure is not None:
             _log.warning(
-                "Pipeline execution exceeded {}s budget; preserving partial state",
-                timeout,
+                "Runner cleanup failed after primary {}: {}",
+                "timeout" if timed_out else "execution failure",
+                cleanup_or_runner_error,
             )
-        except Exception as exc:  # noqa: BLE001 - retain partial accounting for any agent failure
-            failure = exc
+        else:
+            failure = cleanup_or_runner_error
 
     total_elapsed = time.monotonic() - pipeline_start
     # Re-fetch the session to get the fully-updated state.

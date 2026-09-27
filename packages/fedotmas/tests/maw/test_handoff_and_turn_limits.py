@@ -702,7 +702,7 @@ async def test_later_loop_iteration_resolves_entity_continuity_mismatch(monkeypa
 
 
 class _ScriptedLlm(BaseLlm):
-    responses: list[types.Content]
+    responses: list[types.Content | LlmResponse]
     requests: list[LlmRequest] = Field(default_factory=list)
 
     async def generate_content_async(
@@ -710,11 +710,13 @@ class _ScriptedLlm(BaseLlm):
     ) -> AsyncGenerator[LlmResponse, None]:
         del stream
         self.requests.append(llm_request)
-        yield LlmResponse(content=self.responses.pop(0))
+        response = self.responses.pop(0)
+        yield response if isinstance(response, LlmResponse) else LlmResponse(content=response)
 
 
 @pytest.mark.asyncio
 async def test_contract_failure_gets_one_tools_free_format_repair(monkeypatch):
+    monkeypatch.setenv("FEDOTMAS_WORKER_MAX_OUTPUT_TOKENS", "32768")
     llm = _ScriptedLlm(
         model="openai/test",
         responses=[
@@ -756,12 +758,61 @@ async def test_contract_failure_gets_one_tools_free_format_repair(monkeypatch):
     }
     assert len(llm.requests) == 1
     assert not llm.requests[0].config.tools
+    assert llm.requests[0].config.max_output_tokens == 32768
     assert "Do not invent facts" in llm.requests[0].contents[0].parts[0].text
     assert state["_fedotmas_execution"]["contract_repairs"]["producer"] == [
         {"status": "initial_contract_failure", "missing_fields": ["source"]},
         {"status": "format_repair_succeeded"},
     ]
     assert not state["_fedotmas_execution"].get("handoff_issues")
+
+
+@pytest.mark.asyncio
+async def test_length_finish_with_empty_repair_content_preserves_only_semantic_gaps(
+    monkeypatch,
+):
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            LlmResponse(
+                content=types.Content(role="model"),
+                finishReason=types.FinishReason.MAX_TOKENS,
+                usageMetadata=types.GenerateContentResponseUsageMetadata(
+                    promptTokenCount=31,
+                    candidatesTokenCount=0,
+                    totalTokenCount=31,
+                ),
+            )
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    cfg = MAWAgentConfig(
+        name="producer",
+        instruction="Find the claim.",
+        output_key="artifact",
+        output_contract=ArtifactContract(required_fields=["claim", "evidence"]),
+    )
+    agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
+    state = {"artifact": '{"claim":"supported"}'}
+
+    await agent.after_agent_callback(_context(state))
+
+    repairs = state["_fedotmas_execution"]["contract_repairs"]["producer"]
+    assert repairs[-2] == {
+        "status": "repair_no_content",
+        "finish_reason": "MAX_TOKENS",
+        "missing_fields": ["evidence"],
+    }
+    assert state["_fedotmas_execution"]["contract_repair_tokens"] == {
+        "prompt_tokens": 31,
+        "completion_tokens": 0,
+    }
+    assert state["_fedotmas_execution"]["handoff_issues"][0]["missing_fields"] == [
+        "evidence"
+    ]
+    assert "<invalid_repair_artifact>" not in str(
+        state["_fedotmas_execution"]["handoff_issues"]
+    )
 
 
 @pytest.mark.asyncio
@@ -794,6 +845,39 @@ async def test_contract_repair_keeps_missing_semantics_incomplete(monkeypatch):
         "status": "repair_missing_semantic_fields",
         "missing_fields": ["evidence"],
     }
+
+
+@pytest.mark.asyncio
+async def test_large_contract_artifact_skips_llm_repair_and_stays_incomplete(monkeypatch):
+    llm = _ScriptedLlm(model="openai/test", responses=[])
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+
+    async def unexpected_repair(*_args, **_kwargs):
+        raise AssertionError("large output must not be replayed through an LLM")
+
+    monkeypatch.setattr(builder, "_repair_contract_once", unexpected_repair)
+    cfg = MAWAgentConfig(
+        name="file_reader",
+        instruction="Read the source file.",
+        output_key="problem_spec",
+        output_contract=ArtifactContract(
+            required_fields=["regions", "global_limits", "borders"]
+        ),
+    )
+    agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
+    original = "verbatim input " * 2_000
+    state = {"problem_spec": original}
+
+    await agent.after_agent_callback(_context(state))
+
+    assert state["problem_spec"] == original
+    assert not llm.requests
+    repairs = state["_fedotmas_execution"]["contract_repairs"]["file_reader"]
+    assert repairs[1]["status"] == "repair_skipped_output_too_large"
+    assert repairs[-1]["status"] == "repair_missing_semantic_fields"
+    assert state["_fedotmas_execution"]["handoff_issues"][0]["kind"] == (
+        "incomplete_artifact"
+    )
 
 
 @pytest.mark.asyncio
@@ -1862,8 +1946,67 @@ async def test_per_agent_turn_limit_stops_repeated_tool_use(monkeypatch):
     assert result.state["_fedotmas_execution"]["limited_agents"]["looper"] == {
         "limit": 2,
         "turns": 2,
+        "node": "looper",
     }
     assert "INCOMPLETE" in result.state["result"]
+
+
+@pytest.mark.asyncio
+async def test_turn_limit_exits_loop_instead_of_reinvoking_agent(monkeypatch):
+    calls: list[int] = []
+
+    def ping(value: int) -> dict[str, int]:
+        """Run one bounded test action."""
+        calls.append(value)
+        return {"value": value}
+
+    responses = [
+        types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        id=f"loop-call-{number}", name="ping", args={"value": number}
+                    )
+                )
+            ],
+        )
+        for number in range(8)
+    ]
+    llm = _ScriptedLlm(model="openai/test", responses=responses)
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(
+                name="bounded_worker",
+                instruction="Keep using ping for {user_query}.",
+                output_key="result",
+                max_llm_turns=2,
+            )
+        ],
+        pipeline=MAWStepConfig(
+            type="loop",
+            max_iterations=5,
+            children=[MAWStepConfig(type="agent", agent_name="bounded_worker")],
+        ),
+    )
+    agent = builder.build(config, autonomous=False, max_agent_llm_turns=2)
+    agent.sub_agents[0].tools.append(FunctionTool(ping))
+
+    result = await run_pipeline(
+        agent,
+        "Keep working.",
+        session_service=InMemorySessionService(),
+    )
+
+    assert calls == [0, 1]
+    assert len(llm.requests) == 2
+    assert result.status == "limited"
+    assert result.state["_fedotmas_execution"]["limited_agents"]["bounded_worker"] == {
+        "limit": 2,
+        "turns": 2,
+        "node": "bounded_worker",
+    }
 
 
 @pytest.mark.asyncio

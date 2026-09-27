@@ -25,8 +25,44 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1"
 OPENAI_URL = "https://api.openai.com/v1"
 DEFAULT_MAX_STEPS = 5
 MAX_STEPS = 8
-DEFAULT_MAX_EXECUTION_SECONDS = 60
-MAX_EXECUTION_SECONDS = 120
+CODE_AGENT_CLEANUP_HEADROOM_SECONDS = 30
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        _log.warning("Invalid %s; using %ss", name, default)
+        return default
+    if value < 1:
+        _log.warning("Invalid %s; using %ss", name, default)
+        return default
+    return value
+
+
+MCP_TIMEOUT_SECONDS = _positive_int_env("CODE_AGENT_MCP_TIMEOUT_SECONDS", 180)
+_configured_max_execution_seconds = _positive_int_env(
+    "CODE_AGENT_MAX_EXECUTION_SECONDS", 120
+)
+MAX_EXECUTION_SECONDS = min(
+    _configured_max_execution_seconds,
+    max(1, MCP_TIMEOUT_SECONDS - CODE_AGENT_CLEANUP_HEADROOM_SECONDS),
+)
+if MAX_EXECUTION_SECONDS != _configured_max_execution_seconds:
+    _log.warning(
+        "CODE_AGENT_MAX_EXECUTION_SECONDS=%ss exceeds MCP timeout cleanup budget; "
+        "using %ss (MCP timeout=%ss, cleanup headroom=%ss)",
+        _configured_max_execution_seconds,
+        MAX_EXECUTION_SECONDS,
+        MCP_TIMEOUT_SECONDS,
+        CODE_AGENT_CLEANUP_HEADROOM_SECONDS,
+    )
+DEFAULT_MAX_EXECUTION_SECONDS = min(
+    _positive_int_env("CODE_AGENT_DEFAULT_MAX_EXECUTION_SECONDS", 60),
+    MAX_EXECUTION_SECONDS,
+)
+MAX_TASK_INSTRUCTION_CHARS = 8_000
+MAX_CONTEXT_INSTRUCTION_CHARS = 4_000
 DEFAULT_MAX_OUTPUT_CHARS = 4_000
 MAX_OUTPUT_CHARS = 12_000
 MAX_FILES = 10
@@ -69,6 +105,7 @@ class CodeAgentResult(BaseModel):
     error_code: str | None = None
     usage: NestedUsage = Field(default_factory=NestedUsage)
     telemetry: dict[str, int | float] = Field(default_factory=dict)
+    session_persistent: bool = False
 
 
 def _llm_settings() -> tuple[str, str, str] | None:
@@ -369,7 +406,8 @@ def _execution_output(result: object, limit: int, secrets: Sequence[str]) -> str
 
 def _system_prompt(max_output_chars: int) -> str:
     return f"""You are a code agent for bounded computation and structured file analysis.
-Files are explicitly staged under /tmp/code_agent with exact paths listed in the input. Use only those staged paths for input data. Use Python to inspect and compute; installed packages may include pandas and openpyxl, and the standard library can parse CSV, JSON, and ZIP files. Use pypdf for PDF text only if already installed. Do not use the network. Do not print large tables: print only relevant rows, columns, and concise intermediate values. Execution output is limited to {max_output_chars} characters.
+Each solve_with_code call is independent and uses a fresh sandbox. Filesystem, packages, Python state, scripts, and solver progress do NOT persist between calls. Prefer one well-scoped call with a complete bounded job; if another call is required, pass every required host file again.
+Files passed with `files=` are automatically staged under /tmp/code_agent with exact paths listed in the input. Use only those staged paths for input data. Do not put file contents in task or context; those fields are instructions, not data transport. Use Python to inspect and compute; installed packages may include pandas and openpyxl, and the standard library can parse CSV, JSON, and ZIP files. Use pypdf for PDF text only if already installed. Do not use the network. Do not print large tables: print only relevant rows, columns, and concise intermediate values. Execution output is limited to {max_output_chars} characters.
 
 If the request is mainly document reading/retrieval, return action=document. Otherwise respond with exactly one JSON object per turn:
 {{"action":"execute","code":"Python source"}}
@@ -390,10 +428,33 @@ async def _solve(
     max_output_chars: int,
 ) -> CodeAgentResult:
     started = time.monotonic()
-    deadline = started + max_execution_seconds
     secrets = _secret_values()
-    safe_task = _bounded(task, 8_000, secrets)
-    safe_context = _bounded(context, 4_000, secrets)
+    if len(task) > MAX_TASK_INSTRUCTION_CHARS:
+        return _result(
+            status="blocked",
+            errors=[
+                "task contains too much inline data; pass local input through the "
+                "files parameter and keep task to concise computation instructions"
+            ],
+            error_code="CODE_AGENT_TASK_TOO_LARGE",
+            started=started,
+            secrets=secrets,
+        )
+    if len(context) > MAX_CONTEXT_INSTRUCTION_CHARS:
+        return _result(
+            status="blocked",
+            errors=[
+                "context contains too much inline data; pass local input through "
+                "files and keep context to concise instructions"
+            ],
+            error_code="CODE_AGENT_CONTEXT_TOO_LARGE",
+            started=started,
+            secrets=secrets,
+        )
+    max_execution_seconds = min(float(max_execution_seconds), MAX_EXECUTION_SECONDS)
+    deadline = started + max_execution_seconds
+    safe_task = _bounded(task, MAX_TASK_INSTRUCTION_CHARS, secrets)
+    safe_context = _bounded(context, MAX_CONTEXT_INSTRUCTION_CHARS, secrets)
     usage = NestedUsage()
     steps = 0
     execution_failures = 0
@@ -743,22 +804,22 @@ async def _solve(
 
 @mcp.tool
 async def solve_with_code(
-    task: Annotated[str, Field(min_length=1, max_length=8_000)],
+    task: Annotated[str, Field(min_length=1)],
     files: Annotated[list[str], Field(max_length=MAX_FILES)] | None = None,
-    context: Annotated[str, Field(max_length=4_000)] = "",
+    context: str = "",
     max_steps: Annotated[int, Field(ge=1, le=MAX_STEPS)] = DEFAULT_MAX_STEPS,
-    max_execution_seconds: Annotated[
-        float, Field(ge=0.1, le=MAX_EXECUTION_SECONDS)
-    ] = DEFAULT_MAX_EXECUTION_SECONDS,
+    max_execution_seconds: Annotated[float, Field(ge=0.1)] = DEFAULT_MAX_EXECUTION_SECONDS,
     max_output_chars: Annotated[int, Field(ge=256, le=MAX_OUTPUT_CHARS)] = (
         DEFAULT_MAX_OUTPUT_CHARS
     ),
 ) -> dict:
-    """Solve a bounded computation or structured-file task with iterative Python.
-
-    Provide only the files the task needs. Python runs in a fresh E2B sandbox
-    with outbound internet disabled. Use document for tasks centered on reading
-    or retrieving document content rather than calculating or transforming it.
+    """Solve bounded computations with iterative Python in a fresh, independent
+    E2B sandbox. For a computation over a local file, pass its host path via
+    ``files``. Do not copy file contents into ``task`` or ``context``: those are
+    instructions, not data transport. Files are staged automatically. Filesystem,
+    packages, Python state, scripts, and solver progress do not persist between
+    calls. Prefer one complete bounded call; if another call is required, pass
+    every required file again. Use document for reading/retrieval, not computation.
     """
     result = await _solve(
         task=task,
@@ -772,4 +833,12 @@ async def solve_with_code(
 
 
 def main() -> None:
+    _log.warning(
+        "Code-agent limits | max_execution=%ss default_execution=%ss "
+        "MCP_transport=%ss E2B_lifetime<=%ss",
+        MAX_EXECUTION_SECONDS,
+        DEFAULT_MAX_EXECUTION_SECONDS,
+        MCP_TIMEOUT_SECONDS,
+        min(300, MAX_EXECUTION_SECONDS + CODE_AGENT_CLEANUP_HEADROOM_SECONDS),
+    )
     mcp.run(show_banner=False)

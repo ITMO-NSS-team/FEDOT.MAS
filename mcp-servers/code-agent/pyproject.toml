@@ -5,7 +5,7 @@ requires = ["uv-build>=0.10.3,<0.11"]
 [project]
 name = "mcp-code-agent"
 version = "0.1.0"
-description = "Bounded high-level code and data analysis MCP for GAIA"
+description = "Bounded code and data analysis MCP. For local-file computation, pass host paths through files; task and context are instructions, not data transport. Files are staged automatically. Every call uses a fresh independent sandbox; filesystem, packages, Python state, scripts and solver progress do not persist. Prefer one complete bounded call and pass required files again on any later call."
 requires-python = ">=3.12"
 dependencies = [
   "e2b-code-interpreter>=1",
@@ -28,4 +28,4 @@ ini_options.asyncio_mode = "auto"
 name = "code-agent"
 description = "Bounded iterative Python analysis of explicitly supplied CSV, XLSX, JSON, text, ZIP, or PDF files. Use when calculations or structured file processing materially help; use document for retrieval and reading."
 tags = ["code", "data", "analysis", "gaia"]
-timeout = 180
+timeout = 420

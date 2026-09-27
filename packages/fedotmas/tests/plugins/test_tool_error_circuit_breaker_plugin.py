@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from fedotmas.plugins import ToolErrorCircuitBreakerPlugin
 from fedotmas.plugins._tool_error_circuit_breaker import (
+    CODE_AGENT_TASK_TOO_LARGE,
     DUPLICATE_TOOL_CALL,
     RESEARCH_CONVERGENCE_REQUIRED,
     TOOL_CIRCUIT_OPEN,
@@ -205,6 +206,33 @@ class TestToolErrorCircuitBreakerPlugin:
 
 
 class TestRescuedAndControlFlowResults:
+    @pytest.mark.asyncio
+    async def test_repeated_code_agent_argument_errors_do_not_open_circuit(self):
+        plugin = ToolErrorCircuitBreakerPlugin(
+            max_errors_per_agent=1,
+            max_same_tool_error_type=1,
+        )
+        tool = _tool("solve_with_code")
+        ctx = _tool_context(agent_name="optimizer")
+        response = {
+            "isError": True,
+            "status": "blocked",
+            "error_code": CODE_AGENT_TASK_TOO_LARGE,
+            "error": "Pass local input through files.",
+        }
+
+        for _ in range(2):
+            await plugin.after_tool_callback(
+                tool=tool, tool_args={"task": "large"}, tool_context=ctx,
+                result=response,
+            )
+
+        assert await plugin.before_tool_callback(
+            tool=tool, tool_args={}, tool_context=ctx
+        ) is None
+        assert plugin._total_errors == {}
+        assert plugin._open_circuits == {}
+
     @pytest.mark.asyncio
     async def test_duplicate_control_result_does_not_count(self):
         plugin = ToolErrorCircuitBreakerPlugin(max_errors_per_agent=1)

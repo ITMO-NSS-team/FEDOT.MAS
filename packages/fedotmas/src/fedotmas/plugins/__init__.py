@@ -1,5 +1,6 @@
 from fedotmas.plugins._browser_fallback_policy import BrowserFallbackPolicyPlugin
 from fedotmas.plugins._checkpoint import Checkpoint, CheckpointPlugin
+from fedotmas.plugins._code_agent_budget import CodeAgentBudgetPlugin
 from fedotmas.plugins._eval import CheckFn, EvalPlugin, EvaluationError
 from fedotmas.plugins._logging import LoggingPlugin
 from fedotmas.plugins._research_telemetry import ResearchTelemetry
@@ -19,6 +20,7 @@ from fedotmas.plugins._web_search_limit import (
 __all__ = [
     "DEFAULT_WEB_SEARCH_LIMIT",
     "BrowserFallbackPolicyPlugin",
+    "CodeAgentBudgetPlugin",
     "CheckFn",
     "Checkpoint",
     "CheckpointPlugin",

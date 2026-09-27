@@ -456,6 +456,81 @@ class TestExecutionTimeoutStatus:
         assert result.total_prompt_tokens == 7
         assert result.total_completion_tokens == 3
 
+    @pytest.mark.asyncio
+    async def test_repair_failure_metadata_alone_does_not_invalidate_final_answer(
+        self, mock_session_service
+    ):
+        partial = FakeSession(
+            state={
+                "final_answer": "<solution>42</solution>",
+                "_fedotmas_execution": {
+                    "contract_repairs": {
+                        "verifier": [
+                            {
+                                "status": "repair_no_content",
+                                "finish_reason": "MAX_TOKENS",
+                                "missing_fields": [],
+                            }
+                        ]
+                    },
+                    "handoff_issues": [],
+                },
+            }
+        )
+        mock_session_service.get_session = AsyncMock(return_value=partial)
+
+        async with _patch_runner([]):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+            )
+
+        assert result.status == "completed"
+        assert result.state["final_answer"] == "<solution>42</solution>"
+
+    @pytest.mark.asyncio
+    async def test_cleanup_error_does_not_replace_timeout_or_partial_state(
+        self, mock_session_service
+    ):
+        partial = FakeSession(state={"partial": "retained"})
+        mock_session_service.get_session = AsyncMock(return_value=partial)
+
+        async def hanging_run_async(**_kwargs):
+            await asyncio.sleep(5)
+            yield  # pragma: no cover
+
+        runner_instance = MagicMock()
+        runner_instance.run_async = hanging_run_async
+
+        @asynccontextmanager
+        async def runner_with_cleanup_error(*_args, **_kwargs):
+            yield runner_instance
+            raise RuntimeError("secondary MCP cleanup error")
+
+        class _FakeApp:
+            def __init__(self, *, name: str = "fedotmas", root_agent, plugins=None):
+                self.name = name
+                self.root_agent = root_agent
+                self.plugins = plugins or []
+
+        with (
+            patch("fedotmas.core.runner.App", _FakeApp),
+            patch(
+                "fedotmas.core.runner.Runner",
+                side_effect=runner_with_cleanup_error,
+            ),
+        ):
+            result = await run_pipeline(
+                _fake_agent(),
+                "hello",
+                session_service=mock_session_service,
+                timeout=0.01,
+            )
+
+        assert result.status == "timed_out"
+        assert result.state["partial"] == "retained"
+
 
 class TestReasoningOnlyTurnCountsAsEmpty:
     """A turn made only of thoughts writes no output_key, however many parts."""

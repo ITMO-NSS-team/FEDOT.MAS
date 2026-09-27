@@ -22,6 +22,7 @@ from fedotmas.maw.handoffs import unresolved_execution_issues
 from fedotmas.mcp import MCPServerConfig, StdioMCPServer, resolve_mcp_registry
 from fedotmas.plugins import (
     BrowserFallbackPolicyPlugin,
+    CodeAgentBudgetPlugin,
     LangfusePlugin,
     LoggingPlugin,
     ResearchTelemetry,
@@ -31,6 +32,10 @@ from fedotmas.plugins import (
     UnknownToolRecoveryPlugin,
     WebSearchLimitExceeded,
     WebSearchLimitPlugin,
+)
+from fedotmas.plugins._code_agent_budget import (
+    GAIA_TASK_FILE_PATH_STATE_KEY,
+    TASK_DEADLINE_STATE_KEY,
 )
 from tenacity import (
     RetryError,
@@ -278,6 +283,8 @@ def _gaia_mcp_registry(
         server = registry.get(name)
         if isinstance(server, StdioMCPServer):
             env = {**server.env, "FEDOTMAS_GAIA_WORKER_MODEL": worker_model.model}
+            if name == "code-agent":
+                env["CODE_AGENT_MCP_TIMEOUT_SECONDS"] = str(server.timeout)
             if worker_model.api_key:
                 env["FEDOTMAS_GAIA_WORKER_API_KEY"] = worker_model.api_key
             if worker_model.api_base:
@@ -582,7 +589,13 @@ async def preflight_startup_models() -> None:
             ) from exc
 
 
-def build_plugins(task, enable_langfuse: bool) -> list:
+def build_plugins(
+    task,
+    enable_langfuse: bool,
+    *,
+    code_agent_mcp_timeout: int = 180,
+    task_timeout_seconds: int | None = None,
+) -> list:
     telemetry = ResearchTelemetry()
     plugins = [
         LoggingPlugin(),
@@ -591,6 +604,23 @@ def build_plugins(task, enable_langfuse: bool) -> list:
             max_errors_per_agent=_env_int("FEDOTMAS_GAIA_MAX_TOOL_ERRORS", 6),
             max_same_tool_error_type=_env_int(
                 "FEDOTMAS_GAIA_MAX_SAME_TOOL_ERROR_TYPE", 2
+            ),
+            telemetry=telemetry,
+        ),
+        CodeAgentBudgetPlugin(
+            max_calls_per_agent=_env_int(
+                "FEDOTMAS_GAIA_CODE_AGENT_CALL_LIMIT", 3
+            ),
+            total_seconds_per_agent=_env_int(
+                "FEDOTMAS_GAIA_CODE_AGENT_TOTAL_SECONDS", 360
+            ),
+            max_seconds_per_call=_code_agent_max_execution_seconds(
+                code_agent_mcp_timeout
+            ),
+            task_timeout_seconds=task_timeout_seconds
+            or _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 600),
+            deadline_reserve_seconds=_env_int(
+                "FEDOTMAS_GAIA_CODE_AGENT_DEADLINE_RESERVE_SECONDS", 90
             ),
             telemetry=telemetry,
         ),
@@ -642,6 +672,20 @@ def build_plugins(task, enable_langfuse: bool) -> list:
             ),
         )
     return plugins
+
+
+def _code_agent_max_execution_seconds(mcp_timeout: int) -> int:
+    configured = _env_int("CODE_AGENT_MAX_EXECUTION_SECONDS", 120)
+    safe_max = max(1, mcp_timeout - 30)
+    if configured > safe_max:
+        _log.warning(
+            "CODE_AGENT_MAX_EXECUTION_SECONDS={} exceeds code-agent MCP timeout {}s "
+            "minus 30s cleanup headroom; effective max is {}s",
+            configured,
+            mcp_timeout,
+            safe_max,
+        )
+    return min(configured, safe_max)
 
 
 def compute_metrics_by_level(results: list) -> dict:
@@ -949,16 +993,31 @@ async def _process_task_attempt(
     )
 
     query = ""
-    if task.file_path:
+    if _is_custom_task(task):
         query += (
-            "Use available document, media, or sandbox tools to inspect the local file "
-            "directly. Do not claim you cannot access it before trying an appropriate "
-            "tool.\n"
+            "Solve the task fully specified in the supplied local file, including "
+            "its exactness and answer-format requirements. Treat the original file "
+            "as the source of truth; do not copy its contents into pipeline state. "
+            "Let the meta-agent choose the architecture. For computation over this "
+            "file, downstream code-agent workers must pass the host path via "
+            "solve_with_code(files=[path]); task and context are instructions, not "
+            "data transport.\n"
         )
-        query += f"File path: {task.file_path}\n"
+    elif task.file_path:
+        query += (
+            "The source file is available at the host path below. For "
+            "computation over it, pass that exact path to solve_with_code(files=[path]); "
+            "do not copy its contents into task, context, or an intermediate handoff. "
+            "The code-agent stages files automatically. Each call uses an independent "
+            "fresh sandbox, so pass the file again on any later call. Document tools may "
+            "read or retrieve file content when that is the actual task.\n"
+        )
+    if task.file_path:
+        query += f"Host file path: {task.file_path}\n"
     if task.file_name:
         query += f"File name: {task.file_name}\n"
-    query += f"Question: {task.question}"
+    if not _is_custom_task(task):
+        query += f"Question: {task.question}"
 
     maw = None
     telemetry = None
@@ -968,28 +1027,75 @@ async def _process_task_attempt(
     try:
         meta_model = _gaia_meta_model()
         worker_model = _gaia_worker_model()
-        plugins = build_plugins(task, enable_langfuse)
+        task_timeout = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 600)
+        backstop = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_BACKSTOP_SECONDS", 180)
+        mcp_registry = _gaia_mcp_registry(worker_model)
+        code_agent_server = mcp_registry.get("code-agent")
+        code_agent_mcp_timeout = int(
+            getattr(code_agent_server, "timeout", 180)
+        )
+        code_agent_max = _code_agent_max_execution_seconds(code_agent_mcp_timeout)
+        code_agent_default = min(
+            _env_int("CODE_AGENT_DEFAULT_MAX_EXECUTION_SECONDS", 60),
+            code_agent_max,
+        )
+        code_agent_calls = _env_int("FEDOTMAS_GAIA_CODE_AGENT_CALL_LIMIT", 3)
+        code_agent_total = _env_int("FEDOTMAS_GAIA_CODE_AGENT_TOTAL_SECONDS", 360)
+        code_agent_reserve = _env_int(
+            "FEDOTMAS_GAIA_CODE_AGENT_DEADLINE_RESERVE_SECONDS", 90
+        )
+        _log.info(
+            "Effective run limits | task_timeout={}s backstop={}s worker_turns={} "
+            "meta_output_tokens={} tool_result_cap={} chars evidence_budget={} chars "
+            "code_agent_calls_per_agent={} code_agent_total_per_agent={}s "
+            "code_agent_max_per_call={}s default={}s code_agent_mcp_transport={}s "
+            "code_agent_e2b_lifetime={}s finalization_reserve={}s sandbox_lifetime={}s",
+            task_timeout,
+            backstop,
+            _gaia_max_agent_llm_turns(),
+            _env_int("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", 8192),
+            _env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 6000),
+            _env_int("FEDOTMAS_GAIA_AGENT_EVIDENCE_CHAR_BUDGET", 24000),
+            code_agent_calls,
+            code_agent_total,
+            code_agent_max,
+            code_agent_default,
+            code_agent_mcp_timeout,
+            min(300, code_agent_max + 30),
+            code_agent_reserve,
+            _env_int("FEDOTMAS_SANDBOX_TIMEOUT_SECONDS", 1800),
+        )
+        plugins = build_plugins(
+            task,
+            enable_langfuse,
+            code_agent_mcp_timeout=code_agent_mcp_timeout,
+            task_timeout_seconds=task_timeout,
+        )
         telemetry = next(
             (plugin for plugin in plugins if isinstance(plugin, ResearchTelemetry)),
             None,
         )
         maw = MAW(
             meta_model=meta_model,
-            mcp_servers=_gaia_mcp_registry(worker_model),
+            mcp_servers=mcp_registry,
             worker_models=[worker_model],
             plugins=plugins,
             max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
             max_agent_llm_turns=_gaia_max_agent_llm_turns(),
             two_stage=False,
         )
-        task_timeout = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 600)
         # The pipeline retains partial state with an explicit timed_out status.
         # The outer wait_for is a hard backstop for meta-generation hangs;
         # it is set well above the execution budget so the inner timeout fires
         # first and partial state is preserved.
+        outer_task_deadline = time.monotonic() + task_timeout
         state = await asyncio.wait_for(
             maw.run(
                 query,
+                initial_state={
+                    TASK_DEADLINE_STATE_KEY: outer_task_deadline,
+                    GAIA_TASK_FILE_PATH_STATE_KEY: task.file_path,
+                },
                 timeout=task_timeout,
                 final_answer_contract=final_answer_contract,
             ),

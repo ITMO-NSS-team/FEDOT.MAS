@@ -383,6 +383,7 @@ class _FakeMAW:
         *,
         timeout: int,
         final_answer_contract: str | None = None,
+        initial_state: dict | None = None,
     ) -> dict[str, str]:
         assert timeout > 0
         assert "<solution>" not in _query
@@ -537,6 +538,7 @@ async def test_generated_config_survives_execution_failure(tmp_path: Path):
             *,
             timeout: int,
             final_answer_contract: str | None = None,
+            initial_state: dict | None = None,
         ) -> dict[str, str]:
             assert "<solution>" in (final_answer_contract or "")
             telemetry = next(
@@ -591,6 +593,7 @@ async def test_retries_keep_each_attempt_diagnostics_and_sum_tokens(tmp_path: Pa
             *,
             timeout: int,
             final_answer_contract: str | None = None,
+            initial_state: dict | None = None,
         ) -> dict[str, str]:
             assert "<solution>" in (final_answer_contract or "")
             telemetry = next(
@@ -677,6 +680,7 @@ async def test_gaia_timeout_never_submits_intermediate_or_matching_partial_answe
             *,
             timeout: int,
             final_answer_contract: str | None = None,
+            initial_state: dict | None = None,
         ) -> dict[str, str]:
             self.last_result = PipelineResult(
                 state={
@@ -741,6 +745,7 @@ async def test_outer_gaia_timeout_is_recorded_as_incomplete(tmp_path: Path):
             *,
             timeout: int,
             final_answer_contract: str | None = None,
+            initial_state: dict | None = None,
         ) -> dict[str, str]:
             raise TimeoutError("outer execution backstop expired")
 
