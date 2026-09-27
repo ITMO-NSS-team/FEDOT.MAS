@@ -2450,6 +2450,11 @@ function initPresets() {
       saved.queryRevision = preset.queryRevision;
       queryUpdated = true;
     }
+    const obsoleteBriefEnding = " Демонстрационные данные явно отделить от реальных данных STAIRS/SAMPO.";
+    if (saved && typeof saved.brief === "string" && saved.brief.endsWith(obsoleteBriefEnding)) {
+      saved.brief = saved.brief.slice(0, -obsoleteBriefEnding.length);
+      queryUpdated = true;
+    }
     if (saved && (saved.effortRevision || 0) < (preset.effortRevision || 0)) {
       saved.manual = preset.manual;
       saved.manualNote = preset.manualNote;

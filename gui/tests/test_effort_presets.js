@@ -35,7 +35,8 @@ for (const p of context.window.STARTUP_PRESETS) {
 const migration = app.slice(app.indexOf("  let queryUpdated = false;"),
                            app.indexOf("  // В автономной копии список"));
 context.S = {custom: context.window.STARTUP_PRESETS.map(p => ({
-  id: p.id, query: "user input", queryRevision: p.queryRevision,
+  id: p.id, query: "user input", queryRevision: p.kind === "mas" ? 1 : p.queryRevision,
+  brief: p.kind === "mas" ? p.brief + " Демонстрационные данные явно отделить от реальных данных STAIRS/SAMPO." : "user brief",
   manual: "old", config: {untouched: true},
 }))};
 let stores = 0;
@@ -43,7 +44,14 @@ context.storeScenarios = () => stores++;
 vm.runInContext(migration, context);
 assert.equal(stores, 1);
 for (const saved of context.S.custom) {
-  assert.equal(saved.query, "user input");
+  if (saved.id === "custom_technology_card_audit_terra") {
+    assert.equal(saved.queryRevision, 2);
+    assert.doesNotMatch(saved.query, /Данные обозначь как демонстрационные/);
+    assert.doesNotMatch(saved.brief, /Демонстрационные данные явно отделить/);
+  } else {
+    assert.equal(saved.query, "user input");
+    assert.equal(saved.brief, "user brief");
+  }
   assert.equal(saved.config.untouched, true);
   assert.equal(saved.effortRevision, 1);
   assert.equal(saved.breakdown.subtasks.length, 6);
