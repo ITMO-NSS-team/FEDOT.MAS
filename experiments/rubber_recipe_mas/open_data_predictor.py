@@ -128,6 +128,52 @@ def loocv_metrics(rows: list[dict[str, float]], target: str) -> dict[str, float 
     }
 
 
+def heldout_tire_example(rows: list[dict[str, float]]) -> dict[str, Any]:
+    """One published tire-tread formulation, predicted without training on its row."""
+    nr_phr, carbon_black_phr = 50.0, 60.0
+    match = next(
+        (
+            index for index, row in enumerate(rows)
+            if row["nr_phr"] == nr_phr
+            and row["carbon_black_n220_phr"] == carbon_black_phr
+        ),
+        None,
+    )
+    if match is None:
+        raise ValueError("The tire-tread reference formulation is absent")
+    reference = rows[match]
+    training = rows[:match] + rows[match + 1 :]
+    predicted = {
+        target: fit_surface(training, target).predict(nr_phr, carbon_black_phr)
+        for target in TARGETS
+    }
+    measured = {target: reference[target] for target in TARGETS}
+    ape_pct = {
+        target: (
+            100 * abs(predicted[target] - measured[target]) / abs(measured[target])
+            if measured[target] else None
+        )
+        for target in TARGETS
+    }
+    return {
+        "recipe": {
+            "nr_phr": nr_phr,
+            "sbr_phr": reference["sbr_phr"],
+            "carbon_black_n220_phr": carbon_black_phr,
+        },
+        "method": "leave_one_out",
+        "training_rows": len(training),
+        "reference_used_in_training": False,
+        "predicted": predicted,
+        "measured": measured,
+        "ape_pct": ape_pct,
+        "mape_pct": (
+            sum(ape_pct.values()) / len(TARGETS)
+            if all(value is not None for value in ape_pct.values()) else None
+        ),
+    }
+
+
 def predict_properties(
     recipe: dict[str, float], rows: list[dict[str, float]]
 ) -> dict[str, Any]:

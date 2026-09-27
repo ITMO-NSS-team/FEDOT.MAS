@@ -421,10 +421,13 @@ def rubber_quality() -> dict:
     root = str(Path(__file__).resolve().parents[2])
     if root not in sys.path:
         sys.path.insert(0, root)
-    from experiments.rubber_recipe_mas.open_data_predictor import load_rows, loocv_metrics, TARGETS
+    from experiments.rubber_recipe_mas.open_data_predictor import (
+        TARGETS, heldout_tire_example, load_rows, loocv_metrics,
+    )
     rows = load_rows()
     return {"ok": True, "method": "LOOCV", "samples": len(rows),
-            "mape_pct": {target: loocv_metrics(rows, target)["mape_pct"] for target in TARGETS}}
+            "mape_pct": {target: loocv_metrics(rows, target)["mape_pct"] for target in TARGETS},
+            "baseline_example": heldout_tire_example(rows)}
 
 
 @app.post("/api/effort_breakdown")

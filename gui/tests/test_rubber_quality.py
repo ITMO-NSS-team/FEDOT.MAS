@@ -15,6 +15,11 @@ def test_quality_endpoint():
     assert data['samples'] == 20
     assert data['method'] == 'LOOCV'
     assert data['mape_pct']['oil_swelling_pct_1006h'] == pytest.approx(9.6877146)
+    example = data['baseline_example']
+    assert example['training_rows'] == 19
+    assert example['reference_used_in_training'] is False
+    assert example['recipe']['carbon_black_n220_phr'] == 60
+    assert example['mape_pct'] == pytest.approx(3.2122669312)
 
 
 def test_mcp_wrapped_validation():

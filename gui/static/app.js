@@ -808,9 +808,9 @@ function rubberQualityHtml(preset) {
     .includes("rubber-recipe-predictor")) return "";
   const quality = preset.rubberQuality;
   const labels = {
-    thermal_conductivity_w_mk: "Теплопроводность",
-    oil_swelling_pct_1006h: "Набухание в масле после 1006 ч",
-    water_swelling_pct_1006h: "Набухание в воде после 1006 ч",
+    thermal_conductivity_w_mk: "Теплопроводность, Вт/(м·К)",
+    oil_swelling_pct_1006h: "Набухание в масле после 1006 ч, %",
+    water_swelling_pct_1006h: "Набухание в воде после 1006 ч, %",
     specific_gravity: "Относительная плотность",
   };
   const rows = Object.entries(labels).map(([key, label]) => {
@@ -819,11 +819,28 @@ function rubberQualityHtml(preset) {
   }).join("");
   const current = preset.rubberValidation;
   const currentValue = current?.mape_pct;
+  const baseline = quality?.baseline_example;
   const currentText = Number.isFinite(currentValue) && currentValue >= 0
     ? `${currentValue.toFixed(2).replace(".", ",")} % — среднее по четырём характеристикам. Сравнение с точной рецептурой из обучающего набора, не независимая проверка.`
     : current?.reason === "no_exact_reference"
-      ? "Нет контрольных измерений для этой рецептуры."
+      ? `Нет контрольных измерений для этой рецептуры.${baseline ? " Ниже приведён отдельный пример с опубликованными значениями." : ""}`
       : "Нет данных проверки текущего расчёта. Выполните новый запуск с обновлённым предиктором.";
+  const propertyText = value => Number.isFinite(value) ? value.toFixed(3).replace(".", ",") : "—";
+  const baselineBlock = baseline ? `<h4>Базовый пример: протекторная смесь NR/SBR 50/50, N220 60 phr</h4>
+    <div class="ans-text">Одну опубликованную точку исключили из обучения: прогноз рассчитан по остальным
+    ${esc(baseline.training_rows)} рецептурам и сопоставлен со значениями этой точки.</div>
+    <table class="ans-table"><thead><tr><th>Характеристика</th><th>Прогноз</th><th>Из статьи</th><th>APE</th></tr></thead><tbody>
+    ${Object.entries(labels).map(([key, label]) => `<tr><td>${label}</td>
+      <td>${propertyText(baseline.predicted?.[key])}</td>
+      <td>${propertyText(baseline.measured?.[key])}</td>
+      <td>${Number.isFinite(baseline.ape_pct?.[key]) ? baseline.ape_pct[key].toFixed(2).replace(".", ",") + " %" : "—"}</td></tr>`).join("")}
+    </tbody></table>
+    <div class="ans-meta">MAPE этого примера = среднее четырёх APE =
+    ${Number.isFinite(baseline.mape_pct) ? baseline.mape_pct.toFixed(2).replace(".", ",") + " %" : "нет данных"}.
+    APE = |прогноз − значение из статьи| / |значение из статьи| × 100 %.
+    Данные приблизительно оцифрованы с графиков
+    <a href="https://doi.org/10.5281/zenodo.3838695" target="_blank" rel="noopener noreferrer">исследования протекторных смесей</a>.
+    Это ретроспективная проверка на отложенной точке, не лабораторная проверка текущей рецептуры или готовой шины.</div>` : "";
   return `<div class="ans-card"><h4>Качество расчётной модели · MAPE</h4>
     <table class="ans-table"><thead><tr><th>Характеристика</th><th>MAPE</th></tr></thead><tbody>${rows}</tbody></table>
     <div class="ans-meta">Средняя абсолютная процентная ошибка: среднее |прогноз − наблюдение| / |наблюдение| × 100 %.
@@ -834,7 +851,8 @@ function rubberQualityHtml(preset) {
     ${Number.isFinite(currentValue) ? `<table class="ans-table"><thead><tr><th>Характеристика</th><th>Ошибка, %</th></tr></thead><tbody>${Object.entries(labels).map(([key, label]) => {
       const value = current.ape_pct?.[key];
       return `<tr><td>${label}</td><td>${Number.isFinite(value) ? value.toFixed(2).replace(".", ",") : "нет данных"}</td></tr>`;
-    }).join("")}</tbody></table>` : ""}</div>`;
+    }).join("")}</tbody></table>` : ""}
+    ${baselineBlock}</div>`;
 }
 
 async function loadRubberQuality(preset) {

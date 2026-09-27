@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 import pytest
 
-from open_data_predictor import DEFAULT_DATA, TARGETS, load_rows, predict_properties, loocv_metrics
+from open_data_predictor import (
+    DEFAULT_DATA, TARGETS, heldout_tire_example, load_rows,
+    loocv_metrics, predict_properties,
+)
 
 HERE = Path(__file__).resolve().parent
 
@@ -62,3 +65,31 @@ def test_mape_with_zero_reference_is_unavailable():
     rows = load_rows()
     rows[0][TARGETS[0]] = 0
     assert loocv_metrics(rows, TARGETS[0])["mape_pct"] is None
+
+
+def test_tire_example_excludes_control_measurement_from_training():
+    rows = load_rows()
+    example = heldout_tire_example(rows)
+    assert example["recipe"] == {
+        "nr_phr": 50.0, "sbr_phr": 50.0, "carbon_black_n220_phr": 60.0,
+    }
+    assert example["training_rows"] == 19
+    assert example["reference_used_in_training"] is False
+    assert example["measured"] == {
+        "thermal_conductivity_w_mk": 0.460,
+        "oil_swelling_pct_1006h": 21.5,
+        "water_swelling_pct_1006h": 31.0,
+        "specific_gravity": 1.210,
+    }
+    assert example["mape_pct"] == pytest.approx(3.2122669312)
+    assert example["mape_pct"] == pytest.approx(
+        sum(example["ape_pct"].values()) / len(TARGETS)
+    )
+    # Changing only the held-out measurement must not change its prediction.
+    control = next(row for row in rows if row["nr_phr"] == 50
+                   and row["carbon_black_n220_phr"] == 60)
+    control[TARGETS[0]] *= 2
+    changed = heldout_tire_example(rows)
+    assert changed["predicted"] == pytest.approx(example["predicted"])
+    assert changed["measured"][TARGETS[0]] == 0.920
+    assert changed["mape_pct"] != example["mape_pct"]
