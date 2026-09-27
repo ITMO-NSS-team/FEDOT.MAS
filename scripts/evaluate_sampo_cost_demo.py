@@ -1,62 +1,63 @@
 #!/usr/bin/env python3
-"""One-shot evaluator; only this program opens private ground truth."""
+"""Seal public inference artifacts, then perform the single private-GT evaluation."""
 from __future__ import annotations
-import argparse, csv, json, sys
+
+import argparse
+import json
+import subprocess
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sampo_cost_demo import OUT, read_csv, paired_stats, end_to_end_accuracy
-from sampo_cost_runtime import model_costs
+from sampo_cost_demo import OUT, read_csv, paired_stats
+from sampo_cost_evaluation_contract import (
+    comparison, evaluate_once, sha256_file, validate_and_seal,
+)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)
     args = parser.parse_args()
-    finalized = OUT / "finalized.json"
-    if finalized.exists():
-        raise SystemExit("Evaluation already finalized; create a new experiment ID")
-    manifest = json.loads((OUT / "manifest.json").read_text())
-    ids = manifest["selected_ids"]
-    gt = {r["example_id"]: r["target_granular_name"] for r in read_csv(OUT / "private_ground_truth.csv")}
-    labels = {r["target_label"] for r in read_csv(OUT / "allowed_target_labels.csv")}
-    predictions = {}
-    telemetry = {}
-    for system in ("tfidf", "fedotmas_cost_aware", "terra_single_agent"):
-        path = OUT / "runs" / args.run_id / system / "predictions.csv"
-        if not path.exists(): raise SystemExit(f"Missing immutable prediction file: {path}")
-        rows = read_csv(path)
-        if len({r["example_id"] for r in rows}) != len(rows) or any(r["example_id"] not in ids for r in rows):
-            raise SystemExit(f"Invalid IDs or duplicate predictions in {path}")
-        for row in rows:
-            vals = [row.get(k, "") for k in ("top_1", "top_2", "top_3")]
-            if any(v not in labels for v in vals) or len(set(vals)) != 3: raise SystemExit(f"Invalid prediction schema in {path}")
-        predictions[system] = {r["example_id"]: {**r, "completed": r.get("completed", "true").lower() == "true"} for r in rows}
-        telemetry_path = path.parent / "telemetry.json"
-        telemetry[system] = json.loads(telemetry_path.read_text()) if telemetry_path.exists() else {"model_calls": [], "tool_calls": 0, "runtime_seconds": 0}
-    # Missing IDs represent execution failures and remain incorrect in the denominator.
-    pricing = json.loads((OUT / "pricing.json").read_text())
-    results = {}
-    for system, pred in predictions.items():
-        top1, conditional = end_to_end_accuracy(ids, gt, pred)
-        top3 = sum(gt[i] in [pred.get(i, {}).get(k) for k in ("top_1", "top_2", "top_3")] for i in ids) / len(ids)
-        calls = telemetry[system].get("model_calls", [])
-        cost = model_costs(telemetry[system], pricing)
-        correct = round(top1 * len(ids))
-        results[system] = {"end_to_end_top1": top1, "top3": top3, "conditional_top1_on_completed": conditional, "total_inference_cost_usd": cost, "cost_complete":cost is not None, "cost_per_example_usd": cost / len(ids) if cost is not None else None, "cost_per_correct_top1_usd": cost / correct if cost is not None and correct else None, "cost_per_1000_examples_usd": cost * 1000 / len(ids) if cost is not None else None, "input_tokens": telemetry[system].get("input_tokens", 0), "cached_input_tokens":telemetry[system].get("cached_input_tokens",0), "output_tokens":telemetry[system].get("output_tokens", 0), "model_calls": telemetry[system].get("model_calls_count",len(calls)), "tool_calls": telemetry[system].get("tool_calls", 0), "runtime_seconds": telemetry[system].get("runtime_seconds", 0), "completed_examples": sum(i in pred and pred[i].get("completed", False) for i in ids), "failure_rate": 1 - sum(i in pred and pred[i].get("completed", False) for i in ids) / len(ids), "llm_calls_per_example": telemetry[system].get("model_calls_count",len(calls)) / len(ids)}
-    comparisons = {other: paired_stats(ids, gt, predictions["fedotmas_cost_aware"], predictions[other]) for other in ("terra_single_agent", "tfidf")}
-    terra, fedot = results["terra_single_agent"], results["fedotmas_cost_aware"]
-    gap_pp = (terra["end_to_end_top1"] - fedot["end_to_end_top1"]) * 100
-    reduction = terra["total_inference_cost_usd"] / fedot["total_inference_cost_usd"] if terra["cost_complete"] and fedot["cost_complete"] and fedot["total_inference_cost_usd"] else None
-    report = {"experiment_id": args.run_id, "metrics": results, "paired_statistics": comparisons, "terra_minus_fedotmas_top1_gap_pp": gap_pp, "fedotmas_cost_reduction_factor_vs_terra": reduction, "cost_comparison_complete":terra["cost_complete"] and fedot["cost_complete"], "relative_accuracy_retained": fedot["end_to_end_top1"] / terra["end_to_end_top1"] if terra["end_to_end_top1"] else None, "preregistered_criterion_passed": gap_pp <= 3 and reduction is not None and reduction >= 2, "one_time_generation_cost": {"usd": 0, "status": "not configured"}}
-    (OUT / "final_report.json").write_text(json.dumps(report, indent=2) + "\n")
-    header = "| System | Top-1 | Top-3 | Cost | Cost / correct | Input tok. | Output tok. | Calls | Runtime | Completion |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
-    names = {"tfidf":"TF-IDF", "fedotmas_cost_aware":"FEDOT.MAS cost-aware (GPT-5.6 Luna)", "terra_single_agent":"Terra single agent (GPT-5.6 Terra)"}
-    lines = ["# SAMPO cost demo final report", "", header]
-    for s, x in results.items():
-        cost="N/A" if x["total_inference_cost_usd"] is None else f"${x['total_inference_cost_usd']:.6f}"
-        per_correct="N/A" if x["cost_per_correct_top1_usd"] is None else f"${x['cost_per_correct_top1_usd']:.6f}"
-        lines.append(f"| {names[s]} | {x['end_to_end_top1']:.3%} | {x['top3']:.3%} | {cost} | {per_correct} | {x['input_tokens']} | {x['output_tokens']} | {x['model_calls']} | {x['runtime_seconds']:.1f}s | {x['completed_examples']}/{len(ids)} |")
-    lines += ["", f"Terra − FEDOT.MAS top-1 gap: {gap_pp:.2f} pp", f"FEDOT.MAS cost reduction factor vs Terra: {reduction}", f"Relative accuracy retained: {report['relative_accuracy_retained']}", f"Pre-registered criterion passed: {report['preregistered_criterion_passed']}", ""]
-    (OUT / "final_report.md").write_text("\n".join(lines))
-    finalized.write_text(json.dumps({"run_id": args.run_id, "prediction_files_immutable": True, "evaluation_complete": True}, indent=2) + "\n")
+    run_dir = OUT / "runs" / args.run_id
+    if not run_dir.is_dir():
+        raise SystemExit(f"Unknown run ID: {args.run_id}")
+    for output in ("sealed_predictions.json", "evaluation.json", "comparison.json"):
+        if (run_dir / output).exists():
+            raise SystemExit(f"{output} already exists; evaluation is one-shot")
 
-if __name__ == "__main__": main()
+    manifest_path = run_dir / "experiment_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("run_id") != args.run_id:
+        raise SystemExit("Experiment manifest run_id mismatch")
+    public_path = OUT / "operational_inputs.csv"
+    frozen_input_hash = manifest.get("operational_set_sha256")
+    if not frozen_input_hash or sha256_file(public_path) != frozen_input_hash:
+        raise SystemExit("Frozen public input SHA256 mismatch")
+    frozen_ids = [row["example_id"] for row in read_csv(public_path)]
+    if manifest.get("assigned_ids") != frozen_ids:
+        raise SystemExit("Frozen run scope mismatch")
+
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=OUT.parents[1], text=True).strip()
+    validate_and_seal(run_dir, args.run_id, frozen_ids, frozen_input_hash, commit)
+
+    # Private GT is opened exactly once, after the successful durable seal.
+    gt_bytes = (OUT / "private_ground_truth.csv").read_bytes()
+    labels = {row["target_label"] for row in read_csv(OUT / "allowed_target_labels.csv")}
+    evaluation = evaluate_once(run_dir, args.run_id, frozen_ids, gt_bytes, commit, labels)
+    gt_mapping = evaluation.pop("_gt")
+    predictions = evaluation.pop("_predictions")
+    ids = evaluation.pop("_ids")
+    (run_dir / "evaluation.json").write_text(json.dumps(evaluation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    comparison_input = {**evaluation, "_gt": gt_mapping, "_predictions": predictions, "_ids": ids}
+    summary = comparison(comparison_input, run_dir, paired_stats)
+    (run_dir / "comparison.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    # Backward-compatible root reports are views derived from the authoritative run files.
+    report = {"run_id": args.run_id, "evaluation": evaluation, "comparison": summary}
+    (run_dir / "final_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

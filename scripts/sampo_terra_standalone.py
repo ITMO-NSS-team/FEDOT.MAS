@@ -127,9 +127,13 @@ async def run(*, model: str, endpoint: str, api_key: str, rows: list[dict[str, s
                                    "output_tokens": 0, "provider_cost_usd": None,
                                    "finish_reason": None, "usage_known": False}
                         try:
+                            request_options = {}
+                            if "openrouter.ai" in endpoint.lower():
+                                request_options["extra_body"] = {"usage": {"include": True}}
                             response = await client.chat.completions.create(
                                 model=model, messages=messages, tools=tool_schemas,
                                 tool_choice="auto", max_tokens=budgets["max_output_tokens_per_call"],
+                                **request_options,
                             )
                             usage = response.usage
                             if usage is not None:
@@ -200,13 +204,21 @@ async def run(*, model: str, endpoint: str, api_key: str, rows: list[dict[str, s
     known = [r for r in provider_requests if r["usage_known"]]
     complete = all(r["usage_known"] for r in provider_requests)
     cost = None
+    fallback_cost = None
+    provider_cost = None
     if complete:
-        cost = sum(r["provider_cost_usd"] if r["provider_cost_usd"] is not None else
-                   (max(0, r["input_tokens"]-r["cached_input_tokens"])*pricing["input_usd_per_1m"] +
-                    r["cached_input_tokens"]*pricing.get("cached_input_usd_per_1m", pricing["input_usd_per_1m"]) +
-                    r["output_tokens"]*pricing["output_usd_per_1m"])/1_000_000 for r in provider_requests)
+        def fallback_for(request: dict[str, Any]) -> float:
+            return (max(0, request["input_tokens"]-request["cached_input_tokens"])*pricing["input_usd_per_1m"] +
+                    request["cached_input_tokens"]*pricing.get("cached_input_usd_per_1m", pricing["input_usd_per_1m"]) +
+                    request["output_tokens"]*pricing["output_usd_per_1m"])/1_000_000
+        provider_cost = (sum(r["provider_cost_usd"] for r in provider_requests
+                             if r["provider_cost_usd"] is not None)
+                         if any(r["provider_cost_usd"] is not None for r in provider_requests) else None)
+        fallback_cost = sum(fallback_for(r) for r in provider_requests if r["provider_cost_usd"] is None)
+        cost = sum(r["provider_cost_usd"] if r["provider_cost_usd"] is not None else fallback_for(r)
+                   for r in provider_requests)
     telemetry = {
-        "system": "terra_single_agent", "model": model, "assigned_ids": ids,
+        "run_id": run_id, "system": "terra_single_agent", "model": model, "assigned_ids": ids,
         "completed_ids": [i for i in ids if i in set(completed_ids)],
         "failed_ids": [i for i in ids if i not in set(completed_ids)],
         "completed_examples": len(set(completed_ids) & set(ids)),
@@ -220,7 +232,9 @@ async def run(*, model: str, endpoint: str, api_key: str, rows: list[dict[str, s
         "provider_reported_cost_usd": (sum(r["provider_cost_usd"] for r in known if r["provider_cost_usd"] is not None)
                                        if any(r["provider_cost_usd"] is not None for r in known) else None),
         "fallback_calculated_cost_usd": sum((max(0,r["input_tokens"]-r["cached_input_tokens"])*pricing["input_usd_per_1m"] + r["cached_input_tokens"]*pricing.get("cached_input_usd_per_1m",pricing["input_usd_per_1m"]) + r["output_tokens"]*pricing["output_usd_per_1m"])/1_000_000 for r in known if r["provider_cost_usd"] is None),
-        "cost_usd": cost, "cost_complete": complete, "finish_reasons": [r["finish_reason"] for r in provider_requests],
+        "cost_usd": cost, "provider_reported_cost_usd": provider_cost,
+        "fallback_calculated_cost_usd": fallback_cost,
+        "authoritative_total_cost_usd": cost, "cost_complete": complete, "finish_reasons": [r["finish_reason"] for r in provider_requests],
         "output_truncation_count": sum(r["finish_reason"] in {"length", "max_tokens"} for r in provider_requests),
         "output_truncation_hit": any(r["finish_reason"] in {"length", "max_tokens"} for r in provider_requests),
         "runtime_seconds": runtime, "safety_ceiling_hit": safety_ceiling_hit,
@@ -233,7 +247,7 @@ async def run(*, model: str, endpoint: str, api_key: str, rows: list[dict[str, s
         for item in transcript:
             stream.write(json.dumps(item, ensure_ascii=False)+"\n")
     runtime_manifest = {
-        "system": "terra_single_agent", "harness": "standalone_openai_tool_loop",
+        "run_id": run_id, "system": "terra_single_agent", "harness": "standalone_openai_tool_loop",
         "fedotmas_dependency": False, "model": model, "endpoint": endpoint,
         "batch_size": len(ids), "budgets": budgets,
         "mcp_server_script": str(server_script), "fresh_mcp_process": True,
