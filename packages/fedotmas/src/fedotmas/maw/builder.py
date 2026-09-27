@@ -181,6 +181,9 @@ def _instruction_provider(
                 key,
             )
             text = text.replace(ref, _missing_input_marker(key))
+        # Resolve authored state refs before appending runtime data, which may
+        # contain arbitrary braces (such as artifact text or a handoff purpose).
+        text = await inject_session_state(text, readonly_context)
         for requirement in input_requirements or []:
             raw, missing, identity = describe_requirement(state, requirement)
             if missing:
@@ -204,7 +207,7 @@ def _instruction_provider(
                 )
             if requirement.purpose:
                 text += f"\nHandoff purpose: {requirement.purpose}"
-        return await inject_session_state(text, readonly_context)
+        return text
 
     return provide
 

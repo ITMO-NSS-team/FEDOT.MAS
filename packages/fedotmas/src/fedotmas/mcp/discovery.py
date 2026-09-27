@@ -95,9 +95,16 @@ def _directory_server(
     tool_name_prefix: str | None = None,
 ) -> StdioMCPServer:
     """Local MCP server launched via ``uv run --directory``."""
+    # Invoke the declared entry point through the project interpreter instead
+    # of resolving uv's generated console-script shim. The shim can disappear
+    # while another session runs uv in the same project environment.
+    launcher = (
+        "import importlib, sys; module, function = sys.argv[1].split(':', 1); "
+        "getattr(importlib.import_module(module), function)()"
+    )
     return StdioMCPServer(
         command=_get_uv_bin(),
-        args=("run", "--directory", directory, entry_point),
+        args=("run", "--directory", directory, "python", "-c", launcher, entry_point),
         timeout=timeout,
         description=description,
         tags=tags,
@@ -210,7 +217,7 @@ def discover_local_servers(
         if not scripts:
             _log.warning("No [project.scripts] in {}", pyproject_path)
             continue
-        entry_point = next(iter(scripts))
+        entry_point = next(iter(scripts.values()))
 
         result[name] = _directory_server(
             directory=str(server_dir),

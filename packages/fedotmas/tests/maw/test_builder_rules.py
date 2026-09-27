@@ -17,7 +17,7 @@ from fedotmas.maw.builder import (
     build,
     frame_instruction,
 )
-from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
+from fedotmas.maw.models import ArtifactRequirement, MAWAgentConfig, MAWConfig, MAWStepConfig
 from pydantic import ValidationError
 
 # ---- Rules 1-3: text normalization (via MAWAgentConfig model_validator) ----
@@ -506,6 +506,24 @@ class TestMissingInputIsNamed:
         assert "zone T3ZH2" in text
         assert 'MISSING INPUT "calc"' in text
         assert 'MISSING INPUT "raw_data"' not in text
+
+    @pytest.mark.asyncio
+    async def test_appended_runtime_braces_are_literal(self):
+        requirement = ArtifactRequirement(source_key="source", purpose="Return one value per {line}")
+        provider = _instruction_provider(
+            "Use {solution}.", "writer", frozenset({"solution"}),
+            input_requirements=[requirement],
+        )
+        text = await provider(_readonly_context({"solution": "ready", "source": "row {n}"}))
+        assert "Use ready." in text
+        assert "Return one value per {line}" in text
+        assert "row {n}" in text
+
+    @pytest.mark.asyncio
+    async def test_missing_upstream_state_diagnostic_survives_interpolation(self):
+        provider = _instruction_provider("Use {upstream}.", "writer", frozenset({"upstream"}))
+        text = await provider(_readonly_context({}))
+        assert 'MISSING INPUT "upstream"' in text
 
     @pytest.mark.asyncio
     async def test_agent_output_key_is_not_a_required_upstream_input(self):
