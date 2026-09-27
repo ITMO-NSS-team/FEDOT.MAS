@@ -4,6 +4,7 @@ import ast
 import importlib
 import io
 import json
+import runpy
 import sys
 import zipfile
 from pathlib import Path
@@ -40,7 +41,7 @@ async def test_archive_contains_valid_runnable_code_and_config(kind):
         assert "build_and_run(config, query)" in code
         config = json.loads(archive.read("config.json"))
         manifest = json.loads(archive.read("manifest.json"))
-        assert manifest == {"kind": kind, "tools": [], "custom_mcp": [],
+        assert manifest == {"kind": kind, "tools": [], "custom_mcp": [], "bundled_mcp": [],
                             "model": "openrouter/qwen/qwen3-32b"}
         (MASConfig if kind == "mas" else MAWConfig).model_validate(config)
         if kind == "mas":
@@ -78,3 +79,76 @@ async def test_invalid_config_returns_validation_error():
     with pytest.raises(HTTPException) as raised:
         await app.export_code(CodeExportIn(config={}, tools=[]))
     assert raised.value.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,module", [
+    ("rubber-recipe-predictor", "mcp_rubber_recipe_predictor"),
+    ("technology-card-audit", "mcp_technology_card_audit"),
+    ("sandbox-light", "mcp_sandbox_light"),
+])
+async def test_selected_calculation_mcp_is_bundled_with_sources(name, module):
+    source = configuration("maw")
+    source["agents"][0]["tools"] = [name]
+    response = await app.export_code(CodeExportIn(kind="maw", config=source, tools=[name]))
+    with zipfile.ZipFile(io.BytesIO(response.body)) as archive:
+        paths = set(archive.namelist())
+        root = f"mcp-servers/{name}"
+        assert f"{root}/pyproject.toml" in paths
+        assert f"{root}/src/{module}/server.py" in paths
+        assert f"{root}/src/{module}/__init__.py" in paths
+        assert json.loads(archive.read("manifest.json"))["bundled_mcp"] == [name]
+        assert "uv" in archive.read("README.md").decode()
+        if name == "rubber-recipe-predictor":
+            assert "experiments/rubber_recipe_mas/open_data_predictor.py" in paths
+            assert "experiments/rubber_recipe_mas/open_data/tire_tread_sbr_nr.csv" in paths
+            assert "experiments/rubber_recipe_mas/open_data/README.md" in paths
+            assert len(archive.read("experiments/rubber_recipe_mas/open_data/tire_tread_sbr_nr.csv")) > 100
+        assert not any("source/" in item or "_run/" in item for item in paths)
+        assert "mcp-servers/rubber-recipe-predictor/pyproject.toml" not in paths or name == "rubber-recipe-predictor"
+
+
+@pytest.mark.asyncio
+async def test_runner_prefers_bundled_calculator_without_running_mas(tmp_path, monkeypatch, capsys):
+    import fedotmas
+    import fedotmas.mcp
+
+    source = configuration("maw")
+    source["agents"][0]["tools"] = ["rubber-recipe-predictor"]
+    response = await app.export_code(CodeExportIn(
+        kind="maw", config=source, tools=["rubber-recipe-predictor"]))
+    with zipfile.ZipFile(io.BytesIO(response.body)) as archive:
+        archive.extractall(tmp_path)
+
+    predictor_path = tmp_path / "experiments" / "rubber_recipe_mas" / "open_data_predictor.py"
+    spec = importlib.util.spec_from_file_location("exported_predictor", predictor_path)
+    predictor = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "exported_predictor", predictor)
+    spec.loader.exec_module(predictor)
+    assert len(predictor.load_rows()) == 20
+
+    seen = {}
+
+    class FakeSystem:
+        def __init__(self, **kwargs):
+            seen["servers"] = kwargs["mcp_servers"]
+
+        async def build_and_run(self, config, query):
+            seen["query"] = query
+            return {"answer": "ok"}
+
+    def resolve(names):
+        seen["resolved"] = names
+        return {}
+
+    monkeypatch.setattr(fedotmas, "MAW", FakeSystem)
+    monkeypatch.setattr(fedotmas.mcp, "resolve_mcp_registry", resolve)
+    monkeypatch.setattr(sys, "argv", ["run.py", "Проверка"])
+    exported = runpy.run_path(str(tmp_path / "run.py"), run_name="source_test")
+    await exported["main"]()
+    assert seen["resolved"] == []
+    assert seen["query"] == "Проверка"
+    server = seen["servers"]["rubber-recipe-predictor"]
+    assert str(tmp_path / "mcp-servers" / "rubber-recipe-predictor") in server.args
+    assert "mcp_rubber_recipe_predictor.server" in server.args
+    assert '"answer": "ok"' in capsys.readouterr().out

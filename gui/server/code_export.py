@@ -6,12 +6,41 @@ import io
 import json
 import re
 import zipfile
+from pathlib import Path
 
 from fedotmas import MASConfig, MAWConfig
 
 from .agent_names import latinize_mas
 from .normalize import _builtin_names, _valid_name, sanitize_config
 from .schemas import CodeExportIn
+
+
+# Only reviewed, explicitly listed source files are exportable. Never walk a
+# repository tree: that could pick up local datasets, logs or credentials.
+_ROOT = Path(__file__).resolve().parents[2]
+_CALC_MCP = {
+    "rubber-recipe-predictor": (
+        "mcp-servers/rubber-recipe-predictor/pyproject.toml",
+        "mcp-servers/rubber-recipe-predictor/README.md",
+        "mcp-servers/rubber-recipe-predictor/src/mcp_rubber_recipe_predictor/__init__.py",
+        "mcp-servers/rubber-recipe-predictor/src/mcp_rubber_recipe_predictor/server.py",
+        "experiments/rubber_recipe_mas/open_data_predictor.py",
+        "experiments/rubber_recipe_mas/open_data/tire_tread_sbr_nr.csv",
+        "experiments/rubber_recipe_mas/open_data/README.md",
+    ),
+    "technology-card-audit": (
+        "mcp-servers/technology-card-audit/pyproject.toml",
+        "mcp-servers/technology-card-audit/README.md",
+        "mcp-servers/technology-card-audit/src/mcp_technology_card_audit/__init__.py",
+        "mcp-servers/technology-card-audit/src/mcp_technology_card_audit/server.py",
+    ),
+    "sandbox-light": (
+        "mcp-servers/sandbox-light/pyproject.toml",
+        "mcp-servers/sandbox-light/README.md",
+        "mcp-servers/sandbox-light/src/mcp_sandbox_light/__init__.py",
+        "mcp-servers/sandbox-light/src/mcp_sandbox_light/server.py",
+    ),
+}
 
 
 # Prompts are user data, so redact recognizable credentials even when someone
@@ -53,8 +82,8 @@ RUNNER = '''"""Run the exported FEDOT.MAS system. Pass the task on the command l
 import asyncio
 import json
 import os
+import shutil
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 from fedotmas import MAS, MAW, MASConfig, MAWConfig
@@ -70,15 +99,27 @@ async def main():
     config_data = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
     is_mas = manifest["kind"] == "mas"
     config = (MASConfig if is_mas else MAWConfig).model_validate(config_data)
-    servers = dict(resolve_mcp_registry(manifest["tools"]) or {})
-
-    # Match the GUI command for this built-in MCP server when installed from source.
-    rubber = servers.get("rubber-recipe-predictor")
-    if isinstance(rubber, StdioMCPServer) and "--directory" in rubber.args:
-        directory = rubber.args[rubber.args.index("--directory") + 1]
-        servers["rubber-recipe-predictor"] = replace(
-            rubber, args=("run", "--directory", directory,
-                          "python", "-m", "mcp_rubber_recipe_predictor.server"))
+    bundled_modules = {
+        "rubber-recipe-predictor": "mcp_rubber_recipe_predictor.server",
+        "technology-card-audit": "mcp_technology_card_audit.server",
+        "sandbox-light": "mcp_sandbox_light.server",
+    }
+    bundled = manifest.get("bundled_mcp", [])
+    servers = dict(resolve_mcp_registry(
+        [name for name in manifest["tools"] if name not in bundled]) or {})
+    if bundled:
+        uv = shutil.which("uv")
+        if not uv:
+            raise RuntimeError("Install uv to run the bundled calculation MCP servers")
+        for name in bundled:
+            module = bundled_modules[name]
+            directory = ROOT / "mcp-servers" / name
+            if not (directory / "pyproject.toml").is_file():
+                raise FileNotFoundError(f"Bundled MCP source missing: {name}")
+            servers[name] = StdioMCPServer(
+                command=uv, args=("run", "--directory", str(directory),
+                                  "python", "-m", module),
+                description=f"Bundled calculation MCP: {name}")
 
     custom = manifest["custom_mcp"]
     if custom:
@@ -128,7 +169,9 @@ def build_code_archive(body: CodeExportIn, *, tools: list[str], default_model: s
         for agent in agents:
             agent.model = body.model
 
+    bundled = [name for name in tools if name in _CALC_MCP]
     manifest = {"kind": body.kind, "tools": tools, "custom_mcp": custom,
+                "bundled_mcp": bundled,
                 "model": body.model or default_model}
     readme = (
         "# Исходный код выбранной МАС\n\n"
@@ -137,12 +180,13 @@ def build_code_archive(body: CodeExportIn, *, tools: list[str], default_model: s
         "`manifest.json` фиксирует тип, модель и выбранные инструменты. "
         "Экспорт не запускает агентов и не обращается к LLM.\n\n"
         "## Запуск\n\n"
-        "Установите Python 3.12+ и FEDOT.MAS из исходного репозитория "
-        "(вместе с нужными MCP-серверами из `mcp-servers/`), настройте "
+        "Установите Python 3.12+ и FEDOT.MAS из исходного репозитория, настройте "
         "`OPENROUTER_API_KEY` или ключ выбранного провайдера, затем выполните "
         "`python run.py \"Ваша задача\"`. Модель, работающая через Codex CLI "
         "(`host/…`), требует установленного и авторизованного CLI. "
-        "Инструментам могут понадобиться отдельные сервисы и зависимости.\n\n"
+        "Инструментам могут понадобиться отдельные сервисы и зависимости. "
+        "Другие выбранные MCP, отсутствующие в архиве, должны быть доступны "
+        "в установленном исходном репозитории.\n\n"
         "URL и заголовки пользовательских MCP-серверов не экспортируются. "
         "Если они используются, перед запуском задайте переменную окружения "
         "`FEDOTMAS_CUSTOM_MCP` как JSON-объект: "
@@ -153,6 +197,15 @@ def build_code_archive(body: CodeExportIn, *, tools: list[str], default_model: s
         "запроса в архив не включаются. Проверяйте инструкции агентов перед "
         "передачей архива другим людям: в них могут быть частные данные.\n"
     )
+    if bundled:
+        readme += (
+            "\n## Расчётные MCP в архиве\n\n"
+            "Исходники выбранных расчётных MCP лежат в `mcp-servers/`; "
+            "`run.py` автоматически запускает их из этой папки через `uv`. "
+            "Установите `uv` заранее; при первом запуске ему может потребоваться "
+            "доступ к репозиторию пакетов для установки зависимостей из `pyproject.toml`. "
+            "Список вложенных серверов — `bundled_mcp` в `manifest.json`.\n"
+        )
     contents = {
         "run.py": RUNNER,
         "config.json": json.dumps(_redact(config.model_dump(mode="json")), ensure_ascii=False, indent=2),
@@ -163,4 +216,7 @@ def build_code_archive(body: CodeExportIn, *, tools: list[str], default_model: s
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, content in contents.items():
             archive.writestr(name, content.encode("utf-8"))
+        for name in bundled:
+            for relative in _CALC_MCP[name]:
+                archive.writestr(relative, (_ROOT / relative).read_bytes())
     return output.getvalue()
