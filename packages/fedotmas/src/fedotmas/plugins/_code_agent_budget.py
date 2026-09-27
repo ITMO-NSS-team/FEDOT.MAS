@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import difflib
+import hashlib
 import re
 import time
 from typing import Any
@@ -17,10 +19,88 @@ from fedotmas.plugins._research_telemetry import ResearchTelemetry
 CODE_AGENT_BUDGET_STATE_KEY = "_fedotmas_code_agent_budget"
 TASK_DEADLINE_STATE_KEY = "_fedotmas_task_deadline_monotonic"
 GAIA_TASK_FILE_PATH_STATE_KEY = "_fedotmas_gaia_task_file_path"
+_VOLATILE_WORDS = re.compile(r"\b(?:run\s+once|retry|verbatim)\b", re.IGNORECASE)
+_LIMITS = re.compile(
+    r"(max_execution_seconds|max_output_tokens|timeout(?:_seconds)?)\s*[:=]\s*\d+",
+    re.IGNORECASE,
+)
+_CODE_BLOCK = re.compile(r"```(?:[\w+-]+)?\s*\n?(.*?)```", re.DOTALL)
+
+
+def _normalized_request(args: dict[str, Any]) -> str:
+    def clean(value: Any) -> str:
+        raw = str(value or "")
+
+        def code_hash(match: re.Match[str]) -> str:
+            body = re.sub(r"\s+", " ", match.group(1)).strip().casefold()
+            return " code=" + hashlib.sha256(body.encode()).hexdigest()
+
+        raw = _CODE_BLOCK.sub(code_hash, raw)
+        raw = _LIMITS.sub(lambda m: m.group(1).casefold() + "=<limit>", raw)
+        raw = _VOLATILE_WORDS.sub(" ", raw)
+        return re.sub(r"\s+", " ", raw).strip().casefold()
+
+    parts = [clean(args.get("task")), clean(args.get("context"))]
+    files = args.get("files") or []
+    parts.extend(
+        sorted(clean(item) for item in files)
+        if isinstance(files, list)
+        else [clean(files)]
+    )
+    for key in sorted(k for k in args if k not in {"task", "context", "files"}):
+        value = (
+            "<limit>"
+            if re.search(r"(?:seconds|timeout|tokens|limit)", key, re.IGNORECASE)
+            and isinstance(args[key], int | float)
+            else clean(args[key])
+        )
+        parts.append(f"{key.casefold()}={value}")
+    return "\n".join(parts)
+
+
+def _outcome(payload: Any) -> tuple[str, str]:
+    data = payload if isinstance(payload, dict) else {}
+    code = str(data.get("error_code") or "")
+    status = str(data.get("status") or "")
+    errors = data.get("errors") or []
+    message = (
+        " ".join(str(x) for x in errors)[:500]
+        if isinstance(errors, list)
+        else str(errors)[:500]
+    )
+    if "TIMEOUT" in code or status == "timed_out":
+        category = "timeout"
+    elif any(
+        x in code for x in ("PARSE", "INVALID_INPUT", "FILE_NOT_FOUND", "FILE_ACCESS")
+    ):
+        category = "parser/data validation failure"
+    elif any(
+        x in code
+        for x in (
+            "RUNTIME_UNAVAILABLE",
+            "MODEL_UNAVAILABLE",
+            "DEPENDENCY",
+            "ENVIRONMENT",
+        )
+    ):
+        category = "dependency/environment failure"
+    elif status in {"completed"} and (data.get("answer") or data.get("evidence")):
+        category = "computation returned candidate answer"
+    elif status in {"completed", "incomplete"}:
+        category = "computation completed without answer"
+    else:
+        category = (
+            "dependency/environment failure"
+            if code
+            else "computation completed without answer"
+        )
+    return category, message
+
 
 _DOCUMENT_READING_ACTIONS = re.compile(
     r"\b(?:read|print|dump|show|display|view|inspect|output|list|locate|"
-    r"reproduce|report)\b", re.IGNORECASE
+    r"reproduce|report)\b",
+    re.IGNORECASE,
 )
 _DOCUMENT_CONTENT_TARGETS = re.compile(
     r"\b(?:file|contents?|rows?|columns?|spreadsheet|csv|json|pdf|document|table)\b",
@@ -42,9 +122,7 @@ _CONDITIONAL_COUNT = re.compile(
 def _is_document_reading_call(tool_args: dict[str, Any]) -> bool:
     task = tool_args.get("task", "")
     context = tool_args.get("context", "")
-    instruction = " ".join(
-        value for value in (task, context) if isinstance(value, str)
-    )
+    instruction = " ".join(value for value in (task, context) if isinstance(value, str))
     if not isinstance(task, str) or not task.strip():
         return False
     has_file = bool(tool_args.get("files")) or bool(
@@ -55,7 +133,11 @@ def _is_document_reading_call(tool_args: dict[str, Any]) -> bool:
     if _CONDITIONAL_COUNT.search(instruction):
         return False
     inspection = bool(_DOCUMENT_READING_ACTIONS.search(instruction)) or bool(
-        re.search(r"\b(?:token counts?|field domains?|example rows?|headers?)\b", instruction, re.I)
+        re.search(
+            r"\b(?:token counts?|field domains?|example rows?|headers?)\b",
+            instruction,
+            re.IGNORECASE,
+        )
     )
     return inspection and not _EXPLICIT_COMPUTE.search(instruction)
 
@@ -75,12 +157,15 @@ class CodeAgentBudgetPlugin(BasePlugin):
         name: str = "fedotmas_gaia_code_agent_budget",
     ) -> None:
         super().__init__(name=name)
-        if min(
-            max_calls_per_agent,
-            total_seconds_per_agent,
-            max_seconds_per_call,
-            task_timeout_seconds,
-        ) <= 0:
+        if (
+            min(
+                max_calls_per_agent,
+                total_seconds_per_agent,
+                max_seconds_per_call,
+                task_timeout_seconds,
+            )
+            <= 0
+        ):
             raise ValueError("code-agent budgets and task timeout must be positive")
         self.max_calls_per_agent = max_calls_per_agent
         self.total_seconds_per_agent = float(total_seconds_per_agent)
@@ -89,6 +174,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         self.deadline_reserve_seconds = max(0.0, float(deadline_reserve_seconds))
         self.telemetry = telemetry
         self._reservations: dict[tuple[str, str, str], tuple[float, float]] = {}
+        self._requests: dict[tuple[str, str, str], str] = {}
 
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
@@ -104,8 +190,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         self, *, callback_context: CallbackContext, llm_request: LlmRequest
     ) -> None:
         tool_names = {
-            strip_tool_name_prefix(name).lower()
-            for name in llm_request.tools_dict
+            strip_tool_name_prefix(name).lower() for name in llm_request.tools_dict
         }
         if "solve_with_code" not in tool_names:
             return
@@ -132,23 +217,45 @@ class CodeAgentBudgetPlugin(BasePlugin):
             llm_request.config.tools = retained
             llm_request.append_instructions(
                 [
-                    "Nested code-agent budget is exhausted and solve_with_code is "
-                    "unavailable for this agent. Summarize the best supported state "
-                    "now; do not retry the nested computation."
+                    (
+                        "Nested code-agent budget is exhausted and solve_with_code is "
+                        "unavailable for this agent. Summarize the best supported state "
+                        "now; do not retry the nested computation."
+                    )
                 ]
             )
             return
+
+        llm_request.append_instructions(
+            [
+                "For exact computational tasks: inspect and parse the input; validate the parse with compact structural invariants; perform the exact computation; if it fails, identify ONE concrete defect; make at most one materially targeted correction for that defect; do not repeatedly redesign the solver from scratch."
+            ]
+        )
+        history = (
+            current.get("computation_history", []) if isinstance(current, dict) else []
+        )
+        if (
+            history
+            and history[-1].get("outcome") == "computation returned candidate answer"
+        ):
+            llm_request.append_instructions(
+                [
+                    "The previous computation completed successfully. Prefer synthesizing/finalizing from this result. Call the code agent again only if you can name a specific unresolved correctness issue."
+                ]
+            )
 
         path = callback_context.state.get(GAIA_TASK_FILE_PATH_STATE_KEY)
         if isinstance(path, str) and path:
             llm_request.append_instructions(
                 [
-                    "Original custom task file (HOST path): "
-                    f"{path}. For computation, call solve_with_code with "
-                    f"files=[{path!r}]. Do not copy its contents into task or context; "
-                    "those are instructions, not data transport. The file is staged "
-                    "automatically in a fresh independent sandbox. Pass it again on "
-                    "any later solve_with_code call."
+                    (
+                        "Original custom task file (HOST path): "
+                        f"{path}. For computation, call solve_with_code with "
+                        f"files=[{path!r}]. Do not copy its contents into task or context; "
+                        "those are instructions, not data transport. The file is staged "
+                        "automatically in a fresh independent sandbox. Pass it again on "
+                        "any later solve_with_code call."
+                    )
                 ]
             )
 
@@ -199,6 +306,31 @@ class CodeAgentBudgetPlugin(BasePlugin):
         if not isinstance(budget, dict):
             budget = {"calls": 0, "seconds": 0.0, "reserved_seconds": 0.0}
             root[agent_name] = budget
+
+        history = budget.setdefault("computation_history", [])
+        fingerprint = _normalized_request(tool_args)
+        normalized_task = (
+            re.sub(r"\s+", " ", str(tool_args.get("task", ""))).strip().casefold()
+        )
+        for prior in history:
+            old = prior.get("fingerprint", "") if isinstance(prior, dict) else ""
+            if old and (
+                fingerprint == old
+                or (
+                    len(normalized_task) >= 24
+                    and len(old) >= 48
+                    and difflib.SequenceMatcher(None, fingerprint, old).ratio() >= 0.88
+                )
+            ):
+                return {
+                    "status": "blocked",
+                    "error_code": "CODE_AGENT_REDUNDANT_RETRY",
+                    "errors": [
+                        "Do not rewrite or rerun the same computation. Use existing evidence, fix one identified defect only, or finalize."
+                    ],
+                    "converge_now": False,
+                    "session_persistent": False,
+                }
 
         exhausted = str(budget.get("status", "")) == "exhausted"
         used_calls = int(budget.get("calls", 0))
@@ -253,6 +385,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 call_id = getattr(tool_context, "function_call_id", None)
                 key = (session_id, agent_name, str(call_id or used_calls + 1))
                 self._reservations[key] = (time.monotonic(), allowed)
+                self._requests[key] = fingerprint
 
         budget.update(
             {
@@ -314,12 +447,15 @@ class CodeAgentBudgetPlugin(BasePlugin):
         key = (
             invocation.session.id,
             agent_name,
-            str(call_id or (budget.get("calls", "") if isinstance(budget, dict) else "")),
+            str(
+                call_id or (budget.get("calls", "") if isinstance(budget, dict) else "")
+            ),
         )
         reservation = self._reservations.pop(key, None)
         if reservation is None:
             return
         started, reserved = reservation
+        fingerprint = self._requests.pop(key, "")
         elapsed = max(0.0, time.monotonic() - started)
         if isinstance(budget, dict):
             budget["reserved_seconds"] = max(
@@ -335,7 +471,44 @@ class CodeAgentBudgetPlugin(BasePlugin):
                         if isinstance(duration, int | float):
                             result_seconds = max(result_seconds, float(duration))
             budget["seconds"] = float(budget.get("seconds", 0.0)) + result_seconds
-            payload = result.get("structuredContent") or result if isinstance(result, dict) else {}
-            if isinstance(payload, dict) and payload.get("error_code") == "CODE_AGENT_DOCUMENT_READING_RECOMMENDED":
+            payload = (
+                result.get("structuredContent") or result
+                if isinstance(result, dict)
+                else {}
+            )
+            if (
+                isinstance(payload, dict)
+                and payload.get("error_code")
+                == "CODE_AGENT_DOCUMENT_READING_RECOMMENDED"
+            ):
                 budget["calls"] = max(0, int(budget.get("calls", 0)) - 1)
-                budget["seconds"] = max(0.0, float(budget.get("seconds", 0.0)) - result_seconds)
+                budget["seconds"] = max(
+                    0.0, float(budget.get("seconds", 0.0)) - result_seconds
+                )
+            else:
+                category, message = _outcome(payload)
+                history = budget.setdefault("computation_history", [])
+                history.append({"fingerprint": fingerprint, "outcome": category})
+                # Keep only a concise structured summary in the model context.
+                answer = (
+                    str(payload.get("answer") or "")[:3000]
+                    if isinstance(payload, dict)
+                    else ""
+                )
+                evidence = (
+                    payload.get("evidence", []) if isinstance(payload, dict) else []
+                )
+                summary = {
+                    "status": payload.get("status", "failed")
+                    if isinstance(payload, dict)
+                    else "failed",
+                    "outcome": category,
+                    "answer": answer,
+                    "evidence": evidence[:8] if isinstance(evidence, list) else [],
+                    "error_code": payload.get("error_code")
+                    if isinstance(payload, dict)
+                    else None,
+                    "errors": [message] if message else [],
+                }
+                result.clear()
+                result.update(summary)

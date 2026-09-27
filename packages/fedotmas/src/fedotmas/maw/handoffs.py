@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from fedotmas.maw.models import ArtifactContract, ArtifactRequirement
@@ -24,7 +23,7 @@ def is_explicit_abstention(value: Any) -> bool:
 
 
 def parse_artifact(value: Any) -> dict[str, Any] | None:
-    """Parse strict JSON or one unambiguous fenced JSON object with prose."""
+    """Parse strict JSON or one unambiguous JSON object embedded in prose."""
     if isinstance(value, dict):
         return value
     if not isinstance(value, str):
@@ -36,34 +35,27 @@ def parse_artifact(value: Any) -> dict[str, Any] | None:
     if isinstance(parsed, dict):
         return parsed
 
-    fences = list(
-        re.finditer(r"```([A-Za-z0-9_-]*)[ \t]*\n?(.*?)```", value, re.DOTALL)
-    )
-    if len(fences) != 1 or fences[0].group(1).casefold() != "json":
-        return None
-
-    fence = fences[0]
-    try:
-        parsed = json.loads(fence.group(2).strip())
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
-
-    # Surrounding prose may explain the artifact, but cannot contain another
-    # JSON object that would make the intended handoff ambiguous.
-    surrounding = value[: fence.start()] + value[fence.end() :]
+    # Scan prose and fenced blocks alike. raw_decode handles nested braces and
+    # arrays; requiring one object candidate prevents accidental contract
+    # selection when the prose contains multiple artifacts.
     decoder = json.JSONDecoder()
-    for index, char in enumerate(surrounding):
-        if char != "{":
+    candidates: list[dict[str, Any]] = []
+    index = 0
+    while index < len(value):
+        if value[index] not in "{[":
+            index += 1
             continue
         try:
-            candidate, _end = decoder.raw_decode(surrounding[index:])
+            candidate, end = decoder.raw_decode(value[index:])
         except json.JSONDecodeError:
+            index += 1
             continue
         if isinstance(candidate, dict):
-            return None
-    return parsed
+            candidates.append(candidate)
+            index += end
+        else:
+            index += end
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def missing_contract_fields(
@@ -73,9 +65,7 @@ def missing_contract_fields(
     if artifact is None:
         return None, list(required_fields) or ["structured artifact"]
     missing = [
-        field
-        for field in required_fields
-        if not _field_is_present(artifact, field)
+        field for field in required_fields if not _field_is_present(artifact, field)
     ]
     return artifact, missing
 
@@ -186,7 +176,9 @@ def resolve_execution_issue(state: dict[str, Any], issue: dict[str, Any]) -> Non
 
 
 def _issue_identity(issue: dict[str, Any]) -> tuple[Any, ...]:
-    return tuple(issue.get(key) for key in ("kind", "agent", "source_key", "output_key"))
+    return tuple(
+        issue.get(key) for key in ("kind", "agent", "source_key", "output_key")
+    )
 
 
 def unresolved_execution_issues(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -194,4 +186,8 @@ def unresolved_execution_issues(state: dict[str, Any]) -> list[dict[str, Any]]:
     issues = metadata.get("handoff_issues") if isinstance(metadata, dict) else None
     if not isinstance(issues, list):
         return []
-    return [issue for issue in issues if isinstance(issue, dict) and issue.get("resolved") is not True]
+    return [
+        issue
+        for issue in issues
+        if isinstance(issue, dict) and issue.get("resolved") is not True
+    ]

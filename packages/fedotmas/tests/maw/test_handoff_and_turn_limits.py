@@ -39,6 +39,12 @@ def test_parse_artifact_accepts_prose_wrapped_fenced_json():
     ) == {"answer": 42}
 
 
+def test_parse_artifact_accepts_unfenced_json_with_surrounding_prose():
+    assert parse_artifact(
+        'Result follows: {"answer": 42, "evidence": {"source": "x"}}'
+    ) == {"answer": 42, "evidence": {"source": "x"}}
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -108,19 +114,30 @@ def test_maw_config_autofills_multiple_upstream_identity_fields():
         MAWAgentConfig(name="b", instruction="", output_key="up_b"),
     ]
     terminal = MAWAgentConfig(name="terminal", instruction="", output_key="answer")
-    config = MAWConfig(agents=[*upstream, consumer, terminal], pipeline=MAWStepConfig(
-        type="sequential", children=[MAWStepConfig(type="agent", agent_name="a"),
-            MAWStepConfig(type="agent", agent_name="b"), MAWStepConfig(type="agent", agent_name="consumer"),
-            MAWStepConfig(type="agent", agent_name="terminal")]
-    ))
+    config = MAWConfig(
+        agents=[*upstream, consumer, terminal],
+        pipeline=MAWStepConfig(
+            type="sequential",
+            children=[
+                MAWStepConfig(type="agent", agent_name="a"),
+                MAWStepConfig(type="agent", agent_name="b"),
+                MAWStepConfig(type="agent", agent_name="consumer"),
+                MAWStepConfig(type="agent", agent_name="terminal"),
+            ],
+        ),
+    )
     assert config.agents[2].output_contract.identity_fields == ["date", "title"]
 
 
 def test_maw_config_preserves_correct_identity_contract_and_terminal_exemption():
     existing = ArtifactContract(required_fields=["finding"], identity_fields=["id"])
     consumer = MAWAgentConfig(
-        name="consumer", instruction="", output_key="out",
-        input_requirements=[ArtifactRequirement(source_key="out", identity_fields=["id"])],
+        name="consumer",
+        instruction="",
+        output_key="out",
+        input_requirements=[
+            ArtifactRequirement(source_key="out", identity_fields=["id"])
+        ],
         output_contract=existing,
     )
     config = MAWConfig(
@@ -129,8 +146,12 @@ def test_maw_config_preserves_correct_identity_contract_and_terminal_exemption()
     assert config.agents[0].output_contract.identity_fields == ["id"]
 
     terminal = MAWAgentConfig(
-        name="terminal", instruction="", output_key="answer",
-        input_requirements=[ArtifactRequirement(source_key="answer", identity_fields=["id"])],
+        name="terminal",
+        instruction="",
+        output_key="answer",
+        input_requirements=[
+            ArtifactRequirement(source_key="answer", identity_fields=["id"])
+        ],
     )
     terminal_config = MAWConfig(
         agents=[terminal], pipeline=MAWStepConfig(type="agent", agent_name="terminal")
@@ -182,9 +203,7 @@ def test_terminal_identity_consumer_may_use_external_answer_boundary(explicit):
 
 
 def test_terminal_structured_identity_output_remains_valid():
-    config = _contract_config().model_copy(
-        update={"final_answer_agent": "verifier"}
-    )
+    config = _contract_config().model_copy(update={"final_answer_agent": "verifier"})
 
     validated = MAWConfig.model_validate(config.model_dump())
     assert validated.agents[1].output_contract.identity_fields == ["paper_identity"]
@@ -364,8 +383,10 @@ async def test_complete_evidence_first_verifier_does_not_search(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_verifier_with_missing_fields_uses_targeted_recovery_by_default():
-    verifier = _contract_config().agents[1].model_copy(
-        update={"research_policy": "independent"}
+    verifier = (
+        _contract_config()
+        .agents[1]
+        .model_copy(update={"research_policy": "independent"})
     )
     agent = builder._build_llm_agent(verifier, None, None, autonomous=False)
     state = {
@@ -456,7 +477,12 @@ async def test_terminal_final_answer_skips_generated_output_contract(monkeypatch
     )
     llm = _ScriptedLlm(
         model="openai/test",
-        responses=[types.Content(role="model", parts=[types.Part.from_text(text="<solution>42</solution>")])],
+        responses=[
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="<solution>42</solution>")],
+            )
+        ],
     )
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
     agent = builder.build(
@@ -474,37 +500,59 @@ async def test_terminal_final_answer_skips_generated_output_contract(monkeypatch
     assert "handoff_issues" not in result.state.get("_fedotmas_execution", {})
 
 
-@pytest.mark.parametrize("policy", ["targeted_recovery", "evidence_first", "independent"])
+@pytest.mark.parametrize(
+    "policy", ["targeted_recovery", "evidence_first", "independent"]
+)
 @pytest.mark.asyncio
-async def test_terminal_text_alone_does_not_resolve_missing_handoff(monkeypatch, policy):
+async def test_terminal_text_alone_does_not_resolve_missing_handoff(
+    monkeypatch, policy
+):
     config = MAWConfig(
         agents=[
-            MAWAgentConfig(name="producer", instruction="Return evidence.", output_key="evidence"),
+            MAWAgentConfig(
+                name="producer", instruction="Return evidence.", output_key="evidence"
+            ),
             MAWAgentConfig(
                 name="answerer",
                 instruction="Recover the missing claim and answer.",
                 output_key="answer",
-                input_requirements=[ArtifactRequirement(source_key="evidence", required_fields=["claim"])],
+                input_requirements=[
+                    ArtifactRequirement(
+                        source_key="evidence", required_fields=["claim"]
+                    )
+                ],
                 output_contract=ArtifactContract(required_fields=["claim"]),
                 research_policy=policy,
             ),
         ],
         pipeline=MAWStepConfig(
             type="sequential",
-            children=[MAWStepConfig(type="agent", agent_name="producer"), MAWStepConfig(type="agent", agent_name="answerer")],
+            children=[
+                MAWStepConfig(type="agent", agent_name="producer"),
+                MAWStepConfig(type="agent", agent_name="answerer"),
+            ],
         ),
         final_answer_agent="answerer",
     )
     llm = _ScriptedLlm(
         model="openai/test",
         responses=[
-            types.Content(role="model", parts=[types.Part.from_text(text='{"other":"x"}')]),
-            types.Content(role="model", parts=[types.Part.from_text(text="<solution>42</solution>")]),
+            types.Content(
+                role="model", parts=[types.Part.from_text(text='{"other":"x"}')]
+            ),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="<solution>42</solution>")],
+            ),
         ],
     )
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
     result = await run_pipeline(
-        builder.build(config, autonomous=False, final_answer_contract="Use <solution>answer</solution>."),
+        builder.build(
+            config,
+            autonomous=False,
+            final_answer_contract="Use <solution>answer</solution>.",
+        ),
         "Recover and answer.",
         session_service=InMemorySessionService(),
     )
@@ -519,16 +567,29 @@ async def test_terminal_text_alone_does_not_resolve_missing_handoff(monkeypatch,
 @pytest.mark.asyncio
 async def test_inferred_final_answer_agent_is_persisted(monkeypatch):
     config = MAWConfig(
-        agents=[MAWAgentConfig(name="answerer", instruction="Answer.", output_key="answer")],
+        agents=[
+            MAWAgentConfig(name="answerer", instruction="Answer.", output_key="answer")
+        ],
         pipeline=MAWStepConfig(type="agent", agent_name="answerer"),
     )
     llm = _ScriptedLlm(
         model="openai/test",
-        responses=[types.Content(role="model", parts=[types.Part.from_text(text="<solution>42</solution>")])],
+        responses=[
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="<solution>42</solution>")],
+            )
+        ],
     )
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
-    agent = builder.build(config, autonomous=False, final_answer_contract="Use <solution>answer</solution>.")
-    result = await run_pipeline(agent, "Answer.", session_service=InMemorySessionService())
+    agent = builder.build(
+        config,
+        autonomous=False,
+        final_answer_contract="Use <solution>answer</solution>.",
+    )
+    result = await run_pipeline(
+        agent, "Answer.", session_service=InMemorySessionService()
+    )
 
     assert config.final_answer_agent == "answerer"
     assert result.state[config.agents[0].output_key] == "<solution>42</solution>"
@@ -538,7 +599,9 @@ async def test_inferred_final_answer_agent_is_persisted(monkeypatch):
 @pytest.mark.asyncio
 async def test_explicit_terminal_abstention_is_incomplete(monkeypatch):
     config = MAWConfig(
-        agents=[MAWAgentConfig(name="answerer", instruction="Answer.", output_key="answer")],
+        agents=[
+            MAWAgentConfig(name="answerer", instruction="Answer.", output_key="answer")
+        ],
         pipeline=MAWStepConfig(type="agent", agent_name="answerer"),
     )
     llm = _ScriptedLlm(
@@ -546,7 +609,11 @@ async def test_explicit_terminal_abstention_is_incomplete(monkeypatch):
         responses=[
             types.Content(
                 role="model",
-                parts=[types.Part.from_text(text="<abstain>No supported record found.</abstain>")],
+                parts=[
+                    types.Part.from_text(
+                        text="<abstain>No supported record found.</abstain>"
+                    )
+                ],
             )
         ],
     )
@@ -574,7 +641,10 @@ def test_ambiguous_terminal_cannot_infer_final_answer_agent():
         ],
         pipeline=MAWStepConfig(
             type="parallel",
-            children=[MAWStepConfig(type="agent", agent_name="a"), MAWStepConfig(type="agent", agent_name="b")],
+            children=[
+                MAWStepConfig(type="agent", agent_name="a"),
+                MAWStepConfig(type="agent", agent_name="b"),
+            ],
         ),
     )
     with pytest.raises(ValueError, match="Cannot infer final_answer_agent"):
@@ -586,36 +656,54 @@ def test_ambiguous_terminal_cannot_infer_final_answer_agent():
     [("targeted_recovery", True), ("evidence_first", False), ("independent", False)],
 )
 @pytest.mark.asyncio
-async def test_only_targeted_recovery_self_resolves_missing_handoff(monkeypatch, policy, completed):
+async def test_only_targeted_recovery_self_resolves_missing_handoff(
+    monkeypatch, policy, completed
+):
     config = MAWConfig(
         agents=[
             MAWAgentConfig(
-                name="producer", instruction="Return incomplete evidence.", output_key="evidence"
+                name="producer",
+                instruction="Return incomplete evidence.",
+                output_key="evidence",
             ),
             MAWAgentConfig(
                 name="recovery",
                 instruction="Recover the missing field.",
                 output_key="recovered",
-                input_requirements=[ArtifactRequirement(source_key="evidence", required_fields=["claim"])],
+                input_requirements=[
+                    ArtifactRequirement(
+                        source_key="evidence", required_fields=["claim"]
+                    )
+                ],
                 output_contract=ArtifactContract(required_fields=["claim"]),
                 research_policy=policy,
             ),
         ],
         pipeline=MAWStepConfig(
             type="sequential",
-            children=[MAWStepConfig(type="agent", agent_name="producer"), MAWStepConfig(type="agent", agent_name="recovery")],
+            children=[
+                MAWStepConfig(type="agent", agent_name="producer"),
+                MAWStepConfig(type="agent", agent_name="recovery"),
+            ],
         ),
     )
     llm = _ScriptedLlm(
         model="openai/test",
         responses=[
-            types.Content(role="model", parts=[types.Part.from_text(text='{"other": "x"}')]),
-            types.Content(role="model", parts=[types.Part.from_text(text='{"claim": "recovered"}')]),
+            types.Content(
+                role="model", parts=[types.Part.from_text(text='{"other": "x"}')]
+            ),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text='{"claim": "recovered"}')],
+            ),
         ],
     )
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
     result = await run_pipeline(
-        builder.build(config, autonomous=False), "Recover it.", session_service=InMemorySessionService()
+        builder.build(config, autonomous=False),
+        "Recover it.",
+        session_service=InMemorySessionService(),
     )
 
     issues = result.state["_fedotmas_execution"]["handoff_issues"]
@@ -631,10 +719,19 @@ async def test_unresolved_handoff_and_malformed_artifact_remain_incomplete(monke
     )
     llm = _ScriptedLlm(
         model="openai/test",
-        responses=[types.Content(role="model", parts=[types.Part.from_text(text='{"paper_identity":"x"}')])],
+        responses=[
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text='{"paper_identity":"x"}')],
+            )
+        ],
     )
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
-    result = await run_pipeline(builder.build(config, autonomous=False), "Find it.", session_service=InMemorySessionService())
+    result = await run_pipeline(
+        builder.build(config, autonomous=False),
+        "Find it.",
+        session_service=InMemorySessionService(),
+    )
     assert result.status == "incomplete"
     assert result.state["_fedotmas_execution"]["handoff_issues"][0]["resolved"] is False
 
@@ -643,12 +740,21 @@ async def test_unresolved_handoff_and_malformed_artifact_remain_incomplete(monke
     )
     llm = _ScriptedLlm(
         model="openai/test",
-        responses=[types.Content(role="model", parts=[types.Part.from_text(text="not json")])],
+        responses=[
+            types.Content(role="model", parts=[types.Part.from_text(text="not json")])
+        ],
     )
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
-    result = await run_pipeline(builder.build(malformed, autonomous=False), "Find it.", session_service=InMemorySessionService())
+    result = await run_pipeline(
+        builder.build(malformed, autonomous=False),
+        "Find it.",
+        session_service=InMemorySessionService(),
+    )
     assert result.status == "incomplete"
-    assert result.state["_fedotmas_execution"]["handoff_issues"][0]["kind"] == "incomplete_artifact"
+    assert (
+        result.state["_fedotmas_execution"]["handoff_issues"][0]["kind"]
+        == "incomplete_artifact"
+    )
 
 
 @pytest.mark.asyncio
@@ -671,14 +777,23 @@ async def test_later_loop_iteration_resolves_incomplete_artifact(monkeypatch):
     llm = _ScriptedLlm(
         model="openai/test",
         responses=[
-            types.Content(role="model", parts=[types.Part.from_text(text='{"claim":"x"}')]),
-            types.Content(role="model", parts=[types.Part.from_text(text='{"claim":"x"}')]),
-            types.Content(role="model", parts=[types.Part.from_text(text='{"claim":"x","evidence":"source"}')]),
+            types.Content(
+                role="model", parts=[types.Part.from_text(text='{"claim":"x"}')]
+            ),
+            types.Content(
+                role="model", parts=[types.Part.from_text(text='{"claim":"x"}')]
+            ),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text='{"claim":"x","evidence":"source"}')],
+            ),
         ],
     )
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
     result = await run_pipeline(
-        builder.build(config, autonomous=False), "Refine it.", session_service=InMemorySessionService()
+        builder.build(config, autonomous=False),
+        "Refine it.",
+        session_service=InMemorySessionService(),
     )
 
     issue = result.state["_fedotmas_execution"]["handoff_issues"][0]
@@ -700,15 +815,37 @@ async def test_later_loop_iteration_resolves_entity_continuity_mismatch(monkeypa
     llm = _ScriptedLlm(
         model="openai/test",
         responses=[
-            types.Content(role="model", parts=[types.Part.from_text(text='{"paper_identity":"paper-B","decision":"supported"}')]),
-            types.Content(role="model", parts=[types.Part.from_text(text='{"paper_identity":"paper-A","decision":"supported"}')]),
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part.from_text(
+                        text='{"paper_identity":"paper-B","decision":"supported"}'
+                    )
+                ],
+            ),
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part.from_text(
+                        text='{"paper_identity":"paper-A","decision":"supported"}'
+                    )
+                ],
+            ),
         ],
     )
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
     result = await run_pipeline(
         builder.build(config, autonomous=False),
         "Verify it.",
-        initial_state={"paper_evidence": json.dumps({"paper_identity": "paper-A", "equation": "E=mc^2", "evidence": "page 8"})},
+        initial_state={
+            "paper_evidence": json.dumps(
+                {
+                    "paper_identity": "paper-A",
+                    "equation": "E=mc^2",
+                    "evidence": "page 8",
+                }
+            )
+        },
         session_service=InMemorySessionService(),
     )
 
@@ -729,7 +866,11 @@ class _ScriptedLlm(BaseLlm):
         del stream
         self.requests.append(llm_request)
         response = self.responses.pop(0)
-        yield response if isinstance(response, LlmResponse) else LlmResponse(content=response)
+        yield (
+            response
+            if isinstance(response, LlmResponse)
+            else LlmResponse(content=response)
+        )
 
 
 @pytest.mark.asyncio
@@ -866,7 +1007,9 @@ async def test_contract_repair_keeps_missing_semantics_incomplete(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_large_contract_artifact_skips_llm_repair_and_stays_incomplete(monkeypatch):
+async def test_large_contract_artifact_skips_llm_repair_and_stays_incomplete(
+    monkeypatch,
+):
     llm = _ScriptedLlm(model="openai/test", responses=[])
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
 
@@ -906,9 +1049,7 @@ async def test_contract_repair_rejects_invented_required_values(monkeypatch):
             types.Content(
                 role="model",
                 parts=[
-                    types.Part.from_text(
-                        text='{"claim":"x","evidence":"a citation"}'
-                    )
+                    types.Part.from_text(text='{"claim":"x","evidence":"a citation"}')
                 ],
             )
         ],
@@ -922,8 +1063,7 @@ async def test_contract_repair_rejects_invented_required_values(monkeypatch):
     )
     agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
     original = (
-        'Source data follows:\n'
-        '```json\n{"claim":"x","citation":"a citation"}\n```'
+        'Source data follows:\n```json\n{"claim":"x","citation":"a citation"}\n```'
     )
     state = {"artifact": original}
 
@@ -969,35 +1109,69 @@ async def test_contract_repair_accepts_semantic_key_remapping(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_contract_repair_copies_unambiguous_nested_value_and_preserves_valid_fields(monkeypatch):
+async def test_contract_repair_copies_unambiguous_nested_value_and_preserves_valid_fields(
+    monkeypatch,
+):
     llm = _ScriptedLlm(
         model="openai/test",
-        responses=[types.Content(role="model", parts=[types.Part.from_text(
-            text='{"answer":"A","standard_name":"X","assessments":[{"standard_name":"X","status":"superseded"}]}'
-        )])],
+        responses=[
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part.from_text(
+                        text='{"answer":"A","standard_name":"X","assessments":[{"standard_name":"X","status":"superseded"}]}'
+                    )
+                ],
+            )
+        ],
     )
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
     cfg = MAWAgentConfig(
-        name="producer", instruction="", output_key="artifact",
-        output_contract=ArtifactContract(required_fields=["answer", "standard_name", "assessments"]),
+        name="producer",
+        instruction="",
+        output_key="artifact",
+        output_contract=ArtifactContract(
+            required_fields=["answer", "standard_name", "assessments"]
+        ),
     )
     agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
-    state = {"artifact": '{"answer":"A","assessments":[{"standard_name":"X","status":"superseded"}]}' }
+    state = {
+        "artifact": '{"answer":"A","assessments":[{"standard_name":"X","status":"superseded"}]}'
+    }
     await agent.after_agent_callback(_context(state))
     assert json.loads(state["artifact"]) == {
-        "answer": "A", "standard_name": "X",
+        "answer": "A",
+        "standard_name": "X",
         "assessments": [{"standard_name": "X", "status": "superseded"}],
     }
 
 
 @pytest.mark.asyncio
-async def test_contract_repair_rejects_ambiguous_nested_mapping_and_changed_valid_value(monkeypatch):
-    llm = _ScriptedLlm(model="openai/test", responses=[types.Content(role="model", parts=[
-        types.Part.from_text(text='{"answer":"B","source":"src","standard_name":"X"}')
-    ])])
+async def test_contract_repair_rejects_ambiguous_nested_mapping_and_changed_valid_value(
+    monkeypatch,
+):
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part.from_text(
+                        text='{"answer":"B","source":"src","standard_name":"X"}'
+                    )
+                ],
+            )
+        ],
+    )
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
-    cfg = MAWAgentConfig(name="producer", instruction="", output_key="artifact",
-        output_contract=ArtifactContract(required_fields=["answer", "source", "standard_name"]))
+    cfg = MAWAgentConfig(
+        name="producer",
+        instruction="",
+        output_key="artifact",
+        output_contract=ArtifactContract(
+            required_fields=["answer", "source", "standard_name"]
+        ),
+    )
     agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
     original = '{"answer":"A","solution":"B","provenance":"src","assessments":[{"standard_name":"X"},{"standard_name":"Y"}]}'
     state = {"artifact": original}
@@ -1006,11 +1180,17 @@ async def test_contract_repair_rejects_ambiguous_nested_mapping_and_changed_vali
 
 
 def test_contract_repair_rejects_ambiguous_nested_value_mapping():
-    cfg = MAWAgentConfig(name="producer", instruction="", output_key="artifact",
-        output_contract=ArtifactContract(required_fields=["standard_name"]))
+    cfg = MAWAgentConfig(
+        name="producer",
+        instruction="",
+        output_key="artifact",
+        output_contract=ArtifactContract(required_fields=["standard_name"]),
+    )
     assert builder._repair_values_supported(
         '{"assessments":[{"standard_name":"X"},{"standard_name":"Y"}]}',
-        '{"standard_name":"X"}', cfg, {},
+        '{"standard_name":"X"}',
+        cfg,
+        {},
     ) == ["standard_name"]
 
 
@@ -1039,7 +1219,9 @@ async def test_builder_discovery_inspection_gate_transitions_through_model_callb
 
     args = {"query": "specific source"}
     assert await agent.before_tool_callback(search, args, context) is None
-    await telemetry.before_tool_callback(tool=search, tool_args=args, tool_context=context)
+    await telemetry.before_tool_callback(
+        tool=search, tool_args=args, tool_context=context
+    )
     await telemetry.after_tool_callback(
         tool=search,
         tool_args=args,
@@ -1143,22 +1325,30 @@ async def test_discovery_only_source_finder_does_not_wait_for_inspection():
     assert search.name in exposed
     assert inspect.name in exposed
     args = {"query": "candidate sources"}
-    assert await telemetry.before_tool_callback(
-        tool=search, tool_args=args, tool_context=context
-    ) is None
+    assert (
+        await telemetry.before_tool_callback(
+            tool=search, tool_args=args, tool_context=context
+        )
+        is None
+    )
     await telemetry.after_tool_callback(
         tool=search,
         tool_args=args,
         tool_context=context,
-        result={"results": [{"url": "https://example.org/source", "title": "A source"}]},
+        result={
+            "results": [{"url": "https://example.org/source", "title": "A source"}]
+        },
     )
 
     assert "source_finder" not in state.get("__fedotmas_research_gate", {})
-    assert await telemetry.before_tool_callback(
-        tool=search,
-        tool_args={"query": "another source query"},
-        tool_context=context,
-    ) is None
+    assert (
+        await telemetry.before_tool_callback(
+            tool=search,
+            tool_args={"query": "another source query"},
+            tool_context=context,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -1169,19 +1359,44 @@ async def test_source_finder_can_validate_video_identity_but_not_read_transcript
     info.name = "get_video_info"
     transcript = FunctionTool(func=lambda video_id: {"text": "long transcript"})
     transcript.name = "get_transcript"
-    agent = builder._build_llm_agent(MAWAgentConfig(name="finder", instruction="Find source", output_key="out", research_mode="discovery_only"), [search, info, transcript], None, autonomous=False)
-    context = _context({"__fedotmas_research_candidates": {"finder": [
-        {"url": "https://www.youtube.com/watch?v=abc", "title": "Known video"}
-    ]}})
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(
+            name="finder",
+            instruction="Find source",
+            output_key="out",
+            research_mode="discovery_only",
+        ),
+        [search, info, transcript],
+        None,
+        autonomous=False,
+    )
+    context = _context(
+        {
+            "__fedotmas_research_candidates": {
+                "finder": [
+                    {
+                        "url": "https://www.youtube.com/watch?v=abc",
+                        "title": "Known video",
+                    }
+                ]
+            }
+        }
+    )
     context._invocation_context.agent.name = "finder"
     await agent.before_agent_callback(context)
     request = _research_request(search, info, transcript)
     await agent.before_model_callback(context, request)
-    visible = {d.name for g in request.config.tools or [] for d in g.function_declarations or []}
+    visible = {
+        d.name
+        for g in request.config.tools or []
+        for d in g.function_declarations or []
+    }
     assert info.name in visible
     assert transcript.name not in visible
     assert await agent.before_tool_callback(info, {"video_id": "abc"}, context) is None
-    assert (await agent.before_tool_callback(transcript, {"video_id": "abc"}, context))["error_code"] == "DISCOVERY_ONLY_INSPECTION_DISABLED"
+    assert (await agent.before_tool_callback(transcript, {"video_id": "abc"}, context))[
+        "error_code"
+    ] == "DISCOVERY_ONLY_INSPECTION_DISABLED"
 
 
 @pytest.mark.asyncio
@@ -1195,25 +1410,57 @@ async def test_discovery_only_can_validate_two_known_markdown_candidates_only():
         interactive, ["click", "scroll", "semantic_tree", "findElement", "nodeDetails"]
     ):
         tool.name = name
-    state = {"__fedotmas_research_candidates": {"finder": [
-        {"url": "https://example.org/a"}, {"url": "https://example.org/b"}
-    ]}}
+    state = {
+        "__fedotmas_research_candidates": {
+            "finder": [
+                {"url": "https://example.org/a"},
+                {"url": "https://example.org/b"},
+            ]
+        }
+    }
     agent = builder._build_llm_agent(
-        MAWAgentConfig(name="finder", instruction="Find source", output_key="out", research_mode="discovery_only"),
-        [search, markdown, *interactive], None, autonomous=False,
+        MAWAgentConfig(
+            name="finder",
+            instruction="Find source",
+            output_key="out",
+            research_mode="discovery_only",
+        ),
+        [search, markdown, *interactive],
+        None,
+        autonomous=False,
     )
     context = _context(state)
     context._invocation_context.agent.name = "finder"
     await agent.before_agent_callback(context)
     request = _research_request(search, markdown)
     await agent.before_model_callback(context, request)
-    visible = {d.name for g in request.config.tools or [] for d in g.function_declarations or []}
+    visible = {
+        d.name
+        for g in request.config.tools or []
+        for d in g.function_declarations or []
+    }
     assert markdown.name in visible
     assert not {tool.name for tool in interactive} & visible
-    assert await agent.before_tool_callback(markdown, {"url": "https://unknown.example"}, context)
-    assert await agent.before_tool_callback(markdown, {"url": "https://example.org/a"}, context) is None
-    assert await agent.before_tool_callback(markdown, {"url": "https://example.org/b"}, context) is None
-    assert (await agent.before_tool_callback(markdown, {"url": "https://example.org/a"}, context))["error_code"] == "DISCOVERY_VALIDATION_LIMIT"
+    assert await agent.before_tool_callback(
+        markdown, {"url": "https://unknown.example"}, context
+    )
+    assert (
+        await agent.before_tool_callback(
+            markdown, {"url": "https://example.org/a"}, context
+        )
+        is None
+    )
+    assert (
+        await agent.before_tool_callback(
+            markdown, {"url": "https://example.org/b"}, context
+        )
+        is None
+    )
+    assert (
+        await agent.before_tool_callback(
+            markdown, {"url": "https://example.org/a"}, context
+        )
+    )["error_code"] == "DISCOVERY_VALIDATION_LIMIT"
 
 
 @pytest.mark.asyncio
@@ -1223,19 +1470,54 @@ async def test_targeted_recovery_is_one_identity_scoped_search_and_browser_is_an
     search.description = "Search the web for a known source"
     browser = FunctionTool(func=lambda task: {"status": "ok"})
     browser.name = "complete_browser_task"
-    agent = builder._build_llm_agent(MAWAgentConfig(name="extractor", instruction="Inspect source", output_key="out", research_mode="inspection_only", research_policy="targeted_recovery"), [search, browser], None, autonomous=False)
-    state = {"__fedotmas_research_candidates": {"extractor": [{"url": "https://example.org/paper", "title": "Known Paper DOI 10.1234/known", "snippet": "", "inspected": False}]}}
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(
+            name="extractor",
+            instruction="Inspect source",
+            output_key="out",
+            research_mode="inspection_only",
+            research_policy="targeted_recovery",
+        ),
+        [search, browser],
+        None,
+        autonomous=False,
+    )
+    state = {
+        "__fedotmas_research_candidates": {
+            "extractor": [
+                {
+                    "url": "https://example.org/paper",
+                    "title": "Known Paper DOI 10.1234/known",
+                    "snippet": "",
+                    "inspected": False,
+                }
+            ]
+        }
+    }
     context = _context(state)
     context._invocation_context.agent.name = "extractor"
     await agent.before_agent_callback(context)
     request = _research_request(search, browser)
     await agent.before_model_callback(context, request)
-    open_search = await agent.before_tool_callback(browser, {"task": "search the web for similar papers"}, context)
+    open_search = await agent.before_tool_callback(
+        browser, {"task": "search the web for similar papers"}, context
+    )
     assert open_search["error_code"] == "BROWSER_DISCOVERY_POLICY"
-    assert await agent.before_tool_callback(search, {"query": "find another copy of Known Paper DOI 10.1234/known"}, context) is None
+    assert (
+        await agent.before_tool_callback(
+            search,
+            {"query": "find another copy of Known Paper DOI 10.1234/known"},
+            context,
+        )
+        is None
+    )
     request = _research_request(search, browser)
     await agent.before_model_callback(context, request)
-    assert search.name not in {d.name for g in request.config.tools or [] for d in g.function_declarations or []}
+    assert search.name not in {
+        d.name
+        for g in request.config.tools or []
+        for d in g.function_declarations or []
+    }
 
 
 @pytest.mark.asyncio
@@ -1246,19 +1528,30 @@ async def test_forced_convergence_blocks_controller_and_open_browser_loops():
     browser.name = "complete_browser_task"
     inspect = FunctionTool(func=lambda url: {"content": ""})
     inspect.name = "markdown"
-    agent = builder._build_llm_agent(MAWAgentConfig(name="researcher", instruction="Research", output_key="out"), [controller, browser, inspect], None, autonomous=False)
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(name="researcher", instruction="Research", output_key="out"),
+        [controller, browser, inspect],
+        None,
+        autonomous=False,
+    )
     state: dict = {}
     context = _context(state)
     context._invocation_context.agent.name = "researcher"
     await agent.before_agent_callback(context)
     for _ in range(3):
-        await agent.before_model_callback(context, _research_request(controller, browser, inspect))
+        await agent.before_model_callback(
+            context, _research_request(controller, browser, inspect)
+        )
         await agent.after_tool_callback(
             inspect, {"url": f"https://example.org/{_}"}, context, {"content": ""}
         )
     assert state["__fedotmas_research_turns"]["researcher"]["force_converge"] is True
-    assert (await agent.before_tool_callback(controller, {}, context))["error_code"] == "RESEARCH_CONVERGENCE_REQUIRED"
-    assert (await agent.before_tool_callback(browser, {"task": "search the web"}, context))["error_code"] in {"BROWSER_DISCOVERY_POLICY", "RESEARCH_CONVERGENCE_REQUIRED"}
+    assert (await agent.before_tool_callback(controller, {}, context))[
+        "error_code"
+    ] == "RESEARCH_CONVERGENCE_REQUIRED"
+    assert (
+        await agent.before_tool_callback(browser, {"task": "search the web"}, context)
+    )["error_code"] in {"BROWSER_DISCOVERY_POLICY", "RESEARCH_CONVERGENCE_REQUIRED"}
 
 
 @pytest.mark.asyncio
@@ -1267,12 +1560,16 @@ async def test_controller_errors_before_evidence_do_not_force_research_convergen
     update.name = "update_research_state"
     controller = FunctionTool(func=lambda research_state: {"action": "continue_search"})
     controller.name = "get_next_action"
-    search = FunctionTool(func=lambda query: {"results": [{"url": "https://example.org"}]})
+    search = FunctionTool(
+        func=lambda query: {"results": [{"url": "https://example.org"}]}
+    )
     search.name = "search"
     search.description = "Search the web"
     agent = builder._build_llm_agent(
         MAWAgentConfig(name="researcher", instruction="Research", output_key="out"),
-        [update, controller, search], None, autonomous=False,
+        [update, controller, search],
+        None,
+        autonomous=False,
     )
     state: dict = {}
     context = _context(state)
@@ -1282,27 +1579,48 @@ async def test_controller_errors_before_evidence_do_not_force_research_convergen
     for _ in range(3):
         request = _research_request(update, controller, search)
         await agent.before_model_callback(context, request)
-        visible = {d.name for group in request.config.tools or [] for d in group.function_declarations or []}
+        visible = {
+            d.name
+            for group in request.config.tools or []
+            for d in group.function_declarations or []
+        }
         assert controller.name not in visible
     for _ in range(2):
-        blocked = await agent.before_tool_callback(controller, {"research_state": {}}, context)
+        blocked = await agent.before_tool_callback(
+            controller, {"research_state": {}}, context
+        )
         assert blocked["error_code"] == "RESEARCH_CONTROLLER_STATE_REQUIRED"
-        await agent.before_model_callback(context, _research_request(update, controller, search))
-    assert state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is False
-    assert await agent.before_tool_callback(search, {"query": "PubChem"}, context) is None
+        await agent.before_model_callback(
+            context, _research_request(update, controller, search)
+        )
+    assert (
+        state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is False
+    )
+    assert (
+        await agent.before_tool_callback(search, {"query": "PubChem"}, context) is None
+    )
 
     await agent.after_tool_callback(
         update, {}, context, {"research_state": {"version": 1}}
     )
-    assert await agent.before_tool_callback(controller, {"research_state": {}}, context) is None
-    await agent.after_tool_callback(search, {"query": "PubChem"}, context, {"results": []})
+    assert (
+        await agent.before_tool_callback(controller, {"research_state": {}}, context)
+        is None
+    )
+    await agent.after_tool_callback(
+        search, {"query": "PubChem"}, context, {"results": []}
+    )
     assert state[builder.RESEARCH_EVIDENCE_ACTION_STATE_KEY]["researcher"] == 1
     for _ in range(3):
-        await agent.before_model_callback(context, _research_request(update, controller, search))
+        await agent.before_model_callback(
+            context, _research_request(update, controller, search)
+        )
         await agent.after_tool_callback(
             search, {"query": "another search"}, context, {"results": []}
         )
-    assert state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is True, state[builder.RESEARCH_PROGRESS_STATE_KEY]
+    assert (
+        state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is True
+    ), state[builder.RESEARCH_PROGRESS_STATE_KEY]
 
 
 @pytest.mark.asyncio
@@ -1362,23 +1680,46 @@ async def test_discovery_only_source_finder_gets_second_productive_wave_before_h
     assert search.name in exposed
     assert inspect.name in exposed
     assert "Source 0" in request.config.system_instruction
-    assert await agent.before_tool_callback(search, {"query": "exact DOI source"}, context) is None
-    await telemetry.before_tool_callback(tool=search, tool_args={"query": "exact DOI source"}, tool_context=context)
-    await telemetry.after_tool_callback(tool=search, tool_args={"query": "exact DOI source"}, tool_context=context, result={"results": [{"url": "https://example.org/exact", "title": "Exact source"}]})
-    assert any(item["url"] == "https://example.org/exact" for item in state["__fedotmas_research_candidates"]["source_finder"])
-    state["__fedotmas_research_progress"]["source_finder"]["productive_discovery_waves"] = 3
+    assert (
+        await agent.before_tool_callback(search, {"query": "exact DOI source"}, context)
+        is None
+    )
+    await telemetry.before_tool_callback(
+        tool=search, tool_args={"query": "exact DOI source"}, tool_context=context
+    )
+    await telemetry.after_tool_callback(
+        tool=search,
+        tool_args={"query": "exact DOI source"},
+        tool_context=context,
+        result={
+            "results": [{"url": "https://example.org/exact", "title": "Exact source"}]
+        },
+    )
+    assert any(
+        item["url"] == "https://example.org/exact"
+        for item in state["__fedotmas_research_candidates"]["source_finder"]
+    )
+    state["__fedotmas_research_progress"]["source_finder"][
+        "productive_discovery_waves"
+    ] = 3
     request = _research_request(search, inspect)
     await agent.before_model_callback(context, request)
-    exposed = {declaration.name for group in request.config.tools or [] for declaration in group.function_declarations or []}
+    exposed = {
+        declaration.name
+        for group in request.config.tools or []
+        for declaration in group.function_declarations or []
+    }
     assert search.name not in exposed
     assert "Exact source" in request.config.system_instruction
     blocked_inspection = await agent.before_tool_callback(
         inspect, {"url": "https://example.org/source-0"}, context
     )
     assert blocked_inspection is None
-    assert (await agent.before_tool_callback(
-        inspect, {"url": "https://not-discovered.example"}, context
-    ))["error_code"] == "DISCOVERY_VALIDATION_REQUIRES_CANDIDATE"
+    assert (
+        await agent.before_tool_callback(
+            inspect, {"url": "https://not-discovered.example"}, context
+        )
+    )["error_code"] == "DISCOVERY_VALIDATION_REQUIRES_CANDIDATE"
 
 
 @pytest.mark.asyncio
@@ -1405,13 +1746,19 @@ async def test_same_turn_broad_discovery_fanout_is_capped_but_inspection_is_allo
     assert await agent.before_tool_callback(search, {"query": "first"}, context) is None
     blocked = await agent.before_tool_callback(search, {"query": "second"}, context)
     assert blocked["error_code"] == "DISCOVERY_FANOUT_LIMIT"
-    assert await agent.before_tool_callback(
-        inspect, {"url": "https://example.org/known"}, context
-    ) is None
+    assert (
+        await agent.before_tool_callback(
+            inspect, {"url": "https://example.org/known"}, context
+        )
+        is None
+    )
     assert "Per-turn research budget" in request.config.system_instruction
 
     await agent.before_model_callback(context, _research_request(search, inspect))
-    assert await agent.before_tool_callback(search, {"query": "next turn"}, context) is None
+    assert (
+        await agent.before_tool_callback(search, {"query": "next turn"}, context)
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -1474,7 +1821,10 @@ async def test_model_search_fanout_executes_only_one_call_per_response(monkeypat
         "DISCOVERY_FANOUT_LIMIT"
     ]
     assert turn["visible_tool_declarations"][0]["name"] == "search"
-    assert "Search broadly for candidate sources" in turn["visible_tool_declarations"][0]["description"]
+    assert (
+        "Search broadly for candidate sources"
+        in turn["visible_tool_declarations"][0]["description"]
+    )
     assert "candidate_evidence" not in turns[1]["semantic_progress_events"]
 
 
@@ -1567,9 +1917,12 @@ async def test_candidate_inspection_progress_is_bounded_during_agent_lifecycle()
         for declaration in group.function_declarations or []
     }
     assert search.name in visible
-    assert state["__fedotmas_research_progress"]["researcher"][
-        "candidate_inspection_progress_count"
-    ] == 3
+    assert (
+        state["__fedotmas_research_progress"]["researcher"][
+            "candidate_inspection_progress_count"
+        ]
+        == 3
+    )
     assert request.config.tools
 
     await inspect_candidate(candidates[0]["url"])
@@ -1616,12 +1969,15 @@ async def test_repeated_no_progress_turns_hide_broad_discovery_and_are_recorded(
         request = _research_request(search, inspect)
         await agent.before_model_callback(context, request)
         await telemetry.before_tool_callback(
-            tool=inspect, tool_args={"url": f"https://example.org/{_ + 1}"},
+            tool=inspect,
+            tool_args={"url": f"https://example.org/{_ + 1}"},
             tool_context=inspect_context,
         )
         await telemetry.after_tool_callback(
-            tool=inspect, tool_args={"url": f"https://example.org/{_ + 1}"},
-            tool_context=inspect_context, result={"content": "another page"},
+            tool=inspect,
+            tool_args={"url": f"https://example.org/{_ + 1}"},
+            tool_context=inspect_context,
+            result={"content": "another page"},
         )
         await agent.after_tool_callback(
             inspect,
@@ -1632,7 +1988,12 @@ async def test_repeated_no_progress_turns_hide_broad_discovery_and_are_recorded(
 
     trace = state["_fedotmas_execution"]["turn_observability"]["researcher"]
     assert trace[-1]["no_progress_turns"] == 2
-    assert state["_fedotmas_execution"]["research_progress"]["researcher"]["no_progress_turns"] == 2
+    assert (
+        state["_fedotmas_execution"]["research_progress"]["researcher"][
+            "no_progress_turns"
+        ]
+        == 2
+    )
     assert search.name not in {
         declaration.name
         for group in request.config.tools or []
@@ -1641,14 +2002,18 @@ async def test_repeated_no_progress_turns_hide_broad_discovery_and_are_recorded(
     assert "repeated turns without semantic progress" in {
         item["reason"] for item in trace[-1]["removed_tools"]
     }
-    assert (await agent.before_tool_callback(
-        inspect, {"url": "https://example.org/further-page"}, context
-    ))["error_code"] == "RESEARCH_CONVERGENCE_REQUIRED"
+    assert (
+        await agent.before_tool_callback(
+            inspect, {"url": "https://example.org/further-page"}, context
+        )
+    )["error_code"] == "RESEARCH_CONVERGENCE_REQUIRED"
 
 
 @pytest.mark.asyncio
 async def test_invalid_calls_do_not_spend_evidence_stagnation_turns():
-    search = FunctionTool(func=lambda query: {"results": [{"url": "https://example.org/a"}]})
+    search = FunctionTool(
+        func=lambda query: {"results": [{"url": "https://example.org/a"}]}
+    )
     search.name = "searxng_search"
     inspect = FunctionTool(func=lambda url: {"content": ""})
     inspect.name = "markdown"
@@ -1669,7 +2034,9 @@ async def test_invalid_calls_do_not_spend_evidence_stagnation_turns():
     # First turn: a successful discovery and inspection, both without progress.
     await agent.before_model_callback(context, _research_request(search, inspect))
     await agent.after_tool_callback(
-        search, {"query": "topic"}, tool_context,
+        search,
+        {"query": "topic"},
+        tool_context,
         {"results": [{"url": "https://example.org/a"}]},
     )
     await agent.after_tool_callback(
@@ -1679,24 +2046,35 @@ async def test_invalid_calls_do_not_spend_evidence_stagnation_turns():
     # The next turn records one stagnant evidence step. Invalid calls don't add
     # evidence attempts, so a following legitimate inspection remains allowed.
     await agent.before_model_callback(context, _research_request(search, inspect))
-    assert state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is False
+    assert (
+        state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is False
+    )
     for args in ({"url": ""}, {"url": ""}):
         await agent.after_tool_callback(
-            inspect, args, tool_context,
+            inspect,
+            args,
+            tool_context,
             {"isError": True, "error_code": "INVALID_TOOL_INPUT"},
         )
     await agent.before_model_callback(context, _research_request(search, inspect))
-    assert state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is False
-    assert await agent.before_tool_callback(
-        inspect, {"url": "https://example.org/b"}, context
-    ) is None
+    assert (
+        state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is False
+    )
+    assert (
+        await agent.before_tool_callback(
+            inspect, {"url": "https://example.org/b"}, context
+        )
+        is None
+    )
     await agent.after_tool_callback(
         inspect, {"url": "https://example.org/b"}, tool_context, {"content": ""}
     )
 
     # Three genuine no-progress inspections eventually force convergence.
     await agent.before_model_callback(context, _research_request(search, inspect))
-    assert state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is True
+    assert (
+        state[builder.RESEARCH_TURN_STATE_KEY]["researcher"]["force_converge"] is True
+    )
 
 
 @pytest.mark.asyncio
@@ -1705,7 +2083,9 @@ async def test_source_level_transcript_error_counts_as_executed_evidence_attempt
     inspect.name = "get_transcript"
     agent = builder._build_llm_agent(
         MAWAgentConfig(name="researcher", instruction="Research", output_key="out"),
-        [inspect], None, autonomous=False,
+        [inspect],
+        None,
+        autonomous=False,
     )
     state: dict = {}
     context = _context(state)
@@ -1734,7 +2114,9 @@ async def test_resolved_required_output_field_resets_no_progress():
     search = FunctionTool(func=lambda query: {"results": []})
     search.name = "search"
     cfg = MAWAgentConfig(
-        name="researcher", instruction="Research", output_key="artifact",
+        name="researcher",
+        instruction="Research",
+        output_key="artifact",
         output_contract=ArtifactContract(required_fields=["finding"]),
     )
     agent = builder._build_llm_agent(cfg, [search], None, autonomous=False)
@@ -1755,7 +2137,9 @@ async def test_resolved_required_output_field_resets_no_progress():
     assert state["__fedotmas_research_turns"]["researcher"]["force_converge"] is False
     assert any(
         item.startswith("handoff_field:finding")
-        for item in state["__fedotmas_research_progress"]["researcher"]["progress_events"]
+        for item in state["__fedotmas_research_progress"]["researcher"][
+            "progress_events"
+        ]
     )
 
 
@@ -1791,7 +2175,9 @@ async def test_complete_evidence_verifier_cannot_broad_search():
         for group in request.config.tools or []
         for declaration in group.function_declarations or []
     }
-    blocked = await verifier.before_tool_callback(search, {"query": "broad query"}, context)
+    blocked = await verifier.before_tool_callback(
+        search, {"query": "broad query"}, context
+    )
     assert blocked["error_code"] == "EVIDENCE_FIRST_SEARCH_DISABLED"
 
 
@@ -1821,7 +2207,9 @@ async def test_nested_repeated_identity_contract_preserves_each_orcid():
 
 
 @pytest.mark.asyncio
-async def test_contract_repair_rejects_identity_copied_from_unrelated_field(monkeypatch):
+async def test_contract_repair_rejects_identity_copied_from_unrelated_field(
+    monkeypatch,
+):
     llm = _ScriptedLlm(
         model="openai/test",
         responses=[
@@ -1856,9 +2244,12 @@ async def test_contract_repair_rejects_identity_copied_from_unrelated_field(monk
     assert state["_fedotmas_execution"]["handoff_issues"][0]["kind"] == (
         "incomplete_artifact"
     )
-    assert "paper_id" in state["_fedotmas_execution"]["contract_repairs"][
-        "producer"
-    ][-1]["missing_fields"]
+    assert (
+        "paper_id"
+        in state["_fedotmas_execution"]["contract_repairs"]["producer"][-1][
+            "missing_fields"
+        ]
+    )
 
 
 @pytest.mark.asyncio
@@ -1894,7 +2285,7 @@ async def test_repaired_artifact_is_validated_and_consumed_downstream(monkeypatc
                 role="model",
                 parts=[
                     types.Part.from_text(
-                        text='Calculated candidate pairs:\n'
+                        text="Calculated candidate pairs:\n"
                         '```json\n{"valid_pairs":[[7,9]]}\n```'
                     )
                 ],
@@ -2099,27 +2490,96 @@ async def test_exhausted_search_budget_blocks_backend_and_bounds_retries(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_sequential_extractor_uses_upstream_source_for_browser_and_recovery(monkeypatch):
+async def test_sequential_extractor_uses_upstream_source_for_browser_and_recovery(
+    monkeypatch,
+):
     finder_llm = _ScriptedLlm(
         model="openai/finder",
-        responses=[types.Content(role="model", parts=[types.Part.from_text(text=json.dumps({"sources": [{"title": "Known source", "doi": "10.1234/abc"}]}))])],
+        responses=[
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part.from_text(
+                        text=json.dumps(
+                            {
+                                "sources": [
+                                    {"title": "Known source", "doi": "10.1234/abc"}
+                                ]
+                            }
+                        )
+                    )
+                ],
+            )
+        ],
     )
     extractor_llm = _ScriptedLlm(
         model="openai/extractor",
         responses=[
-            types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(id="browser-1", name="complete_browser_task", args={"task": "Open https://doi.org/10.1234/abc"}))]),
-            types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(id="search-1", name="searxng_search", args={"query": "find another copy of Known source DOI 10.1234/abc"}))]),
-            types.Content(role="model", parts=[types.Part.from_text(text='{"evidence":"recovered"}')]),
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            id="browser-1",
+                            name="complete_browser_task",
+                            args={"task": "Open https://doi.org/10.1234/abc"},
+                        )
+                    )
+                ],
+            ),
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            id="search-1",
+                            name="searxng_search",
+                            args={
+                                "query": "find another copy of Known source DOI 10.1234/abc"
+                            },
+                        )
+                    )
+                ],
+            ),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text='{"evidence":"recovered"}')],
+            ),
         ],
     )
     llms = {"openai/finder": finder_llm, "openai/extractor": extractor_llm}
     monkeypatch.setattr(builder, "_resolve_llm", lambda model, *_args: llms[model])
     config = MAWConfig(
         agents=[
-            MAWAgentConfig(name="source_finder", instruction="Find the source", output_key="source_handoff", model="openai/finder"),
-            MAWAgentConfig(name="extractor", instruction="Inspect and extract evidence", output_key="evidence", model="openai/extractor", research_mode="inspection_only", research_policy="targeted_recovery", input_requirements=[ArtifactRequirement(source_key="source_handoff", required_fields=["sources"], identity_fields=["sources[].doi"])]),
+            MAWAgentConfig(
+                name="source_finder",
+                instruction="Find the source",
+                output_key="source_handoff",
+                model="openai/finder",
+            ),
+            MAWAgentConfig(
+                name="extractor",
+                instruction="Inspect and extract evidence",
+                output_key="evidence",
+                model="openai/extractor",
+                research_mode="inspection_only",
+                research_policy="targeted_recovery",
+                input_requirements=[
+                    ArtifactRequirement(
+                        source_key="source_handoff",
+                        required_fields=["sources"],
+                        identity_fields=["sources[].doi"],
+                    )
+                ],
+            ),
         ],
-        pipeline=MAWStepConfig(type="sequential", children=[MAWStepConfig(type="agent", agent_name="source_finder"), MAWStepConfig(type="agent", agent_name="extractor")]),
+        pipeline=MAWStepConfig(
+            type="sequential",
+            children=[
+                MAWStepConfig(type="agent", agent_name="source_finder"),
+                MAWStepConfig(type="agent", agent_name="extractor"),
+            ],
+        ),
     )
     root = builder.build(config, autonomous=False)
     opened: list[str] = []
@@ -2130,9 +2590,14 @@ async def test_sequential_extractor_uses_upstream_source_for_browser_and_recover
     search.name = "searxng_search"
     root.sub_agents[1].tools = [browser, search]
 
-    result = await run_pipeline(root, "Find evidence for this source", session_service=InMemorySessionService())
+    result = await run_pipeline(
+        root, "Find evidence for this source", session_service=InMemorySessionService()
+    )
 
     assert opened == ["Open https://doi.org/10.1234/abc"]
     assert searches == ["find another copy of Known source DOI 10.1234/abc"]
     ledger = result.state["__fedotmas_research_candidates"]["extractor"]
-    assert any(item["doi"] == "10.1234/abc" and item["url"] == "https://doi.org/10.1234/abc" for item in ledger)
+    assert any(
+        item["doi"] == "10.1234/abc" and item["url"] == "https://doi.org/10.1234/abc"
+        for item in ledger
+    )

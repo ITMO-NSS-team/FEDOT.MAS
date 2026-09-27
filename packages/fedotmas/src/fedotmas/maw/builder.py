@@ -305,9 +305,7 @@ async def _repair_contract_once(
         if reason is not None:
             finish_reason = getattr(reason, "name", None) or str(reason)
         if response.usage_metadata is not None:
-            usage["prompt_tokens"] = (
-                response.usage_metadata.prompt_token_count or 0
-            )
+            usage["prompt_tokens"] = response.usage_metadata.prompt_token_count or 0
             usage["completion_tokens"] = (
                 response.usage_metadata.candidates_token_count or 0
             )
@@ -415,7 +413,11 @@ def _repair_values_supported(
             if not expected or not any(value == item for item in expected):
                 invalid.append(field)
             continue
-        if field in source and not _is_blank(source[field]) and result.get(field) != source[field]:
+        if (
+            field in source
+            and not _is_blank(source[field])
+            and result.get(field) != source[field]
+        ):
             invalid.append(field)
             continue
         if field not in result or _is_blank(result[field]):
@@ -441,9 +443,8 @@ def _repair_values_supported(
                 def collect(value: Any, semantic_field: str, found: list[Any]) -> None:
                     if isinstance(value, dict):
                         for key, item in value.items():
-                            if (
-                                isinstance(key, str)
-                                and key_tokens(key) & key_tokens(semantic_field)
+                            if isinstance(key, str) and key_tokens(key) & key_tokens(
+                                semantic_field
                             ):
                                 found.append(item)
                             collect(item, semantic_field, found)
@@ -627,20 +628,25 @@ def _resolve_recovered_handoffs(
                     [*requirement.required_fields, *requirement.identity_fields]
                 )
             )
-            if not required_fields or missing_contract_fields(
-                artifact, required_fields
-            )[1]:
+            if (
+                not required_fields
+                or missing_contract_fields(artifact, required_fields)[1]
+            ):
                 continue
         metadata = state.get(EXECUTION_METADATA_KEY)
         issues = metadata.get("handoff_issues") if isinstance(metadata, dict) else None
-        was_unresolved = any(
-            isinstance(issue, dict)
-            and issue.get("kind") == "incomplete_handoff"
-            and issue.get("agent") == cfg.name
-            and issue.get("source_key") == requirement.source_key
-            and issue.get("resolved") is not True
-            for issue in issues
-        ) if isinstance(issues, list) else False
+        was_unresolved = (
+            any(
+                isinstance(issue, dict)
+                and issue.get("kind") == "incomplete_handoff"
+                and issue.get("agent") == cfg.name
+                and issue.get("source_key") == requirement.source_key
+                and issue.get("resolved") is not True
+                for issue in issues
+            )
+            if isinstance(issues, list)
+            else False
+        )
         resolve_execution_issue(
             state,
             {
@@ -693,6 +699,16 @@ def _build_llm_agent(
             "and performs the requested computation. Do not use code-agent merely "
             "to inspect or print file contents; use document tools for reading. If "
             "another computation call is needed, pass every required file again."
+        )
+    if _is_verifier_role(cfg):
+        instruction_text += (
+            "\n\nVerifier role: when an upstream agent provides a concrete candidate, "
+            "verify that candidate and its claimed evidence. Do not solve unrelated "
+            "variants or explore alternative interpretations unless a specific "
+            "ambiguity blocks verification. If upstream is explicitly unresolved, "
+            "you may perform one independent recovery computation and, only when "
+            "that exposes a concrete implementation defect, one targeted correction. "
+            "Then finalize ACCEPT, REJECT, or UNRESOLVED."
         )
     terminal_boundary = (
         final_answer_contract is not None and cfg.name == final_answer_agent
@@ -1011,7 +1027,9 @@ def _build_llm_agent(
     async def before_tool(tool, args, tool_context) -> dict | None:
         capability = _runtime_tool_capability(tool)
         blocked: tuple[str, str] | None = None
-        if cfg.research_mode == "discovery_only" and _is_candidate_validation_tool(tool):
+        if cfg.research_mode == "discovery_only" and _is_candidate_validation_tool(
+            tool
+        ):
             target = _candidate_validation_target(tool, args)
             candidates = _candidate_context(tool_context.state, cfg.name)
             known = bool(target) and any(
@@ -1061,7 +1079,8 @@ def _build_llm_agent(
         if (
             isinstance(current_turn, dict)
             and current_turn.get("force_converge") is True
-            and capability in {
+            and capability
+            in {
                 ToolCapability.URL_INSPECTION,
                 ToolCapability.DOCUMENT_INSPECTION,
                 ToolCapability.MEDIA_INSPECTION,
@@ -1085,12 +1104,23 @@ def _build_llm_agent(
                 if len(anchor) >= 6
             )
             turn_root = tool_context.state.get(RESEARCH_TURN_STATE_KEY)
-            current_turn = turn_root.get(cfg.name) if isinstance(turn_root, dict) else None
+            current_turn = (
+                turn_root.get(cfg.name) if isinstance(turn_root, dict) else None
+            )
             if not anchored:
-                blocked = ("BROWSER_DISCOVERY_POLICY", "Browser exploration must be anchored to a known candidate; use the gated discovery tool for open-ended search.")
+                blocked = (
+                    "BROWSER_DISCOVERY_POLICY",
+                    "Browser exploration must be anchored to a known candidate; use the gated discovery tool for open-ended search.",
+                )
             elif isinstance(current_turn, dict) and current_turn.get("force_converge"):
-                blocked = ("RESEARCH_CONVERGENCE_REQUIRED", "Inspect a known candidate or hand off; browser exploration is paused.")
-        if normalize_tool_name(tool.name) in {"get_next_action", "research_controller_get_next_action"}:
+                blocked = (
+                    "RESEARCH_CONVERGENCE_REQUIRED",
+                    "Inspect a known candidate or hand off; browser exploration is paused.",
+                )
+        if normalize_tool_name(tool.name) in {
+            "get_next_action",
+            "research_controller_get_next_action",
+        }:
             ready_root = tool_context.state.get(RESEARCH_CONTROLLER_STATE_KEY)
             if not isinstance(ready_root, dict) or ready_root.get(cfg.name) is not True:
                 blocked = (
@@ -1098,9 +1128,14 @@ def _build_llm_agent(
                     "Call update_research_state successfully before get_next_action.",
                 )
             turn_root = tool_context.state.get(RESEARCH_TURN_STATE_KEY)
-            current_turn = turn_root.get(cfg.name) if isinstance(turn_root, dict) else None
+            current_turn = (
+                turn_root.get(cfg.name) if isinstance(turn_root, dict) else None
+            )
             if isinstance(current_turn, dict) and current_turn.get("force_converge"):
-                blocked = ("RESEARCH_CONVERGENCE_REQUIRED", "Controller polling is paused after repeated turns without progress.")
+                blocked = (
+                    "RESEARCH_CONVERGENCE_REQUIRED",
+                    "Controller polling is paused after repeated turns without progress.",
+                )
         if capability == ToolCapability.DISCOVERY:
             effective_policy = _effective_research_policy(tool_context.state, cfg)
             gate_root = tool_context.state.get(RESEARCH_GATE_STATE_KEY)
@@ -1113,7 +1148,10 @@ def _build_llm_agent(
                         "mark missing claims unresolved."
                     ),
                 )
-            elif cfg.research_mode == "inspection_only" and effective_policy != "targeted_recovery":
+            elif (
+                cfg.research_mode == "inspection_only"
+                and effective_policy != "targeted_recovery"
+            ):
                 blocked = (
                     "INSPECTION_ONLY_DISCOVERY_DISABLED",
                     (
@@ -1121,8 +1159,10 @@ def _build_llm_agent(
                         "report the missing source as unresolved."
                     ),
                 )
-            elif cfg.research_mode == "mixed" and isinstance(gate, dict) and (
-                gate.get("phase") == "inspect" or gate.get("gated") is True
+            elif (
+                cfg.research_mode == "mixed"
+                and isinstance(gate, dict)
+                and (gate.get("phase") == "inspect" or gate.get("gated") is True)
             ):
                 candidates = _candidate_context(tool_context.state, cfg.name)
                 blocked = (
@@ -1153,19 +1193,45 @@ def _build_llm_agent(
                     )
                 else:
                     turns["discovery_calls"] = 1
-                    if cfg.research_mode == "inspection_only" and effective_policy == "targeted_recovery":
-                        progress_root = tool_context.state.get(RESEARCH_PROGRESS_STATE_KEY, {})
-                        progress = progress_root.get(cfg.name, {}) if isinstance(progress_root, dict) else {}
+                    if (
+                        cfg.research_mode == "inspection_only"
+                        and effective_policy == "targeted_recovery"
+                    ):
+                        progress_root = tool_context.state.get(
+                            RESEARCH_PROGRESS_STATE_KEY, {}
+                        )
+                        progress = (
+                            progress_root.get(cfg.name, {})
+                            if isinstance(progress_root, dict)
+                            else {}
+                        )
                         query = str(args.get("query", "")).casefold()
-                        candidate_text = " ".join(str(item.get("title", "")) + " " + str(item.get("url", "")) for item in _candidate_context(tool_context.state, cfg.name)).casefold()
-                        if not query or not any(token in candidate_text for token in query.split() if len(token) >= 5):
-                            blocked = ("TARGETED_RECOVERY_REQUIRES_IDENTITY", "Recovery search must reference a supplied title, DOI, domain, or URL.")
-                        elif isinstance(progress, dict) and progress.get("targeted_recovery_used"):
-                            blocked = ("TARGETED_RECOVERY_EXHAUSTED", "The one targeted recovery search has already been used.")
+                        candidate_text = " ".join(
+                            str(item.get("title", "")) + " " + str(item.get("url", ""))
+                            for item in _candidate_context(tool_context.state, cfg.name)
+                        ).casefold()
+                        if not query or not any(
+                            token in candidate_text
+                            for token in query.split()
+                            if len(token) >= 5
+                        ):
+                            blocked = (
+                                "TARGETED_RECOVERY_REQUIRES_IDENTITY",
+                                "Recovery search must reference a supplied title, DOI, domain, or URL.",
+                            )
+                        elif isinstance(progress, dict) and progress.get(
+                            "targeted_recovery_used"
+                        ):
+                            blocked = (
+                                "TARGETED_RECOVERY_EXHAUSTED",
+                                "The one targeted recovery search has already been used.",
+                            )
                         else:
                             progress["targeted_recovery_used"] = True
                             progress_root[cfg.name] = progress
-                            tool_context.state[RESEARCH_PROGRESS_STATE_KEY] = progress_root
+                            tool_context.state[RESEARCH_PROGRESS_STATE_KEY] = (
+                                progress_root
+                            )
                     if isinstance(turns_root, dict):
                         turns_root[cfg.name] = turns
                         tool_context.state[RESEARCH_TURN_STATE_KEY] = turns_root
@@ -1192,8 +1258,15 @@ def _build_llm_agent(
 
     async def after_tool(tool, args, tool_context, tool_response) -> None:
         name = normalize_tool_name(tool.name)
-        if name in {"update_research_state", "research_controller_update_research_state"}:
-            snapshot = tool_response.get("research_state") if isinstance(tool_response, dict) else None
+        if name in {
+            "update_research_state",
+            "research_controller_update_research_state",
+        }:
+            snapshot = (
+                tool_response.get("research_state")
+                if isinstance(tool_response, dict)
+                else None
+            )
             if isinstance(snapshot, dict) and snapshot.get("version"):
                 ready_root = tool_context.state.get(RESEARCH_CONTROLLER_STATE_KEY)
                 if not isinstance(ready_root, dict):
@@ -1201,10 +1274,13 @@ def _build_llm_agent(
                 ready_root[cfg.name] = True
                 tool_context.state[RESEARCH_CONTROLLER_STATE_KEY] = ready_root
         capability = _runtime_tool_capability(tool)
-        error_code = tool_response.get("error_code") if isinstance(tool_response, dict) else None
+        error_code = (
+            tool_response.get("error_code") if isinstance(tool_response, dict) else None
+        )
         control_failure = is_non_executed_policy_block(error_code)
         is_research_action = (
-            capability in {
+            capability
+            in {
                 ToolCapability.DISCOVERY,
                 ToolCapability.URL_INSPECTION,
                 ToolCapability.DOCUMENT_INSPECTION,
@@ -1275,29 +1351,48 @@ def _build_llm_agent(
         if isinstance(turns, dict):
             turns[cfg.name] = turn_index
         progress_root = state.get(RESEARCH_PROGRESS_STATE_KEY)
-        progress = progress_root.get(cfg.name) if isinstance(progress_root, dict) else None
+        progress = (
+            progress_root.get(cfg.name) if isinstance(progress_root, dict) else None
+        )
         if not isinstance(progress, dict):
             progress = {"version": 0, "last_turn_version": 0, "no_progress_turns": 0}
         version = progress.get("version", 0)
-        version = version if isinstance(version, int) and not isinstance(version, bool) else 0
+        version = (
+            version if isinstance(version, int) and not isinstance(version, bool) else 0
+        )
         previous_version = progress.get("last_turn_version", version)
         previous_version = (
             previous_version
-            if isinstance(previous_version, int) and not isinstance(previous_version, bool)
+            if isinstance(previous_version, int)
+            and not isinstance(previous_version, bool)
             else version
         )
         no_progress = progress.get("no_progress_turns", 0)
-        no_progress = no_progress if isinstance(no_progress, int) and not isinstance(no_progress, bool) else 0
+        no_progress = (
+            no_progress
+            if isinstance(no_progress, int) and not isinstance(no_progress, bool)
+            else 0
+        )
         recorded_progress = progress.get("progress_events")
-        recorded_progress = recorded_progress if isinstance(recorded_progress, list) else []
+        recorded_progress = (
+            recorded_progress if isinstance(recorded_progress, list) else []
+        )
         progress_delta = max(0, version - previous_version)
-        semantic_progress_events = [
-            str(signal)[:160] for signal in recorded_progress[-progress_delta:]
-        ] if progress_delta else []
+        semantic_progress_events = (
+            [str(signal)[:160] for signal in recorded_progress[-progress_delta:]]
+            if progress_delta
+            else []
+        )
         evidence_root = state.get(RESEARCH_EVIDENCE_ACTION_STATE_KEY)
-        evidence_actions = evidence_root.get(cfg.name, 0) if isinstance(evidence_root, dict) else 0
+        evidence_actions = (
+            evidence_root.get(cfg.name, 0) if isinstance(evidence_root, dict) else 0
+        )
         previous_turn_root = state.get(RESEARCH_TURN_STATE_KEY)
-        previous_turn = previous_turn_root.get(cfg.name) if isinstance(previous_turn_root, dict) else None
+        previous_turn = (
+            previous_turn_root.get(cfg.name)
+            if isinstance(previous_turn_root, dict)
+            else None
+        )
         previous_evidence_actions = (
             previous_turn.get("evidence_actions_at_start", 0)
             if isinstance(previous_turn, dict)
@@ -1305,7 +1400,8 @@ def _build_llm_agent(
         )
         previous_evidence_actions = (
             previous_evidence_actions
-            if isinstance(previous_evidence_actions, int) and not isinstance(previous_evidence_actions, bool)
+            if isinstance(previous_evidence_actions, int)
+            and not isinstance(previous_evidence_actions, bool)
             else evidence_actions
         )
         evidence_step_executed = evidence_actions > previous_evidence_actions
@@ -1344,10 +1440,18 @@ def _build_llm_agent(
         for name, tool in llm_request.tools_dict.items():
             if _runtime_tool_capability(tool) == ToolCapability.DIAGNOSTIC:
                 removed[name] = "diagnostic/control tools are internal-only"
-            if normalize_tool_name(tool.name) in {"get_next_action", "research_controller_get_next_action"}:
+            if normalize_tool_name(tool.name) in {
+                "get_next_action",
+                "research_controller_get_next_action",
+            }:
                 ready_root = state.get(RESEARCH_CONTROLLER_STATE_KEY)
-                if not isinstance(ready_root, dict) or ready_root.get(cfg.name) is not True:
-                    removed[name] = "update_research_state must establish a valid snapshot first"
+                if (
+                    not isinstance(ready_root, dict)
+                    or ready_root.get(cfg.name) is not True
+                ):
+                    removed[name] = (
+                        "update_research_state must establish a valid snapshot first"
+                    )
         discovery_names = {
             name
             for name, tool in llm_request.tools_dict.items()
@@ -1371,12 +1475,20 @@ def _build_llm_agent(
         if effective_policy == "evidence_first":
             hide_discovery_reason = "evidence_first policy"
         elif cfg.research_mode == "inspection_only" and not (
-            effective_policy == "targeted_recovery" and not _targeted_recovery_used(state, cfg.name)
+            effective_policy == "targeted_recovery"
+            and not _targeted_recovery_used(state, cfg.name)
         ):
             hide_discovery_reason = "inspection_only research mode"
-        elif cfg.research_mode == "mixed" and isinstance(gate, dict) and gate.get("phase") == "inspect":
+        elif (
+            cfg.research_mode == "mixed"
+            and isinstance(gate, dict)
+            and gate.get("phase") == "inspect"
+        ):
             hide_discovery_reason = "candidate inspection required"
-        elif cfg.research_mode == "discovery_only" and _discovery_waves_used(state, cfg.name) >= 3:
+        elif (
+            cfg.research_mode == "discovery_only"
+            and _discovery_waves_used(state, cfg.name) >= 3
+        ):
             hide_discovery_reason = "discovery wave allowance exhausted"
         elif turn_state["force_converge"]:
             hide_discovery_reason = "repeated turns without semantic progress"
@@ -1387,8 +1499,10 @@ def _build_llm_agent(
                 {
                     name: "discovery_only source selection role"
                     for name in inspection_names
-                    if normalize_tool_name(llm_request.tools_dict[name].name) != "get_video_info"
-                    and normalize_tool_name(llm_request.tools_dict[name].name) != "markdown"
+                    if normalize_tool_name(llm_request.tools_dict[name].name)
+                    != "get_video_info"
+                    and normalize_tool_name(llm_request.tools_dict[name].name)
+                    != "markdown"
                 }
             )
 
@@ -1400,7 +1514,10 @@ def _build_llm_agent(
         for name in surface_filter_names:
             removed[name] = "diagnostic/control tools are internal-only"
         for name in all_tool_names:
-            if _runtime_tool_capability(llm_request.tools_dict[name]) == ToolCapability.DIAGNOSTIC:
+            if (
+                _runtime_tool_capability(llm_request.tools_dict[name])
+                == ToolCapability.DIAGNOSTIC
+            ):
                 removed[name] = "diagnostic/control tools are internal-only"
         for name in discovery_names:
             if hide_discovery_reason:
@@ -1424,27 +1541,49 @@ def _build_llm_agent(
 
         if effective_policy == "evidence_first":
             llm_request.append_instructions(
-                ["This role is evidence-first. Verify against supplied evidence; identify missing evidence as unresolved."]
+                [
+                    "This role is evidence-first. Verify against supplied evidence; identify missing evidence as unresolved."
+                ]
             )
-        if cfg.research_mode == "mixed" and isinstance(gate, dict) and gate.get("phase") == "inspect":
+        if (
+            cfg.research_mode == "mixed"
+            and isinstance(gate, dict)
+            and gate.get("phase") == "inspect"
+        ):
             llm_request.append_instructions(
-                ["Inspect at least one pending candidate before another broad search. Available candidates: " + json.dumps(candidates, ensure_ascii=False)]
+                [
+                    "Inspect at least one pending candidate before another broad search. Available candidates: "
+                    + json.dumps(candidates, ensure_ascii=False)
+                ]
             )
-        if cfg.research_mode == "discovery_only" and _discovery_waves_used(state, cfg.name) >= 3:
+        if (
+            cfg.research_mode == "discovery_only"
+            and _discovery_waves_used(state, cfg.name) >= 3
+        ):
             llm_request.append_instructions(
-                ["Select the best small set from these candidates and return the source handoff now: " + json.dumps(candidates, ensure_ascii=False)]
+                [
+                    "Select the best small set from these candidates and return the source handoff now: "
+                    + json.dumps(candidates, ensure_ascii=False)
+                ]
             )
         elif candidates and research_agent:
             llm_request.append_instructions(
-                ["Persistent candidate ledger (reuse these titles, snippets, and URLs; do not search for known candidates again): " + json.dumps(candidates, ensure_ascii=False)]
+                [
+                    "Persistent candidate ledger (reuse these titles, snippets, and URLs; do not search for known candidates again): "
+                    + json.dumps(candidates, ensure_ascii=False)
+                ]
             )
         if research_agent or discovery_names:
             llm_request.append_instructions(
-                ["Per-turn research budget: make at most one broad discovery call during this model turn. Known-URL inspections and computations are not subject to this limit."]
+                [
+                    "Per-turn research budget: make at most one broad discovery call during this model turn. Known-URL inspections and computations are not subject to this limit."
+                ]
             )
         if turn_state["force_converge"] and (research_agent or discovery_names):
             llm_request.append_instructions(
-                ["Several consecutive turns produced no semantic progress. Change strategy once, inspect/select existing evidence, or provide the best honest incomplete handoff. Do not repeat a low-value search."]
+                [
+                    "Several consecutive turns produced no semantic progress. Change strategy once, inspect/select existing evidence, or provide the best honest incomplete handoff. Do not repeat a low-value search."
+                ]
             )
 
         _record_turn_observability(
@@ -1454,10 +1593,11 @@ def _build_llm_agent(
             visible_tools=sorted(
                 name for name in all_tool_names if name not in removed
             ),
-            visible_tool_declarations=_visible_tool_declarations(
-                llm_request, removed
-            ),
-            removed_tools=[{"name": name, "reason": reason} for name, reason in sorted(removed.items())],
+            visible_tool_declarations=_visible_tool_declarations(llm_request, removed),
+            removed_tools=[
+                {"name": name, "reason": reason}
+                for name, reason in sorted(removed.items())
+            ],
             research_mode=cfg.research_mode,
             gate_state=(gate.get("phase") if isinstance(gate, dict) else "discover"),
             candidate_count=len(candidates),
@@ -1531,7 +1671,11 @@ def _requests_independent_research(cfg: MAWAgentConfig) -> bool:
 def _effective_research_policy(state: Any, cfg: MAWAgentConfig) -> str:
     root = state.get(RESEARCH_POLICY_STATE_KEY) if hasattr(state, "get") else None
     policy = root.get(cfg.name) if isinstance(root, dict) else None
-    return policy if policy in {"independent", "evidence_first", "targeted_recovery"} else cfg.research_policy
+    return (
+        policy
+        if policy in {"independent", "evidence_first", "targeted_recovery"}
+        else cfg.research_policy
+    )
 
 
 def _candidate_context(state: Any, agent: str) -> list[dict[str, Any]]:
@@ -1547,11 +1691,15 @@ def _candidate_context(state: Any, agent: str) -> list[dict[str, Any]]:
             "snippet": str(item.get("snippet") or "")[:320],
             "source_tool": str(item.get("source_tool") or "")[:60],
             "inspected": item.get("inspected") is True,
-            "inspection_status": str(item.get("inspection_status") or "uninspected")[:20],
+            "inspection_status": str(item.get("inspection_status") or "uninspected")[
+                :20
+            ],
             "inspection_tool": str(item.get("inspection_tool") or "")[:60],
             "inspection_error": str(item.get("inspection_error") or "")[:160],
             "doi": str(item.get("doi") or "")[:160],
-            "identity": item.get("identity") if isinstance(item.get("identity"), dict) else {},
+            "identity": item.get("identity")
+            if isinstance(item.get("identity"), dict)
+            else {},
         }
         for item in selected
         if isinstance(item, dict)
@@ -1577,7 +1725,9 @@ def _candidate_validation_target(tool: Any, args: dict[str, Any]) -> str | None:
             return None
         if value.startswith(("https://", "http://")):
             parsed = urlsplit(value)
-            value = (parse_qs(parsed.query).get("v") or [parsed.path.rsplit("/", 1)[-1]])[0]
+            value = (
+                parse_qs(parsed.query).get("v") or [parsed.path.rsplit("/", 1)[-1]]
+            )[0]
         return value.strip()
     return None
 
@@ -1594,7 +1744,11 @@ def _candidate_matches_validation(item: dict[str, Any], target: str) -> bool:
 
 
 def _seed_upstream_candidates(state: Any, cfg: MAWAgentConfig) -> None:
-    if not cfg.input_requirements or not hasattr(state, "get") or not hasattr(state, "__setitem__"):
+    if (
+        not cfg.input_requirements
+        or not hasattr(state, "get")
+        or not hasattr(state, "__setitem__")
+    ):
         return
     root = state.get(RESEARCH_CANDIDATE_LEDGER_KEY)
     if not isinstance(root, dict):
@@ -1603,7 +1757,8 @@ def _seed_upstream_candidates(state: Any, cfg: MAWAgentConfig) -> None:
     ledger = ledger if isinstance(ledger, list) else []
     by_identity = {
         (item.get("url"), item.get("doi"), item.get("title"))
-        for item in ledger if isinstance(item, dict)
+        for item in ledger
+        if isinstance(item, dict)
     }
     for requirement in cfg.input_requirements:
         artifact = parse_artifact(state.get(requirement.source_key))
@@ -1621,14 +1776,11 @@ def _seed_upstream_candidates(state: Any, cfg: MAWAgentConfig) -> None:
                     for key, value in record.items()
                     if isinstance(value, str)
                     and value.startswith(("http://", "https://"))
-                    and (
-                        "url" in str(key).casefold()
-                        or "link" in str(key).casefold()
-                    )
+                    and ("url" in str(key).casefold() or "link" in str(key).casefold())
                 ),
                 None,
             )
-            
+
             if url is None:
                 url = next(
                     (
@@ -1639,10 +1791,31 @@ def _seed_upstream_candidates(state: Any, cfg: MAWAgentConfig) -> None:
                     ),
                     None,
                 )
-            doi = next((record.get(key) for key in ("doi", "DOI") if isinstance(record.get(key), str) and record[key].strip()), None)
-            title = next((record.get(key) for key in ("title", "name", "label") if isinstance(record.get(key), str) and record[key].strip()), None)
+            doi = next(
+                (
+                    record.get(key)
+                    for key in ("doi", "DOI")
+                    if isinstance(record.get(key), str) and record[key].strip()
+                ),
+                None,
+            )
+            title = next(
+                (
+                    record.get(key)
+                    for key in ("title", "name", "label")
+                    if isinstance(record.get(key), str) and record[key].strip()
+                ),
+                None,
+            )
             if not doi and not url and not title and required_identity:
-                doi = next((str(value) for key, value in required_identity.items() if "doi" in key.casefold() and isinstance(value, (str, int))), None)
+                doi = next(
+                    (
+                        str(value)
+                        for key, value in required_identity.items()
+                        if "doi" in key.casefold() and isinstance(value, (str, int))
+                    ),
+                    None,
+                )
             if not url and doi:
                 url = f"https://doi.org/{doi.removeprefix('https://doi.org/')}"
             if not (url or doi or title):
@@ -1650,17 +1823,25 @@ def _seed_upstream_candidates(state: Any, cfg: MAWAgentConfig) -> None:
             key = (url, doi, title)
             if key in by_identity:
                 continue
-            ledger.append({
-                "url": url,
-                "doi": doi,
-                "title": str(title or "")[:180],
-                "snippet": str(record.get("snippet") or record.get("description") or "")[:420],
-                "source_tool": "upstream_handoff",
-                "query": None,
-                "inspected": False,
-                "inspection_status": "uninspected",
-                "identity": {str(k)[:80]: str(v)[:160] for k, v in required_identity.items() if isinstance(v, (str, int, float))},
-            })
+            ledger.append(
+                {
+                    "url": url,
+                    "doi": doi,
+                    "title": str(title or "")[:180],
+                    "snippet": str(
+                        record.get("snippet") or record.get("description") or ""
+                    )[:420],
+                    "source_tool": "upstream_handoff",
+                    "query": None,
+                    "inspected": False,
+                    "inspection_status": "uninspected",
+                    "identity": {
+                        str(k)[:80]: str(v)[:160]
+                        for k, v in required_identity.items()
+                        if isinstance(v, (str, int, float))
+                    },
+                }
+            )
             by_identity.add(key)
     if ledger:
         root[cfg.name] = ledger[-24:]
@@ -1810,7 +1991,12 @@ def _controller_recommendation(state: dict[str, Any], agent: str) -> str | None:
     )
     if isinstance(recommendations, dict):
         latest = recommendations.get(agent)
-        if latest in {"continue_search", "change_strategy", "strategy_blocked", "synthesize"}:
+        if latest in {
+            "continue_search",
+            "change_strategy",
+            "strategy_blocked",
+            "synthesize",
+        }:
             return latest
     return None
 
@@ -1818,7 +2004,11 @@ def _controller_recommendation(state: dict[str, Any], agent: str) -> str | None:
 def _abstention_reason(value: Any) -> str:
     if isinstance(value, dict):
         reason = value.get("reason")
-        return str(reason)[:500] if isinstance(reason, str) else "No supported answer was established."
+        return (
+            str(reason)[:500]
+            if isinstance(reason, str)
+            else "No supported answer was established."
+        )
     if isinstance(value, str):
         text = value.strip()
         start = text.find("<abstain>") + len("<abstain>")
@@ -1862,17 +2052,26 @@ def _loop_name(_children: list[BaseAgent]) -> str:
 
 
 def _runtime_tool_capability(tool: Any) -> ToolCapability:
-    return tool_capability(tool.name, description=getattr(tool, "description", "") or "")
+    return tool_capability(
+        tool.name, description=getattr(tool, "description", "") or ""
+    )
+
 
 def _discovery_waves_used(state: Any, agent: str) -> int:
-    progress = state.get(RESEARCH_PROGRESS_STATE_KEY, {}) if hasattr(state, "get") else {}
+    progress = (
+        state.get(RESEARCH_PROGRESS_STATE_KEY, {}) if hasattr(state, "get") else {}
+    )
     item = progress.get(agent, {}) if isinstance(progress, dict) else {}
-    return int(item.get("productive_discovery_waves", 0)) if isinstance(item, dict) else 0
+    return (
+        int(item.get("productive_discovery_waves", 0)) if isinstance(item, dict) else 0
+    )
+
 
 def _targeted_recovery_used(state: Any, agent: str) -> bool:
     root = state.get(RESEARCH_PROGRESS_STATE_KEY, {}) if hasattr(state, "get") else {}
     item = root.get(agent, {}) if isinstance(root, dict) else {}
     return bool(item.get("targeted_recovery_used")) if isinstance(item, dict) else False
+
 
 def candidate_anchors(item: dict) -> list[str]:
     anchors = []
