@@ -118,7 +118,7 @@
     const recorded = {
       ...preset,
       id: "rubber_heldout_reference_run_20260927",
-      title: "Шины · контрольная рецептура с MAPE",
+      title: "Прогноз свойств рецепта резины · MAW",
       query: heldoutQuery,
       syntheticExamples: [{query, model: "", source: "alternative"}],
       config: referenceConfig,

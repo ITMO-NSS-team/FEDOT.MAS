@@ -16,6 +16,7 @@ const [reference, original] = context.window.STARTUP_PRESETS;
 assert.equal(reference.id, 'rubber_heldout_reference_run_20260927');
 assert.equal(reference.real, true);
 assert.equal(reference.installOnExisting, true);
+assert.equal(reference.title, 'Прогноз свойств рецепта резины · MAW');
 assert.match(reference.query, /NR SMR-20 — 50 phr; SBR-1502 — 50 phr; технический углерод N220 — 60 phr/);
 assert.match(original.query, /NR SMR-20 — 55 phr; SBR-1502 — 45 phr; технический углерод N220 — 55 phr/);
 assert.ok(Math.abs(reference.rubberValidation.mape_pct - 3.2122669311542347) < 1e-8);
@@ -47,15 +48,24 @@ vm.runInContext(app.slice(app.indexOf('function rubberQualityHtml('),
 const qualityHtml = qualityContext.rubberQualityHtml(reference);
 assert.match(qualityHtml, /MAPE текущего расчёта[\s\S]*3,21 %/);
 assert.doesNotMatch(qualityHtml, /Нет контрольных измерений/);
-const migrate = app.slice(app.indexOf('  let queryUpdated = false;'),
+const migrate = app.slice(app.indexOf('  const retiredRubberId ='),
                           app.indexOf('  // В автономной копии список'));
-context.S = {custom: [{...original, query: 'пользовательская правка'}], hidden: []};
+context.S = {custom: [
+  {...original, query: 'пользовательская правка'},
+  {...reference, title: 'Шины · контрольная рецептура с MAPE'},
+], hidden: []};
 let saves = 0;
 context.storeScenarios = () => saves++;
 vm.runInContext(migrate, context);
 assert.equal(saves, 1);
-assert.equal(context.S.custom[0].id, reference.id);
-assert.equal(context.S.custom[1].query, 'пользовательская правка');
+assert.equal(context.S.custom[0].id, original.id);
+assert.equal(context.S.custom[0].query, 'пользовательская правка');
+assert.equal(context.S.custom[1].title, reference.title);
+assert.equal(context.S.hidden.includes(original.id), true);
+vm.runInContext(app.slice(app.indexOf('function scenarioList()'),
+                          app.indexOf('/** Стартовый вид')), context);
+assert.equal(vm.runInContext('scenarioList().length', context), 1);
+assert.equal(vm.runInContext('scenarioList()[0].id', context), reference.id);
 vm.runInContext(`{ ${migrate} }`, context);
 assert.equal(saves, 1);
 assert.equal(context.S.custom.length, 2);

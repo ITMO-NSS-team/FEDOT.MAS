@@ -32,9 +32,9 @@ for (const p of context.window.STARTUP_PRESETS) {
   assert.match(box.innerHTML, /Время не измерялось/);
   assert.ok(box.innerHTML.includes(`${p.breakdown.total_hours} чел.-ч`));
 }
-const migration = app.slice(app.indexOf("  let queryUpdated = false;"),
+const migration = app.slice(app.indexOf("  const retiredRubberId ="),
                            app.indexOf("  // В автономной копии список"));
-context.S = {custom: context.window.STARTUP_PRESETS.map(p => ({
+context.S = {hidden: [], custom: context.window.STARTUP_PRESETS.map(p => ({
   id: p.id, query: "user input", queryRevision: p.kind === "mas" ? 1 : p.queryRevision,
   brief: p.kind === "mas" ? p.brief + " Демонстрационные данные явно отделить от реальных данных STAIRS/SAMPO." : "user brief",
   manual: "old", config: {untouched: true},
