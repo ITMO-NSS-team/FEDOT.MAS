@@ -1,0 +1,33 @@
+{
+  "primary_metrics": [
+    "top1_accuracy",
+    "top3_accuracy",
+    "total_inference_cost",
+    "cost_per_correct_top1"
+  ],
+  "secondary_metrics": [
+    "input_tokens",
+    "output_tokens",
+    "model_calls",
+    "mcp_tool_calls",
+    "wall_clock_seconds",
+    "completed_examples",
+    "failure_rate",
+    "llm_calls_per_example",
+    "cost_per_1000_examples",
+    "conditional_top1_on_completed",
+    "end_to_end_top1"
+  ],
+  "success_criterion": {
+    "fedotmas_top1_minimum_codex_top1_minus_pp": 3.0,
+    "fedotmas_inference_cost_at_most_fraction_of_codex": 0.5
+  },
+  "relative_accuracy_retention": "FEDOTMAS_top1 / CODEX_top1; supplementary only; never substitutes absolute pp difference",
+  "statistical_comparisons": [
+    "fedotmas_cost_aware vs codex",
+    "fedotmas_cost_aware vs cheap_single_agent",
+    "fedotmas_cost_aware vs tfidf"
+  ],
+  "evaluation_policy": "one-shot after all prediction files are immutable; failed/missing predictions count incorrect end-to-end",
+  "selection_policy": "fixed seed; exclude every old pilot ID; exclude normalized work-name collisions with old pilot; no GT-based selection"
+}

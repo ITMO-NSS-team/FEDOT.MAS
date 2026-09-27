@@ -1,0 +1,43 @@
+{
+  "mode": "gt_blind_dry_run",
+  "system": "tfidf",
+  "run_id": "validation-smoke-2",
+  "ids": [
+    "4232",
+    "8574",
+    "5546",
+    "2137",
+    "1272",
+    "1385",
+    "8720",
+    "7146",
+    "6384",
+    "12007",
+    "1902",
+    "5506",
+    "1262",
+    "3269",
+    "13840",
+    "11701",
+    "8211",
+    "5185",
+    "4506",
+    "128"
+  ],
+  "batch_size": 20,
+  "fresh_session_per_batch": true,
+  "model": null,
+  "provider": "configured by environment",
+  "prompt": "Deterministic TF-IDF; no prompt or tools.",
+  "public_tool_surface": [],
+  "private_ground_truth_opened": false,
+  "accuracy_computed": false,
+  "allowed_inspection": [
+    "completion reliability",
+    "tokens",
+    "cost",
+    "runtime",
+    "schema",
+    "tool/runtime failures"
+  ]
+}

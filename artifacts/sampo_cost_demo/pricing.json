@@ -1,0 +1,7 @@
+{
+  "version": "manual-entry-before-run-v1",
+  "currency": "USD",
+  "provenance": "Must be filled from provider's published pricing or an explicitly dated manual quote before inference; no prices are embedded in Python.",
+  "source_date": null,
+  "models": {}
+}

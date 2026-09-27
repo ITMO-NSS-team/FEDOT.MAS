@@ -205,3 +205,9 @@ maw_runs/
 outputs/
 data/
 artifacts/
+!/artifacts/
+artifacts/*
+!/artifacts/sampo_cost_demo/
+artifacts/sampo_cost_demo/*
+!/artifacts/sampo_cost_demo/**
+artifacts/sampo_cost_demo/private_ground_truth.csv
