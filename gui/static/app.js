@@ -2509,6 +2509,24 @@ function initPresets() {
       saved.title = preset.title;
       queryUpdated = true;
     }
+    if (saved && preset.id === "rubber_heldout_reference_run_20260927") {
+      const oldHeading = "Прогнозные значения и сравнение с опубликованными данными";
+      const newHeading = "Прогнозные значения и сравнение с фактом";
+      if (typeof saved.answer === "string" && saved.answer.includes(oldHeading)) {
+        saved.answer = saved.answer.replaceAll(oldHeading, newHeading);
+        queryUpdated = true;
+      }
+      for (const event of saved.trace || []) {
+        if (typeof event.text === "string" && event.text.includes(oldHeading)) {
+          event.text = event.text.replaceAll(oldHeading, newHeading);
+          queryUpdated = true;
+        }
+        if (typeof event.io?.output === "string" && event.io.output.includes(oldHeading)) {
+          event.io.output = event.io.output.replaceAll(oldHeading, newHeading);
+          queryUpdated = true;
+        }
+      }
+    }
     if (saved && (saved.queryRevision || 0) < (preset.queryRevision || 0)) {
       saved.query = preset.query;
       saved.queryRevision = preset.queryRevision;

@@ -110,6 +110,10 @@
   const reference = window.RUBBER_REFERENCE_RUN;
   if (reference?.rubberValidation?.reference_used_in_training === false
       && Number.isFinite(reference.rubberValidation.mape_pct) && reference.answer) {
+    const oldComparisonHeading = "Прогнозные значения и сравнение с опубликованными данными";
+    const comparisonHeading = "Прогнозные значения и сравнение с фактом";
+    const relabelComparison = (value) => typeof value === "string"
+      ? value.replaceAll(oldComparisonHeading, comparisonHeading) : value;
     const referenceConfig = JSON.parse(JSON.stringify(config));
     for (const agent of referenceConfig.agents) {
       agent.model = reference.model;
@@ -123,8 +127,12 @@
       syntheticExamples: [{query, model: "", source: "alternative"}],
       config: referenceConfig,
       model: reference.model,
-      trace: reference.trace,
-      answer: reference.answer,
+      trace: reference.trace.map((event) => ({
+        ...event,
+        text: relabelComparison(event.text),
+        ...(event.io ? {io: {...event.io, output: relabelComparison(event.io.output)}} : {}),
+      })),
+      answer: relabelComparison(reference.answer),
       answerMeta: `Реальный пятиагентный MAW · ${reference.model} · контрольная точка исключена из обучения · Условия лабораторных испытаний в ответе предложены моделью, а не подтверждены исходной статьёй`,
       review: reference.review || null,
       rubberValidation: reference.rubberValidation,

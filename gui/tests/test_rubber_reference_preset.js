@@ -17,6 +17,11 @@ assert.equal(reference.id, 'rubber_heldout_reference_run_20260927');
 assert.equal(reference.real, true);
 assert.equal(reference.installOnExisting, true);
 assert.equal(reference.title, 'Прогноз свойств рецепта резины · MAW');
+const oldHeading = 'Прогнозные значения и сравнение с опубликованными данными';
+const newHeading = 'Прогнозные значения и сравнение с фактом';
+assert.ok(reference.answer.includes(newHeading));
+assert.ok(!reference.answer.includes(oldHeading));
+assert.equal(reference.trace.filter(event => JSON.stringify(event).includes(newHeading)).length, 2);
 assert.match(reference.query, /NR SMR-20 — 50 phr; SBR-1502 — 50 phr; технический углерод N220 — 60 phr/);
 assert.match(original.query, /NR SMR-20 — 55 phr; SBR-1502 — 45 phr; технический углерод N220 — 55 phr/);
 assert.ok(Math.abs(reference.rubberValidation.mape_pct - 3.2122669311542347) < 1e-8);
@@ -35,7 +40,7 @@ assert.ok(reference.config.agents.every(agent => agent.model === reference.model
 const archived = JSON.parse(zlib.gunzipSync(Buffer.from(fs.readFileSync(
   path.join(__dirname, '../recordings/rubber_reference_20260927.json.gz.b64'), 'utf8').trim(),
   'base64')).toString('utf8'));
-assert.equal(reference.answer, archived.done.state.property_prediction);
+assert.equal(reference.answer, archived.done.state.property_prediction.replaceAll(oldHeading, newHeading));
 assert.equal(reference.review.verdict, archived.review.verdict);
 assert.equal(reference.rubberValidation.mape_pct, archived.rubber_validation.mape_pct);
 assert.ok(archived.events.some(event => event.type === 'tool_result' && event.rubber_validation));
@@ -52,7 +57,9 @@ const migrate = app.slice(app.indexOf('  const retiredRubberId ='),
                           app.indexOf('  // В автономной копии список'));
 context.S = {custom: [
   {...original, query: 'пользовательская правка'},
-  {...reference, title: 'Шины · контрольная рецептура с MAPE'},
+  {...reference, title: 'Шины · контрольная рецептура с MAPE',
+    answer: archived.done.state.property_prediction,
+    trace: context.window.RUBBER_REFERENCE_RUN.trace.map(event => ({...event}))},
 ], hidden: []};
 let saves = 0;
 context.storeScenarios = () => saves++;
@@ -61,6 +68,8 @@ assert.equal(saves, 1);
 assert.equal(context.S.custom[0].id, original.id);
 assert.equal(context.S.custom[0].query, 'пользовательская правка');
 assert.equal(context.S.custom[1].title, reference.title);
+assert.equal(context.S.custom[1].answer, reference.answer);
+assert.equal(context.S.custom[1].trace.filter(event => JSON.stringify(event).includes(newHeading)).length, 2);
 assert.equal(context.S.hidden.includes(original.id), true);
 vm.runInContext(app.slice(app.indexOf('function scenarioList()'),
                           app.indexOf('/** Стартовый вид')), context);
