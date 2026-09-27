@@ -13,6 +13,8 @@ from typing import Any
 from fedotmas.common.codex_cli import is_codex_model, run_codex_cli
 from fedotmas.common.openrouter_proxy import openrouter_http_client
 
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
+
 
 @dataclass(frozen=True)
 class Completion:
@@ -77,9 +79,13 @@ async def complete(
         )
 
     api_client, resolved = client(model)
-    kwargs: dict[str, Any] = {"model": resolved, "messages": messages}
-    if max_tokens is not None:
-        kwargs["max_tokens"] = max_tokens
+    # Some OpenRouter providers reserve the entire context for completion when
+    # the limit is omitted, then reject any non-empty input as too large.
+    kwargs: dict[str, Any] = {
+        "model": resolved,
+        "messages": messages,
+        "max_tokens": max_tokens if max_tokens is not None else DEFAULT_MAX_OUTPUT_TOKENS,
+    }
     if json_schema is not None:
         kwargs["response_format"] = {"type": "json_object"}
     async with api_client:

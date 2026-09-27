@@ -13,8 +13,8 @@ from server.schemas import GenerateIn, RunIn
 
 
 def config_for(kind, tools):
-    agent = dict(name="worker", instruction="Process the supplied input.",
-                 model="host/gpt-5.6-terra", tools=tools, output_key="answer")
+    agent = {"name": "worker", "instruction": "Process the supplied input.",
+             "model": "host/gpt-5.6-terra", "tools": tools, "output_key": "answer"}
     if kind == "maw":
         return MAWConfig(agents=[agent], pipeline={"type": "agent", "agent_name": "worker"})
     return MASConfig(coordinator=dict(agent, name="coordinator", description="Route"),
@@ -99,7 +99,8 @@ async def test_model_catalog_without_keys_lists_openrouter_before_codex(monkeypa
     result = await app.status()
     ids = [m["id"] for m in result["models"]]
     assert not result["openrouter_ready"]
-    assert len([m for m in ids if m.startswith("openrouter/")]) == 4
+    openrouter_ids = [m for m in ids if m.startswith("openrouter/")]
+    assert len(openrouter_ids) == 10
     assert len([m for m in ids if m.startswith("host/")]) == 3
-    assert all(m.startswith("openrouter/") for m in ids[:4])
-    assert all(m.startswith("host/") for m in ids[4:])
+    assert ids[:len(openrouter_ids)] == openrouter_ids
+    assert all(m.startswith("host/") for m in ids[len(openrouter_ids):])

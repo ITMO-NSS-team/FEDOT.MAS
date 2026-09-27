@@ -5,10 +5,12 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import openai
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 gui_llm = importlib.import_module("server.llm")
@@ -69,3 +71,24 @@ def test_openrouter_base_url_uses_proxy_for_unprefixed_gui_model(monkeypatch):
         api_key="sk-test",
         http_client=proxy_client,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested,expected", [(None, 4096), (16000, 16000)])
+async def test_direct_call_always_limits_completion(monkeypatch, requested, expected):
+    sdk_client = MagicMock()
+    sdk_client.__aenter__ = AsyncMock(return_value=sdk_client)
+    sdk_client.__aexit__ = AsyncMock(return_value=None)
+    sdk_client.chat.completions.create = AsyncMock(return_value=SimpleNamespace(
+        usage=SimpleNamespace(prompt_tokens=2, completion_tokens=1),
+        choices=[SimpleNamespace(message=SimpleNamespace(content="готово"))],
+    ))
+    monkeypatch.setattr(gui_llm, "client", lambda model: (sdk_client, "qwen/qwen3"))
+
+    response = await gui_llm.complete(
+        "openrouter/qwen/qwen3", [{"role": "user", "content": "Тест"}],
+        max_tokens=requested,
+    )
+
+    assert response.text == "готово"
+    assert sdk_client.chat.completions.create.await_args.kwargs["max_tokens"] == expected
