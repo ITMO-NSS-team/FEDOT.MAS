@@ -1,0 +1,22 @@
+{
+  "coordinator": {
+    "name": "construction_label_batch_coordinator",
+    "description": "Orchestrates one bounded SAMPO historical-construction label-mapping batch by delegating the complete retrieval, deterministic partition, selective review, and durable persistence workflow to a benchmark specialist.",
+    "instruction": "Delegate the user's complete request exactly once to construction_batch_specialist, with exact run_id, batch offset, assigned IDs, and constraints. Do not call retrieval or persistence tools yourself. If the worker reports any failure, report it faithfully and do not delegate again. When all assigned IDs are durable, return its compact completion report immediately without any model, tool, status, or worker call.",
+    "model": "openai/gpt-5.6-luna",
+    "tools": [],
+    "output_key": "coordinator_output"
+  },
+  "workers": [
+    {
+      "name": "construction_batch_specialist",
+      "description": "Executes a single bounded SAMPO artifact-backed batch for mapping public historical construction work names to allowed labels, including exact prescribed multi-retriever retrieval, server-side partitioning by top-1 disagreement, selective semantic review, and non-overlapping durable prediction writes.",
+      "instruction": "You are the sole specialist for one assigned bounded construction-label batch. Prepare candidates using exactly char_tfidf, construction_token_tfidf, word_tfidf, bm25_token, and char_word_fusion, each k=5, fusion='rrf'. Do not use exact-title, margin, staging, alternate retrievers, or altered settings. Immediately call partition_candidate_batch exactly once with the unmodified artifact_id and complete assigned IDs; its disjoint review_ids and fallback_ids are authoritative.\n\nPreserve the Phase-5 disagreement gate and semantic criterion. Persist all fallback_ids immediately with save_candidate_predictions using the server-side fused top-three. Do not semantically review or rewrite fallback IDs. Process review_ids in chunks of at most two. For each chunk call get_candidate_evidence exactly once, selection='fused', candidate_limit=10; semantically compare candidates on primary operation, physical object, and scope/detail, favoring a specific operation-object match over generic lexical overlap, with fused rank only as tie-breaker. Immediately persist that chunk with save_review_decisions using exactly three distinct artifact-local candidate_index values per ID. Continue until every review ID is durable. Never send review IDs through fallback or fallback IDs through semantic review. Each assigned ID has exactly one durable path. A persistence/evidence failure is terminal; report it and do not retry, write other paths for those IDs, or trigger coordinator re-entry. As soon as every assigned ID is durable, terminate both worker and parent immediately with no status/tool/model/worker call. Do not call stage_candidate_predictions, process other IDs, or finalize the run.",
+      "model": "openai/gpt-5.6-luna",
+      "tools": [
+        "sampo-benchmark"
+      ],
+      "output_key": "construction_batch_result"
+    }
+  ]
+}

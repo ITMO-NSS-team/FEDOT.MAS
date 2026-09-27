@@ -87,7 +87,7 @@ async def test_new_server_handles_arbitrary_scoped_ids_and_write_once(tmp_path):
             assert not repeated.isError
             assert repeated.structuredContent["already_identical"]==2
             status=await client.call_tool("get_prediction_status",{})
-            assert status.structuredContent["stored_ids"]==ids
+            assert set(status.structuredContent["stored_ids"])==set(ids)
 
 @pytest.mark.asyncio
 async def test_neutral_prepare_and_inspect_payloads_are_bounded_for_worst_case(tmp_path):
@@ -134,6 +134,13 @@ async def test_phase5_adapter_contract_is_gt_blind_bounded_and_durable(tmp_path)
             await client.initialize()
             listed=await client.call_tool("list_methods",{})
             assert not listed.isError
+            tools=await client.list_tools()
+            review_schema=next(x.inputSchema for x in tools.tools if x.name=="save_review_decisions")
+            decision_schema=review_schema["properties"]["decisions"]["items"]
+            assert set(("example_id","candidate_indices")) <= set(decision_schema["properties"])
+            assert decision_schema["required"] == ["example_id","candidate_indices"]
+            assert decision_schema["properties"]["candidate_indices"]["minItems"]==3
+            assert decision_schema["properties"]["candidate_indices"]["maxItems"]==3
             prepared=await client.call_tool("prepare_candidate_batch",{"offset":0,"limit":2,"methods":["char_tfidf","construction_token_tfidf","word_tfidf","bm25_token","char_word_fusion"],"k":5,"fusion":"rrf"})
             assert not prepared.isError
             summary=prepared.structuredContent
@@ -146,6 +153,8 @@ async def test_phase5_adapter_contract_is_gt_blind_bounded_and_durable(tmp_path)
             assert set(groups["review_ids"])|set(groups["fallback_ids"])==set(ids)
             assert not set(groups["review_ids"])&set(groups["fallback_ids"])
             assert groups["review_ids"] and groups["fallback_ids"]
+            saved_fallback=await client.call_tool("save_candidate_predictions",{"run_id":"phase5-contract","artifact_id":summary["artifact_id"],"example_ids":groups["fallback_ids"]})
+            assert not saved_fallback.isError
             evidence=await client.call_tool("get_candidate_evidence",{"artifact_id":summary["artifact_id"],"example_ids":groups["review_ids"],"candidate_limit":10,"selection":"fused"})
             assert not evidence.isError
             evidence_data=evidence.structuredContent
@@ -153,8 +162,11 @@ async def test_phase5_adapter_contract_is_gt_blind_bounded_and_durable(tmp_path)
             decisions=[]
             for example in evidence_data["examples"]:
                 decisions.append({"example_id":example["example_id"],"candidate_indices":[item["candidate_index"] for item in example["fused_candidates"][:3]]})
+            malformed=await client.call_tool("save_review_decisions",{"run_id":"phase5-contract","artifact_id":summary["artifact_id"],"decisions":[{"example_id":groups["review_ids"][0],"candidate_indices":[0,0,1]}]})
+            assert malformed.isError
+            wrong_partition=await client.call_tool("save_candidate_predictions",{"run_id":"phase5-contract","artifact_id":summary["artifact_id"],"example_ids":groups["review_ids"]})
+            assert wrong_partition.isError
             saved_review=await client.call_tool("save_review_decisions",{"run_id":"phase5-contract","artifact_id":summary["artifact_id"],"decisions":decisions})
-            saved_fallback=await client.call_tool("save_candidate_predictions",{"run_id":"phase5-contract","artifact_id":summary["artifact_id"],"example_ids":groups["fallback_ids"]})
             assert not saved_review.isError and not saved_fallback.isError
             repeated_review=await client.call_tool("save_review_decisions",{"run_id":"phase5-contract","artifact_id":summary["artifact_id"],"decisions":decisions})
             repeated_fallback=await client.call_tool("save_candidate_predictions",{"run_id":"phase5-contract","artifact_id":summary["artifact_id"],"example_ids":groups["fallback_ids"]})
@@ -162,13 +174,39 @@ async def test_phase5_adapter_contract_is_gt_blind_bounded_and_durable(tmp_path)
             assert repeated_fallback.structuredContent["already_identical"]==len(groups["fallback_ids"])
             status=await client.call_tool("get_prediction_status",{})
             assert not status.isError
-            assert status.structuredContent["stored_ids"]==ids
+            assert set(status.structuredContent["stored_ids"])==set(ids)
             assert status.structuredContent["missing_ids"]==[]
 
 def test_preflight_rejects_null_model_ids(monkeypatch):
     monkeypatch.delenv("SAMPO_FEDOT_MODEL",raising=False);monkeypatch.delenv("SAMPO_TERRA_MODEL",raising=False)
     with pytest.raises(RuntimeError,match="SAMPO_FEDOT_MODEL"):
         required_runtime()
+
+def test_runtime_requires_exact_mimo_and_terra_models(monkeypatch):
+    monkeypatch.setenv("SAMPO_FEDOT_MODEL","xiaomi/mimo-v2.6-flash")
+    monkeypatch.setenv("SAMPO_TERRA_MODEL","openai/gpt-5.6-terra")
+    monkeypatch.setenv("SAMPO_BASE_URL","https://example.invalid/v1")
+    monkeypatch.setenv("SAMPO_API_KEY","test")
+    assert required_runtime()[:2]==("xiaomi/mimo-v2.6-flash","openai/gpt-5.6-terra")
+    monkeypatch.setenv("SAMPO_FEDOT_MODEL","other/provider")
+    with pytest.raises(RuntimeError,match="xiaomi/mimo-v2.6-flash"):
+        required_runtime()
+
+def test_tracked_pricing_contains_mimo_and_terra_rates():
+    pricing=json.loads((demo.OUT/"pricing.json").read_text())
+    mimo=pricing["models"]["xiaomi/mimo-v2.6-flash"]
+    assert (mimo["input_usd_per_1m"],mimo["cached_input_usd_per_1m"],mimo["output_usd_per_1m"])==(.14,.0028,.28)
+    assert pricing["models"]["openai/gpt-5.6-terra"]["input_usd_per_1m"]==2.0
+
+def test_versioned_mimo_phase5_provenance_preserves_parent_config():
+    import hashlib
+    parent=demo.OUT/"frozen_phase5"/"config.json"
+    adaptation=demo.OUT/"frozen_phase5_mimo"/"config.json"
+    provenance=json.loads((adaptation.parent/"provenance.json").read_text())
+    assert provenance["parent_config_sha256"]==hashlib.sha256(parent.read_bytes()).hexdigest()
+    assert provenance["new_config_sha256"]==hashlib.sha256(adaptation.read_bytes()).hexdigest()
+    assert "Complete all intended review before either durable write." not in adaptation.read_text()
+    assert "at most two" in adaptation.read_text()
 
 def test_pricing_preflight_rejects_empty_config(monkeypatch,tmp_path):
     monkeypatch.setattr("sampo_cost_runtime.OUT",tmp_path)
@@ -221,7 +259,7 @@ async def test_real_fedot_trace_artifacts_are_recognized_and_skipped_on_resume(t
     labels={"A","B","C"}
     batch_dir=tmp_path/"fedotmas_cost_aware"/"batch_0000"
     batch_dir.mkdir(parents=True)
-    trace=RuntimeTrace(ids,run_id,batch_dir,"deepseek/deepseek-v4.1-flash",
+    trace=RuntimeTrace(ids,run_id,batch_dir,"xiaomi/mimo-v2.6-flash",
                        {"save_review_decisions","save_candidate_predictions"},allowed_labels=labels)
     rows=[{"example_id":eid,"top_1":"A","top_2":"B","top_3":"C"} for eid in ids]
     with (batch_dir/".predictions.jsonl").open("w",encoding="utf-8") as stream:
@@ -264,8 +302,24 @@ async def test_phase5_blocks_second_worker_delegation_and_records_truncation(tmp
     assert data["worker_delegations"]==2
     assert "duplicate_worker_delegation" in data["failures"]
     assert data["output_truncation_count"]==1 and data["output_truncation_hit"] is True
+    assert data["terminal_reason"]=="output_truncation"
     assert smoke_system_failed({"assigned_ids":["1"],"completed_examples":1,"cost_complete":True,
                                "output_truncation_hit":True,"safety_ceiling_hit":False,"failures":[]}) is True
+
+@pytest.mark.asyncio
+async def test_truncation_is_terminal_and_blocks_coordinator_reentry(tmp_path):
+    from types import SimpleNamespace
+    from sampo_cost_runtime import RuntimeTrace
+    trace=RuntimeTrace(["1"],"run",tmp_path/"fedotmas_cost_aware"/"batch_0000","xiaomi/mimo-v2.6-flash")
+    trace.record_provider_request({"request_id":"truncated","model":"xiaomi/mimo-v2.6-flash","request_kind":"initial","success":True,"input_tokens":8,"cached_input_tokens":0,"output_tokens":16384,"finish_reason":"length","elapsed_seconds":1,"usage_known":True})
+    invocation=SimpleNamespace(end_invocation=False)
+    context=SimpleNamespace(_invocation_context=invocation,actions=SimpleNamespace(end_of_agent=False))
+    with pytest.raises(RuntimeError,match="output_truncation"):
+        await trace.before_tool_callback(tool=SimpleNamespace(name="construction_batch_specialist"),tool_args={},tool_context=context)
+    assert invocation.end_invocation is True
+    assert trace.worker_delegations==0
+    assert trace.terminal_success is False
+    assert trace.terminal_reason=="output_truncation"
 
 @pytest.mark.asyncio
 async def test_phase5_provider_request_config_uses_16384_output_budget(tmp_path):
@@ -278,7 +332,7 @@ async def test_phase5_provider_request_config_uses_16384_output_budget(tmp_path)
     assert FEDOT_BUDGETS["max_output_tokens_per_call"]==16384
     assert BUDGETS["max_output_tokens_per_call"]==8192
     signature=config_signature("smoke",demo.OUT/"operational_inputs.csv",
-                               "deepseek/deepseek-v4.1-flash","openai/gpt-5.6-terra","https://example.invalid")
+                               "xiaomi/mimo-v2.6-flash","openai/gpt-5.6-terra","https://example.invalid")
     assert signature["budgets"]["fedotmas_cost_aware"]["max_output_tokens_per_call"]==16384
     assert signature["budgets"]["terra_single_agent"]["max_output_tokens_per_call"]==8192
     assert request.config.max_output_tokens==16384
@@ -381,8 +435,13 @@ def test_runner_uses_tracked_frozen_phase5_inputs():
     runner=(ROOT/"scripts/run_sampo_cost_demo.py").read_text()
     frozen=demo.OUT/"frozen_phase5"
     provenance=json.loads((frozen/"provenance.json").read_text())
-    assert PHASE5_CONFIG==(frozen/"config.json")
-    assert PHASE5_TASK==(frozen/"task.txt").read_text()
+    adapted=demo.OUT/"frozen_phase5_mimo"
+    adapted_provenance=json.loads((adapted/"provenance.json").read_text())
+    assert PHASE5_CONFIG==(adapted/"config.json")
+    assert PHASE5_TASK==(adapted/"task.txt").read_text()
+    assert adapted_provenance["parent_config_sha256"]==demo.sha256(frozen/"config.json")
+    assert adapted_provenance["new_config_sha256"]==demo.sha256(adapted/"config.json")
+    assert "xiaomi/mimo-v2.6-flash" in runner
     assert "artifacts/sampo_phase_5/structural_review" not in runner
     assert provenance["behavioral_pass"] is True
     assert provenance["selection_used_new_cost_demo_ground_truth"] is False

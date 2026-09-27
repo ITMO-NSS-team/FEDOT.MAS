@@ -21,7 +21,7 @@ def required_runtime() -> tuple[str, str, str, str]:
     endpoint = os.getenv("SAMPO_BASE_URL") or os.getenv("OPENAI_BASE_URL")
     provider = os.getenv("SAMPO_PROVIDER", "openai-compatible" if endpoint else "")
     missing = [name for name, value in (("SAMPO_FEDOT_MODEL", cheap), ("SAMPO_TERRA_MODEL", strong), ("SAMPO_PROVIDER/endpoint", provider and endpoint)) if not value]
-    if cheap and cheap != "deepseek/deepseek-v4.1-flash": missing.append("SAMPO_FEDOT_MODEL must be deepseek/deepseek-v4.1-flash")
+    if cheap and cheap != "xiaomi/mimo-v2.6-flash": missing.append("SAMPO_FEDOT_MODEL must be xiaomi/mimo-v2.6-flash")
     if strong and strong != "openai/gpt-5.6-terra": missing.append("SAMPO_TERRA_MODEL must be openai/gpt-5.6-terra")
     if not (os.getenv("SAMPO_API_KEY") or os.getenv("OPENAI_API_KEY")): missing.append("SAMPO_API_KEY/OPENAI_API_KEY")
     if missing: raise RuntimeError("Missing live inference configuration: " + ", ".join(missing))
@@ -102,8 +102,13 @@ class RuntimeTrace:
         self.transcript.append({"type": "provider_request", **observed})
         if observed.get("finish_reason") in {"length", "max_tokens"}:
             self.failures.append("output_truncation")
+            self.terminal_reason="output_truncation"
 
     async def before_model_callback(self, *, callback_context, llm_request):
+        if self.terminal_reason == "output_truncation":
+            invocation=getattr(callback_context,"_invocation_context",None)
+            if invocation is not None: invocation.end_invocation=True
+            raise RuntimeError("output_truncation: batch terminated")
         if self.terminal_success:
             invocation=getattr(callback_context,"_invocation_context",None)
             if invocation is not None: invocation.end_invocation=True
@@ -135,6 +140,16 @@ class RuntimeTrace:
         cached = int((getattr(usage,"cached_content_token_count",0) or 0))
         row={"system":self.output.parent.name,"batch":self.batch,"example_ids":self.ids,"agent_name":getattr(callback_context,"agent_name",None),"model":self.model,"input_tokens":prompt,"cached_input_tokens":cached,"output_tokens":output,"elapsed_seconds":time.monotonic()-self.call_started,"provider_cost_usd":None}
         self.calls.append(row); self.transcript.append({"type":"model_response","usage":row,"response":_jsonable(llm_response)})
+        finish=getattr(getattr(llm_response,"candidate",None),"finish_reason",None)
+        finish=str(getattr(finish,"name",finish)).lower() if finish is not None else ""
+        if finish in {"length","max_tokens"} or any(x.get("finish_reason") in {"length","max_tokens"} for x in self.provider_requests[-1:]):
+            self.failures.append("output_truncation") if "output_truncation" not in self.failures else None
+            self.terminal_reason="output_truncation"
+            context=callback_context
+            invocation=getattr(context,"_invocation_context",None)
+            if invocation is not None: invocation.end_invocation=True
+            actions=getattr(context,"actions",None)
+            if actions is not None: actions.end_of_agent=True
 
     async def before_tool_callback(self, *, tool, tool_args, tool_context):
         name=tool.name or "unknown"
@@ -143,6 +158,9 @@ class RuntimeTrace:
             self._terminate_invocation(tool_context)
             self.transcript.append({"type":"invocation_terminated","reason":self.terminal_reason,"before_tool":name})
             return {"status":"terminal_success","terminal_reason":self.terminal_reason}
+        if self.terminal_reason=="output_truncation":
+            self._terminate_invocation(tool_context)
+            raise RuntimeError("output_truncation: batch terminated")
         if is_mcp and len(self.tools)>=BUDGETS["max_mcp_calls"]: self.failures.append("mcp_call_limit"); raise RuntimeError("mcp_call_limit")
         args=tool_args or {}; ids=args.get("example_ids",[]) if isinstance(args, Mapping) else []
         if ids and not set(ids)<=set(self.ids): self.failures.append("out_of_scope_tool_ids"); raise RuntimeError("out_of_scope_tool_ids")
@@ -212,7 +230,7 @@ class RuntimeTrace:
     def dump(self) -> dict[str, Any]:
         known=[x for x in self.provider_requests if x["usage_known"]]
         truncations=sum(x.get("finish_reason") in {"length", "max_tokens"} for x in self.provider_requests)
-        return {"system":self.output.parent.name,"assigned_ids":self.ids,"completed_ids":[],"model_calls":self.calls,"provider_requests":self.provider_requests,"provider_request_count":len(self.provider_requests),"malformed_tool_retry_requests":sum(x["request_kind"] == "malformed_tool_retry" for x in self.provider_requests),"proxy_observable":True,"cost_complete":all(x["usage_known"] for x in self.provider_requests),"input_tokens":sum(x["input_tokens"] for x in known),"uncached_input_tokens":sum(max(0,x["input_tokens"]-x["cached_input_tokens"]) for x in known),"cached_input_tokens":sum(x["cached_input_tokens"] for x in known),"output_tokens":sum(x["output_tokens"] for x in known),"output_truncation_count":truncations,"output_truncation_hit":truncations>0,"worker_delegations":self.worker_delegations,"terminal_success":self.terminal_success,"terminal_reason":self.terminal_reason,"adk_input_tokens":sum(x["input_tokens"] for x in self.calls),"adk_cached_input_tokens":sum(x["cached_input_tokens"] for x in self.calls),"adk_output_tokens":sum(x["output_tokens"] for x in self.calls),"mcp_calls":self.tools,"worker_calls":self.worker_calls,"tool_calls":len(self.tools),"runtime_seconds":time.monotonic()-self.started,"failures":self.failures,"private_ground_truth_accesses":0}
+        return {"system":self.output.parent.name,"assigned_ids":self.ids,"completed_ids":[],"model_calls":self.calls,"provider_requests":self.provider_requests,"provider_request_count":len(self.provider_requests),"malformed_tool_retry_requests":sum(x["request_kind"] == "malformed_tool_retry" for x in self.provider_requests),"proxy_observable":True,"cost_complete":all(x["usage_known"] for x in self.provider_requests),"input_tokens":sum(x["input_tokens"] for x in known),"uncached_input_tokens":sum(max(0,x["input_tokens"]-x["cached_input_tokens"]) for x in known),"cached_input_tokens":sum(x["cached_input_tokens"] for x in known),"output_tokens":sum(x["output_tokens"] for x in known),"output_truncation_count":truncations,"output_truncation_hit":truncations>0,"max_output_tokens_observed":max((x.get("output_tokens",0) for x in known),default=0),"worker_delegations":self.worker_delegations,"terminal_success":self.terminal_success,"terminal_reason":self.terminal_reason,"adk_input_tokens":sum(x["input_tokens"] for x in self.calls),"adk_cached_input_tokens":sum(x["cached_input_tokens"] for x in self.calls),"adk_output_tokens":sum(x["output_tokens"] for x in self.calls),"mcp_calls":self.tools,"worker_calls":self.worker_calls,"tool_calls":len(self.tools),"runtime_seconds":time.monotonic()-self.started,"failures":self.failures,"private_ground_truth_accesses":0}
 
 def write_system_config(run_dir: Path, system: str, runtime_manifest: dict[str, Any], telemetry: dict[str, Any], transcripts: list[dict[str, Any]] | None = None) -> None:
     import csv

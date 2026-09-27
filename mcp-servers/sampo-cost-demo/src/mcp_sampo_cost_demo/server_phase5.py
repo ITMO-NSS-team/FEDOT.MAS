@@ -1,10 +1,32 @@
 """Phase-5-only adapter over the cost-demo batch scope; not exposed to B/D."""
 from __future__ import annotations
-from typing import Any
+from typing import Annotated, Any
+from pydantic import BaseModel, Field, field_validator
 from fastmcp import FastMCP
 import server as public
 
 mcp = FastMCP("sampo-cost-demo-phase5")
+
+class ReviewDecision(BaseModel):
+    example_id: str
+    candidate_indices: Annotated[list[int], Field(min_length=3, max_length=3)]
+
+    @field_validator("candidate_indices")
+    @classmethod
+    def distinct_indices(cls, value: list[int]) -> list[int]:
+        if len(set(value)) != 3:
+            raise ValueError("candidate_indices must contain three distinct indices")
+        return value
+
+_written_paths: dict[str, set[str]] = {"review": set(), "fallback": set()}
+
+def _partition(data: dict[str, Any]) -> tuple[set[str], set[str]]:
+    review: set[str] = set(); fallback: set[str] = set()
+    for example in data["examples"]:
+        tops = {label for label, entries in example["method_candidates"].items()
+                if any(item["rank"] == 1 for item in entries)}
+        (review if len(tops) > 1 else fallback).add(example["example_id"])
+    return review, fallback
 
 @mcp.tool
 def list_methods() -> dict[str, Any]:
@@ -75,22 +97,36 @@ def save_candidate_predictions(run_id: str, artifact_id: str, example_ids: list[
     _,_,_,expected,_=public._scope()
     if run_id!=expected: raise ValueError("Run ID mismatch")
     data=public._artifact(artifact_id); lookup={e["example_id"]:e for e in data["examples"]}
+    _, fallback_ids = _partition(data)
+    if len(example_ids) != len(set(example_ids)): raise ValueError("Fallback IDs must be unique")
+    if not set(example_ids) <= fallback_ids: raise ValueError("Fallback write contains a review ID or out-of-scope ID")
+    if _written_paths["review"] & set(example_ids): raise ValueError("ID already written through review path")
+    if not set(example_ids) <= set(lookup): raise ValueError("Example ID outside artifact scope")
     rows=[{"example_id":i,**{f"top_{n}":lookup[i]["fused_candidates"][n-1]["label"] for n in range(1,4)}} for i in example_ids]
-    return public._save(rows)
+    result=public._save(rows)
+    _written_paths["fallback"].update(example_ids)
+    return result
 
 @mcp.tool
-def save_review_decisions(run_id: str, artifact_id: str, decisions: list[dict[str, Any]]) -> dict[str, Any]:
+def save_review_decisions(run_id: str, artifact_id: str, decisions: list[ReviewDecision]) -> dict[str, Any]:
     """Persist caller-ranked candidate indices for assigned IDs."""
     _,_,_,expected,_=public._scope()
     if run_id!=expected: raise ValueError("Run ID mismatch")
     data=public._artifact(artifact_id); lookup={e["example_id"]:e for e in data["examples"]}; rows=[]
+    review_ids, _ = _partition(data)
+    decision_ids=[decision.example_id for decision in decisions]
+    if len(decision_ids) != len(set(decision_ids)): raise ValueError("Review IDs must be unique within a persistence call")
     for d in decisions:
-        eid, inds=d["example_id"],d["candidate_indices"]
-        if len(inds)!=3 or len(set(inds))!=3: raise ValueError("Exactly three distinct candidate indices required")
+        eid, inds=d.example_id,d.candidate_indices
+        if eid not in review_ids: raise ValueError("Example ID is not assigned to semantic review")
+        if eid in _written_paths["fallback"]: raise ValueError("ID already written through fallback path")
+        if eid not in lookup: raise ValueError("Example ID outside artifact scope")
         candidates=lookup[eid]["fused_candidates"]; by_index={x["candidate_index"]:x["label"] for x in candidates}
         if any(i not in by_index for i in inds): raise ValueError("Candidate index outside artifact")
         rows.append({"example_id":eid,**{f"top_{n}":by_index[index] for n,index in enumerate(inds,1)}})
-    return public._save(rows)
+    result=public._save(rows)
+    _written_paths["review"].update(row["example_id"] for row in rows)
+    return result
 
 @mcp.tool
 def get_prediction_status() -> dict[str, Any]:

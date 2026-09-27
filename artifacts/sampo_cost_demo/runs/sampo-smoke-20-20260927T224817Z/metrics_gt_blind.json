@@ -1,0 +1,33 @@
+{
+  "run_id": "sampo-smoke-20-20260927T224817Z",
+  "stage": "smoke",
+  "completion_counts": {
+    "tfidf": {
+      "completed": 20,
+      "assigned": 20
+    },
+    "fedotmas_cost_aware": {
+      "completed": 0,
+      "assigned": 20
+    }
+  },
+  "operational_pass": {
+    "tfidf": true,
+    "fedotmas_cost_aware": false
+  },
+  "fedotmas_total_cost_usd": null,
+  "terra_total_cost_usd": null,
+  "terra_over_fedotmas_cost_ratio": null,
+  "token_ratios": {
+    "input": null,
+    "output": null,
+    "total": null
+  },
+  "provider_request_ratio": 0.0,
+  "runtime_ratio": 0.0,
+  "cost_complete": {
+    "fedotmas_cost_aware": false,
+    "terra_single_agent": false
+  },
+  "private_gt_used": false
+}

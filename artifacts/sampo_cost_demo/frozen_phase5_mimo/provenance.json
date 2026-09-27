@@ -1,0 +1,26 @@
+{
+  "adaptation": "MiMo execution adaptation of the Phase-5 cost-aware policy",
+  "parent_config": "artifacts/sampo_cost_demo/frozen_phase5/config.json",
+  "parent_config_sha256": "c13b1d1522533006e57f541ae7cd32d19d34356e46335f4739f494d84b78c6f2",
+  "new_config": "artifacts/sampo_cost_demo/frozen_phase5_mimo/config.json",
+  "new_config_sha256": "3c1ff2702c290548a14aa3257c816d4843ace18b23656d882e794ee948502e76",
+  "parent_task_sha256": "2d468d6f56a4d55db805038f139ddb91d0f13a9fba55b3407dbd9fc6f54a9bda",
+  "new_task_sha256": "7c6f92f6a3d13246e5fef84d9368a0beb9ab05cec08e40c5ad92e332694e9de6",
+  "changes": [
+    "model choice: xiaomi/mimo-v2.6-flash",
+    "incremental persistence lifecycle: fallback first, review chunks of at most two",
+    "terminal failure on truncation/persistence failure; no coordinator re-entry"
+  ],
+  "unchanged": [
+    "five retrievers",
+    "k=5",
+    "RRF",
+    "disagreement gate",
+    "semantic review criterion and scope",
+    "fused top-3 fallback",
+    "public data",
+    "benchmark split",
+    "evaluator/GT isolation",
+    "standalone Terra implementation"
+  ]
+}
