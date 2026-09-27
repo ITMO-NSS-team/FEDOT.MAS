@@ -1509,7 +1509,8 @@ async function probeBackend() {
       single: S.backend.model,
       judge: S.backend.judge_model || S.backend.model,
     };
-    const savedModels = loadStored("fedotmas-models", {});
+    // Прежние сохранённые модели не должны перебивать новый выбор по умолчанию.
+    const savedModels = loadStored("fedotmas-models-v2", {});
     for (const key of Object.keys(S.models)) {
       if (S.backend.models.some(item => item.id === savedModels[key])) S.models[key] = savedModels[key];
       if (!S.backend.models.some(item => item.id === S.models[key])) S.models[key] = S.backend.models[0].id;
@@ -1520,6 +1521,7 @@ async function probeBackend() {
     fillModelSelect("model-judge", "judge", judgeChoices(), S.models.judge);
     renderCodexStatus();
     renderKeyChip();
+    renderModelKeyAccess();
     restoreKey();
   } catch {
     /* бэкенд не отвечает — кнопки останутся заблокированными */
@@ -1541,7 +1543,7 @@ function fillModelSelect(id, key, models, selected) {
   ).join("");
   sel.addEventListener("change", () => {
     S.models[key] = sel.value;
-    try { localStorage.setItem("fedotmas-models", JSON.stringify(S.models)); } catch {}
+    try { localStorage.setItem("fedotmas-models-v2", JSON.stringify(S.models)); } catch {}
     renderMode();
     if (key === "judge") renderSyntheticExamples();
   });
@@ -1584,6 +1586,16 @@ function renderKeyChip() {
   chip.title = ok ? "Ключ провайдера принят. Нажмите, чтобы сменить" : "Ввести ключ провайдера";
 }
 
+function renderModelKeyAccess() {
+  const serverKey = !!S.backend?.openrouter_ready && !S.backend?.public && !S.backend?.user_key;
+  $("models-key").classList.toggle("hidden", serverKey || !S.backend);
+  $("models-key-info").textContent = !S.backend
+    ? "Нет связи с сервером. Обновите страницу и проверьте адрес стенда."
+    : serverKey
+    ? "OpenRouter подключён на сервере — вводить ключ здесь не нужно."
+    : "Для OpenRouter нужен ключ с доступом к выбранной модели.";
+}
+
 async function sendKey(key, remember) {
   const note = $("key-note");
   const btn = $("key-submit");
@@ -1617,6 +1629,7 @@ async function sendKey(key, remember) {
     }
     note.textContent = "";
     renderKeyChip();
+    renderModelKeyAccess();
     renderMode();
     keyModal(false);
     return true;

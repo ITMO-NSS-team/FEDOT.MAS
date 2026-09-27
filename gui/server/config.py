@@ -53,8 +53,9 @@ if PUBLIC_MODE:
     os.environ.pop("OPENAI_API_KEY", None)
     os.environ.pop("OPENROUTER_API_KEY", None)
 
-DEFAULT_MODEL = os.getenv("GUI_MODEL", "host/gpt-5.6-terra")
-JUDGE_MODEL = os.getenv("GUI_JUDGE_MODEL", "host/gpt-5.6-terra")
+DEFAULT_OPENROUTER_MODEL = "openrouter/qwen/qwen3-235b-a22b-2507"
+DEFAULT_MODEL = os.getenv("GUI_MODEL", DEFAULT_OPENROUTER_MODEL)
+JUDGE_MODEL = os.getenv("GUI_JUDGE_MODEL", DEFAULT_OPENROUTER_MODEL)
 
 _CODEX_MODELS = [
     {"id": "host/gpt-5.6-terra", "label": "GPT-5.6 Terra · подписка Codex", "open": False},

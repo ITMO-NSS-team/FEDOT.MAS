@@ -177,8 +177,8 @@ localhost.run меняет имя на живом соединении. Cloudfla
 | `GUI_UPLOAD_MAX_MB` | `25` | предел размера файла-источника |
 | `SMITHERY_API_KEY` | пусто | ключ реестра MCP: без него найденные серверы не подключаются |
 | `GUI_ALLOWED_HOSTS` | пусто | дополнительные имена хоста, с которых принимать запросы |
-| `GUI_MODEL` | `host/gpt-5.6-terra` | модель по умолчанию (Codex или `openrouter/…`) |
-| `GUI_JUDGE_MODEL` | `host/gpt-5.6-terra` | модель судьи |
+| `GUI_MODEL` | `openrouter/qwen/qwen3-235b-a22b-2507` | модель по умолчанию (Codex или `openrouter/…`) |
+| `GUI_JUDGE_MODEL` | `openrouter/qwen/qwen3-235b-a22b-2507` | модель судьи |
 | `GUI_EXTRA_TOOLS` | `rubber-recipe-predictor,technology-card-audit` | список дополнительных инструментов; можно добавить `browser-usage,youtube-transcript` |
 | `SEARXNG_URL` | `http://localhost:18888` | адрес своего SearXNG |
 | `GUI_SSE_HEARTBEAT` | `10` | период пульса в потоке событий, секунды |
