@@ -1,0 +1,6 @@
+{
+  "method": "tfidf_char_ngrams",
+  "batch_size": 20,
+  "git_commit": "0875162245751a50797cc6ee41dc42c250604d59",
+  "private_gt_path_provided": false
+}

@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/"scripts"))
 import sampo_cost_demo as demo
 from sampo_cost_runtime import NEUTRAL_SYSTEM, NEUTRAL_TASK, required_runtime, pricing_preflight
-from run_sampo_cost_demo import neutral_user, PHASE5_CONFIG, PHASE5_TASK
+from run_sampo_cost_demo import neutral_user, PHASE5_CONFIG, PHASE5_TASK, smoke_system_failed
 
 def test_operational_set_disjoint_from_pilot_and_final_by_id_and_name():
     operational=demo.read_csv(demo.OUT/"operational_inputs.csv")
@@ -55,6 +55,13 @@ async def test_b_and_d_introspect_identical_real_neutral_schemas(tmp_path):
     _,schema_b=await introspect(registry_b,"sampo-cost-demo")
     assert schema_a==schema_b
     assert {tool["name"] for tool in schema_a}=={"list_methods","prepare_candidates","inspect_candidates","save_default_top3","save_ranked_top3","get_prediction_status"}
+    by_name={tool["name"]:tool for tool in schema_a}
+    inspect_ids=by_name["inspect_candidates"]["inputSchema"]["properties"]["example_ids"]
+    assert inspect_ids["minItems"]==1 and inspect_ids["maxItems"]==10
+    assert "larger than 10 IDs must be split" in inspect_ids["description"]
+    required_run_id="Exact persistence run ID supplied by the harness in the task message; do not invent or substitute another identifier."
+    for name in ("save_default_top3","save_ranked_top3"):
+        assert required_run_id in by_name[name]["inputSchema"]["properties"]["run_id"]["description"]
 
 @pytest.mark.asyncio
 async def test_new_server_handles_arbitrary_scoped_ids_and_write_once(tmp_path):
@@ -212,6 +219,55 @@ async def test_phase5_blocks_second_worker_delegation_and_records_truncation(tmp
     assert "duplicate_worker_delegation" in data["failures"]
     assert data["output_truncation_count"]==1 and data["output_truncation_hit"] is True
 
+@pytest.mark.asyncio
+async def test_complementary_phase5_persistence_terminates_invocation_successfully(tmp_path):
+    from types import SimpleNamespace
+    from sampo_cost_runtime import RuntimeTrace
+    ids=[str(i) for i in range(20)]; labels={"A","B","C"}
+    output=tmp_path/"fedotmas_cost_aware"/"batch_0000";output.mkdir(parents=True)
+    trace=RuntimeTrace(ids,"run",output,"m",{"save_review_decisions","save_candidate_predictions"},allowed_labels=labels)
+    invocation=SimpleNamespace(end_invocation=False)
+    context=SimpleNamespace(_invocation_context=invocation,actions=SimpleNamespace(end_of_agent=False))
+    tool=SimpleNamespace(name="save_review_decisions")
+    def write_rows(selected):
+        with (output/".predictions.jsonl").open("a",encoding="utf-8") as stream:
+            for eid in selected:
+                stream.write(json.dumps({"example_id":eid,"top_1":"A","top_2":"B","top_3":"C"})+"\n")
+    write_rows(ids[:10])
+    await trace.after_tool_callback(tool=tool,tool_args={},tool_context=context,result={"isError":False})
+    assert not invocation.end_invocation and not trace.terminal_success
+    write_rows(ids[10:])
+    await trace.after_tool_callback(tool=SimpleNamespace(name="save_candidate_predictions"),tool_args={},tool_context=context,result={"isError":False})
+    assert trace.terminal_success is True
+    assert trace.terminal_reason=="durable_batch_complete"
+    assert invocation.end_invocation is True and context.actions.end_of_agent is True
+    assert trace.dump()["failures"]==[]
+
+@pytest.mark.asyncio
+async def test_completed_batch_prevents_later_model_turn_or_worker_delegation(tmp_path):
+    from types import SimpleNamespace
+    from sampo_cost_runtime import RuntimeTrace
+    ids=[str(i) for i in range(20)]; output=tmp_path/"fedotmas_cost_aware"/"batch_0000";output.mkdir(parents=True)
+    trace=RuntimeTrace(ids,"run",output,"m",allowed_labels={"A","B","C"})
+    with (output/".predictions.jsonl").open("w",encoding="utf-8") as stream:
+        for eid in ids: stream.write(json.dumps({"example_id":eid,"top_1":"A","top_2":"B","top_3":"C"})+"\n")
+    worker_invocation=SimpleNamespace(end_invocation=False)
+    worker_context=SimpleNamespace(_invocation_context=worker_invocation,actions=SimpleNamespace(end_of_agent=False))
+    await trace.after_tool_callback(tool=SimpleNamespace(name="save_candidate_predictions"),tool_args={},tool_context=worker_context,result={"isError":False})
+    assert worker_invocation.end_invocation is True
+    parent_invocation=SimpleNamespace(end_invocation=False)
+    parent_context=SimpleNamespace(_invocation_context=parent_invocation,actions=SimpleNamespace(end_of_agent=False))
+    await trace.after_tool_callback(tool=SimpleNamespace(name="construction_batch_specialist"),tool_args={},tool_context=parent_context,result={"isError":False})
+    assert parent_invocation.end_invocation is True and parent_context.actions.end_of_agent is True
+    await trace.before_model_callback(callback_context=SimpleNamespace(_invocation_context=parent_invocation),llm_request=SimpleNamespace(model="m"))
+    assert parent_invocation.end_invocation is True
+    assert trace.worker_delegations==0 and trace.calls==[]
+
+def test_durable_terminal_success_is_not_classified_as_smoke_failure():
+    info={"completed_examples":20,"cost_complete":True,"output_truncation_hit":False,"safety_ceiling_hit":False,"failures":[{"error":"duplicate_worker_delegation"},{"error":"execution_error after durable_batch_complete: duplicate_worker_delegation"}],"terminal_success":True}
+    assert smoke_system_failed(info,phase5=True) is False
+    assert smoke_system_failed({**info,"failures":["model_call_limit"]},phase5=True) is True
+
 def test_all_system_prediction_schema_is_common():
     source=(ROOT/"scripts/run_sampo_cost_demo.py").read_text()
     for system in ("tfidf","fedotmas_cost_aware","terra_single_agent"):
@@ -219,6 +275,29 @@ def test_all_system_prediction_schema_is_common():
     assert "cheap_single_agent" not in source
     assert "codex" not in source.lower()
     assert 'fieldnames=["example_id","top_1","top_2","top_3"]' in source
+
+def test_terra_is_a_standalone_openai_tool_loop_with_isolation_metadata():
+    import ast
+    path=ROOT/"scripts/sampo_terra_standalone.py"
+    source=path.read_text()
+    tree=ast.parse(source)
+    imported=[]
+    for node in ast.walk(tree):
+        if isinstance(node,ast.Import): imported.extend(alias.name for alias in node.names)
+        elif isinstance(node,ast.ImportFrom): imported.append(node.module or "")
+    assert not any(name.startswith("fedotmas") for name in imported)
+    assert "AsyncOpenAI" in source and "ClientSession" in source and "stdio_client" in source
+    assert '"harness": "standalone_openai_tool_loop"' in source
+    assert '"fedotmas_dependency": False' in source
+    assert '"phase5_config_exposed": False' in source
+    assert '"fresh_mcp_process": True' in source and '"fresh_model_conversation": True' in source
+    assert '"system": "terra_single_agent"' in source
+
+def test_terra_runner_branches_before_fedotmas_helpers():
+    source=(ROOT/"scripts/run_sampo_cost_demo.py").read_text()
+    body=source[source.index("async def run_agent"):source.index("async def get_manifest")]
+    assert body.index('if system == "terra_single_agent"') < body.index("from fedotmas")
+    assert "create_toolset" not in body[body.index('if system == "terra_single_agent"'):body.index("from google.adk.agents")]
 
 def test_runtime_server_environment_never_includes_gt_path():
     from sampo_cost_runtime import scoped_server

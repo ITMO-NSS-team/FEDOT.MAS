@@ -2,7 +2,7 @@
 from __future__ import annotations
 import csv, hashlib, json, os, re, sys, fcntl
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
@@ -107,7 +107,7 @@ def prepare_candidates(methods: list[str], k: int, fusion: str) -> dict[str, Any
     return _compact_prepare_response(_prepare_candidates_artifact(methods,k,fusion))
 
 @mcp.tool
-def inspect_candidates(artifact_id: str, example_ids: list[str], candidate_limit: int = 10) -> dict[str, Any]:
+def inspect_candidates(artifact_id: str, example_ids: Annotated[list[str], Field(min_length=1, max_length=10, description="Assigned example IDs to inspect. Requests larger than 10 IDs must be split into multiple calls.")], candidate_limit: int = 10) -> dict[str, Any]:
     """Return ranked public candidate labels and retrieval evidence for assigned IDs."""
     data = _artifact(artifact_id); _, _, ids, _, _ = _scope()
     if not 1 <= len(example_ids) <= 10 or not set(example_ids) <= set(ids): raise ValueError("IDs must be from this assigned batch")
@@ -154,7 +154,7 @@ def _save(rows: list[dict[str, str]]) -> dict[str, Any]:
         finally: fcntl.flock(f, fcntl.LOCK_UN)
 
 @mcp.tool
-def save_default_top3(run_id: str, artifact_id: str, example_ids: list[str]) -> dict[str, Any]:
+def save_default_top3(run_id: Annotated[str, Field(description="Exact persistence run ID supplied by the harness in the task message; do not invent or substitute another identifier.")], artifact_id: str, example_ids: list[str]) -> dict[str, Any]:
     """Persist the retrieval default top three for assigned IDs; exact repeats are idempotent."""
     data = _artifact(artifact_id); _, _, ids, expected_run, _ = _scope()
     if run_id != expected_run or not example_ids or not set(example_ids) <= set(ids): raise ValueError("Run or IDs outside assigned scope")
@@ -162,7 +162,7 @@ def save_default_top3(run_id: str, artifact_id: str, example_ids: list[str]) -> 
     return _save([{"example_id": i, **{f"top_{n}": by_id[i]["fused_candidates"][n-1]["label"] for n in range(1, 4)}} for i in example_ids])
 
 @mcp.tool
-def save_ranked_top3(run_id: str, artifact_id: str, rankings: list[RankedTop3]) -> dict[str, Any]:
+def save_ranked_top3(run_id: Annotated[str, Field(description="Exact persistence run ID supplied by the harness in the task message; do not invent or substitute another identifier.")], artifact_id: str, rankings: list[RankedTop3]) -> dict[str, Any]:
     """Persist caller-ranked candidate indices for assigned IDs; exact repeats are idempotent."""
     data = _artifact(artifact_id); _, _, ids, expected_run, _ = _scope()
     if run_id != expected_run: raise ValueError("Run ID outside assigned scope")

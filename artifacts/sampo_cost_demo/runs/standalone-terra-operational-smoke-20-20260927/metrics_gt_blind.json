@@ -1,0 +1,36 @@
+{
+  "run_id": "standalone-terra-operational-smoke-20-20260927",
+  "completion_counts": {
+    "tfidf": {
+      "completed": 20,
+      "assigned": 20
+    },
+    "fedotmas_cost_aware": {
+      "completed": 0,
+      "assigned": 20
+    },
+    "terra_single_agent": {
+      "completed": 0,
+      "assigned": 20
+    }
+  },
+  "operational_pass": {
+    "tfidf": true,
+    "fedotmas_cost_aware": false,
+    "terra_single_agent": false
+  },
+  "fedotmas_cost_usd": null,
+  "terra_cost_usd": null,
+  "terra_over_fedotmas_cost_ratio": null,
+  "fedotmas_total_input_tokens": 0,
+  "terra_total_input_tokens": 0,
+  "terra_over_fedotmas_input_token_ratio": null,
+  "terra_over_fedotmas_output_token_ratio": null,
+  "terra_over_fedotmas_provider_request_ratio": 1.0,
+  "terra_over_fedotmas_runtime_ratio": 1.2197169638088856,
+  "cost_complete": {
+    "fedotmas_cost_aware": false,
+    "terra_single_agent": false
+  },
+  "private_gt_used": false
+}

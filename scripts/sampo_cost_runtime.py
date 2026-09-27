@@ -78,7 +78,7 @@ def _jsonable(value: Any) -> Any:
 
 class RuntimeTrace:
     """ADK plugin compatible callback object with hard pre-call ceilings."""
-    def __init__(self, ids: list[str], run_id: str, output: Path, model: str, tool_names: set[str] | None = None, batch: int = 0):
+    def __init__(self, ids: list[str], run_id: str, output: Path, model: str, tool_names: set[str] | None = None, batch: int = 0, allowed_labels: set[str] | None = None):
         from google.adk.plugins import BasePlugin
         owner = self
         class Plugin(BasePlugin):
@@ -91,6 +91,7 @@ class RuntimeTrace:
         self.ids, self.run_id, self.output, self.model, self.batch = ids, run_id, output, model, batch
         self.tool_names=tool_names or set(); self.calls: list[dict[str, Any]]=[]; self.tools: list[dict[str, Any]]=[]; self.worker_calls: list[dict[str, Any]]=[]; self.provider_requests: list[dict[str, Any]]=[]; self.failures=[]; self.transcript=[]; self.started=time.monotonic(); self.call_started=0.0
         self.worker_delegations = 0
+        self.allowed_labels=allowed_labels or set(); self.terminal_success=False; self.terminal_reason=None
 
     def record_provider_request(self, request: dict[str, Any]) -> None:
         self.provider_requests.append(request)
@@ -99,6 +100,10 @@ class RuntimeTrace:
             self.failures.append("output_truncation")
 
     async def before_model_callback(self, *, callback_context, llm_request):
+        if self.terminal_success:
+            invocation=getattr(callback_context,"_invocation_context",None)
+            if invocation is not None: invocation.end_invocation=True
+            return
         if "duplicate_worker_delegation" in self.failures:
             raise RuntimeError("duplicate_worker_delegation")
         if len(self.calls) >= BUDGETS["max_model_calls"]: self.failures.append("model_call_limit"); raise RuntimeError("model_call_limit")
@@ -144,6 +149,46 @@ class RuntimeTrace:
                 row["response"]=response
                 break
         self.transcript.append({"type":"tool_response","name":name,"response":response})
+        if self.terminal_success:
+            self._terminate_invocation(tool_context)
+            self.transcript.append({"type":"invocation_terminated","reason":self.terminal_reason,"after_tool":name})
+            return
+        persistence_tool=name.endswith(("save_review_decisions","save_candidate_predictions"))
+        is_error=isinstance(response,Mapping) and response.get("isError") in (True,"True")
+        if self.output.parent.name!="fedotmas_cost_aware" or not persistence_tool or is_error:
+            return
+        if self._durable_batch_complete():
+            self.terminal_success=True
+            self.terminal_reason="durable_batch_complete"
+            self.transcript.append({"type":"terminal_success","reason":self.terminal_reason,"assigned_ids":self.ids})
+            self._terminate_invocation(tool_context)
+
+    @staticmethod
+    def _terminate_invocation(tool_context: Any) -> None:
+        actions=getattr(tool_context,"actions",None)
+        if actions is not None:
+            actions.end_of_agent=True
+        invocation=getattr(tool_context,"_invocation_context",None)
+        if invocation is None:
+            raise RuntimeError("ADK tool context did not expose the invocation termination mechanism")
+        invocation.end_invocation=True
+
+    def _durable_batch_complete(self) -> bool:
+        path=self.output/".predictions.jsonl"
+        if not path.is_file() or not self.allowed_labels:
+            return False
+        try:
+            rows=[json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        except (OSError,json.JSONDecodeError):
+            return False
+        ids=[row.get("example_id") for row in rows]
+        if len(ids)!=len(self.ids) or len(set(ids))!=len(ids) or set(ids)!=set(self.ids):
+            return False
+        return all(
+            len(values)==3 and len(set(values))==3 and set(values)<=self.allowed_labels
+            for row in rows
+            for values in [[row.get(f"top_{rank}") for rank in (1,2,3)]]
+        )
 
     async def on_tool_error_callback(self, *, tool, tool_args, tool_context, error):
         self.failures.append(f"tool_error:{tool.name}:{str(error)[:500]}")
@@ -151,7 +196,7 @@ class RuntimeTrace:
     def dump(self) -> dict[str, Any]:
         known=[x for x in self.provider_requests if x["usage_known"]]
         truncations=sum(x.get("finish_reason") in {"length", "max_tokens"} for x in self.provider_requests)
-        return {"system":self.output.name,"assigned_ids":self.ids,"completed_ids":[],"model_calls":self.calls,"provider_requests":self.provider_requests,"provider_request_count":len(self.provider_requests),"malformed_tool_retry_requests":sum(x["request_kind"] == "malformed_tool_retry" for x in self.provider_requests),"proxy_observable":True,"cost_complete":all(x["usage_known"] for x in self.provider_requests),"input_tokens":sum(x["input_tokens"] for x in known),"uncached_input_tokens":sum(max(0,x["input_tokens"]-x["cached_input_tokens"]) for x in known),"cached_input_tokens":sum(x["cached_input_tokens"] for x in known),"output_tokens":sum(x["output_tokens"] for x in known),"output_truncation_count":truncations,"output_truncation_hit":truncations>0,"worker_delegations":self.worker_delegations,"adk_input_tokens":sum(x["input_tokens"] for x in self.calls),"adk_cached_input_tokens":sum(x["cached_input_tokens"] for x in self.calls),"adk_output_tokens":sum(x["output_tokens"] for x in self.calls),"mcp_calls":self.tools,"worker_calls":self.worker_calls,"tool_calls":len(self.tools),"runtime_seconds":time.monotonic()-self.started,"failures":self.failures,"private_ground_truth_accesses":0}
+        return {"system":self.output.name,"assigned_ids":self.ids,"completed_ids":[],"model_calls":self.calls,"provider_requests":self.provider_requests,"provider_request_count":len(self.provider_requests),"malformed_tool_retry_requests":sum(x["request_kind"] == "malformed_tool_retry" for x in self.provider_requests),"proxy_observable":True,"cost_complete":all(x["usage_known"] for x in self.provider_requests),"input_tokens":sum(x["input_tokens"] for x in known),"uncached_input_tokens":sum(max(0,x["input_tokens"]-x["cached_input_tokens"]) for x in known),"cached_input_tokens":sum(x["cached_input_tokens"] for x in known),"output_tokens":sum(x["output_tokens"] for x in known),"output_truncation_count":truncations,"output_truncation_hit":truncations>0,"worker_delegations":self.worker_delegations,"terminal_success":self.terminal_success,"terminal_reason":self.terminal_reason,"adk_input_tokens":sum(x["input_tokens"] for x in self.calls),"adk_cached_input_tokens":sum(x["cached_input_tokens"] for x in self.calls),"adk_output_tokens":sum(x["output_tokens"] for x in self.calls),"mcp_calls":self.tools,"worker_calls":self.worker_calls,"tool_calls":len(self.tools),"runtime_seconds":time.monotonic()-self.started,"failures":self.failures,"private_ground_truth_accesses":0}
 
 def write_system_config(run_dir: Path, system: str, runtime_manifest: dict[str, Any], telemetry: dict[str, Any], transcripts: list[dict[str, Any]] | None = None) -> None:
     import csv
