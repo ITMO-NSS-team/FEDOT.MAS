@@ -9,6 +9,7 @@ from fedotmas.plugins._code_agent_budget import (
     GAIA_TASK_FILE_PATH_STATE_KEY,
     TASK_DEADLINE_STATE_KEY,
     CodeAgentBudgetPlugin,
+    _is_document_reading_call,
 )
 
 
@@ -25,6 +26,26 @@ def _tool():
     tool = MagicMock()
     tool.name = "solve_with_code"
     return tool
+
+
+@pytest.mark.parametrize("task", [
+    "print the entire file",
+    "output sections verbatim",
+    "parse diagnostic and show headers/example rows",
+    "list working directory and locate the staged file",
+    "report token counts / field domains so I can build the optimizer later",
+])
+def test_pure_file_inspection_requests_are_classified(task):
+    assert _is_document_reading_call({"task": task, "files": ["input.csv"]})
+
+
+@pytest.mark.parametrize("task", [
+    "parse this file and solve the optimization problem",
+    "count rows satisfying condition X and return the count",
+    "load the file, build the model, optimize it, and return the exact optimum",
+])
+def test_compute_requests_are_not_classified_as_inspection(task):
+    assert not _is_document_reading_call({"task": task, "files": ["input.csv"]})
 
 
 @pytest.mark.asyncio
@@ -92,6 +113,25 @@ async def test_file_dump_recommendation_does_not_consume_code_agent_budget():
     assert compute_args["max_execution_seconds"] == 60
     assert budget["calls"] == 1
     assert budget["reserved_seconds"] == 60
+
+
+@pytest.mark.asyncio
+async def test_nested_inspection_recommendation_refunds_reserved_budget():
+    plugin = CodeAgentBudgetPlugin(
+        max_calls_per_agent=2, total_seconds_per_agent=120,
+        max_seconds_per_call=60, task_timeout_seconds=300,
+    )
+    ctx = _context(deadline=time.monotonic() + 200)
+    args = {"task": "Compute the token counts", "files": ["input.csv"]}
+    assert await plugin.before_tool_callback(tool=_tool(), tool_args=args, tool_context=ctx) is None
+    await plugin.after_tool_callback(
+        tool=_tool(), tool_args=args, tool_context=ctx,
+        result={"error_code": "CODE_AGENT_DOCUMENT_READING_RECOMMENDED"},
+    )
+    budget = ctx.state[CODE_AGENT_BUDGET_STATE_KEY]["optimizer"]
+    assert budget["calls"] == 0
+    assert budget["seconds"] == 0
+    assert budget["reserved_seconds"] == 0
 
 
 @pytest.mark.asyncio

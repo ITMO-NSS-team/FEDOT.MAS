@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,8 +11,10 @@ from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.common.codex_cli import CodexCliLlm
 from fedotmas.common.llm import (
     _ERROR_PAYLOAD_LEN,
+    LLMRequestTimeout,
     _invalid_tool_argument_names,
     _ProxyClient,
+    llm_request_deadline,
     make_llm,
 )
 from fedotmas.mas.builder import build_routing_system
@@ -465,3 +469,105 @@ class TestProxyClientToolArgumentValidation:
         )
 
         assert result.choices[0].message.content == "done"
+
+
+def _timeout_client(monkeypatch, seconds="0.02"):
+    monkeypatch.setenv("FEDOTMAS_LLM_REQUEST_TIMEOUT_S", seconds)
+    return _client_with_response(_response())
+
+
+class TestProxyClientRequestTimeout:
+    async def test_hung_initial_request_times_out_with_stable_code(self, monkeypatch):
+        client = _timeout_client(monkeypatch)
+
+        async def hang(**kwargs):
+            await asyncio.sleep(1)
+
+        client._client.chat.completions.create.side_effect = hang
+        started = time.monotonic()
+        with pytest.raises(LLMRequestTimeout, match="LLM_REQUEST_TIMEOUT") as raised:
+            await client.acompletion("openai/test", [{"role": "user", "content": "x"}], [])
+        assert time.monotonic() - started < 0.5
+        assert raised.value.code == "LLM_REQUEST_TIMEOUT"
+        assert client._client.chat.completions.create.await_count == 2
+
+    async def test_timeout_then_one_retry_succeeds(self, monkeypatch):
+        client = _timeout_client(monkeypatch)
+        valid = _response()
+
+        async def timeout_once(**kwargs):
+            if client._client.chat.completions.create.await_count == 1:
+                await asyncio.sleep(1)
+            return valid
+
+        client._client.chat.completions.create.side_effect = timeout_once
+        result = await client.acompletion("openai/test", [{"role": "user", "content": "x"}], [])
+        assert result.choices[0].message.content == "done"
+        assert client._client.chat.completions.create.await_count == 2
+
+    async def test_two_timeouts_raise_after_one_retry(self, monkeypatch):
+        client = _timeout_client(monkeypatch, "0.01")
+
+        async def hang(**kwargs):
+            await asyncio.sleep(1)
+
+        client._client.chat.completions.create.side_effect = hang
+        with pytest.raises(LLMRequestTimeout, match="LLM_REQUEST_TIMEOUT"):
+            await client.acompletion("openai/test", [{"role": "user", "content": "x"}], [])
+        assert client._client.chat.completions.create.await_count == 2
+
+    async def test_malformed_argument_retry_is_bounded_and_keeps_usage(self, monkeypatch):
+        client = _timeout_client(monkeypatch, "0.01")
+        malformed = _tool_response("{")
+        malformed.model_dump.return_value["usage"] = {
+            "prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16,
+        }
+
+        async def responses(**kwargs):
+            if client._client.chat.completions.create.await_count == 1:
+                return malformed
+            await asyncio.sleep(1)
+
+        client._client.chat.completions.create.side_effect = responses
+        with pytest.raises(LLMRequestTimeout) as raised:
+            await client.acompletion("openai/test", [{"role": "user", "content": "x"}], [])
+        assert client._client.chat.completions.create.await_count == 3
+        assert raised.value.prompt_tokens == 11
+        assert raised.value.completion_tokens == 5
+
+    def test_invalid_timeout_setting_uses_default(self, monkeypatch):
+        for value in ("invalid", "0", "-1", "inf", "nan"):
+            client = _timeout_client(monkeypatch, value)
+            assert client._request_timeout == 120
+
+    async def test_fast_request_behavior_is_unchanged(self, monkeypatch):
+        client = _timeout_client(monkeypatch)
+        result = await client.acompletion("openai/test", [{"role": "user", "content": "x"}], [])
+        assert result.choices[0].message.content == "done"
+        request_kwargs = client._client.chat.completions.create.await_args.kwargs
+        assert request_kwargs["timeout"] == pytest.approx(0.02)
+
+    async def test_task_deadline_caps_request_timeout(self, monkeypatch):
+        client = _timeout_client(monkeypatch, "10")
+        with llm_request_deadline(time.monotonic() + 0.05):
+            await client.acompletion(
+                "openai/test", [{"role": "user", "content": "x"}], []
+            )
+        request_timeout = client._client.chat.completions.create.await_args.kwargs[
+            "timeout"
+        ]
+        assert request_timeout < 0.05
+
+    async def test_stream_chunk_wait_is_bounded(self, monkeypatch):
+        client = _timeout_client(monkeypatch, "0.01")
+
+        class HangingStream:
+            async def __anext__(self):
+                await asyncio.sleep(1)
+
+        client._client.chat.completions.create.return_value = HangingStream()
+        stream = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], [], stream=True
+        )
+        with pytest.raises(LLMRequestTimeout, match="LLM_REQUEST_TIMEOUT"):
+            await anext(stream)

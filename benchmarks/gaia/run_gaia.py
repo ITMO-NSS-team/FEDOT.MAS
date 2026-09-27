@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,7 @@ from fedotmas.maw.handoffs import (
     is_explicit_abstention,
     unresolved_execution_issues,
 )
+from fedotmas.maw.models import MAWConfig
 from fedotmas.mcp import MCPServerConfig, StdioMCPServer, resolve_mcp_registry
 from fedotmas.plugins import (
     BrowserFallbackPolicyPlugin,
@@ -612,9 +614,7 @@ def build_plugins(
             telemetry=telemetry,
         ),
         CodeAgentBudgetPlugin(
-            max_calls_per_agent=_env_int(
-                "FEDOTMAS_GAIA_CODE_AGENT_CALL_LIMIT", 3
-            ),
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_CODE_AGENT_CALL_LIMIT", 3),
             total_seconds_per_agent=_env_int(
                 "FEDOTMAS_GAIA_CODE_AGENT_TOTAL_SECONDS", 360
             ),
@@ -905,6 +905,9 @@ async def process_task(
     task_log_dir: Path,
     *,
     enable_langfuse: bool,
+    frozen_config: MAWConfig | None = None,
+    frozen_config_source: str | None = None,
+    frozen_config_sha256: str | None = None,
 ) -> dict:
     """Process a task, keeping diagnostics for every execution attempt."""
     max_attempts = max(1, _env_int("FEDOTMAS_GAIA_TASK_ATTEMPTS", 2))
@@ -917,6 +920,9 @@ async def process_task(
                 task_log_dir,
                 enable_langfuse=enable_langfuse,
                 attempt_number=attempt_number,
+                frozen_config=frozen_config,
+                frozen_config_source=frozen_config_source,
+                frozen_config_sha256=frozen_config_sha256,
             )
         except CompletedPipelinePostProcessingError as exc:
             attempt_results.append(exc.artifact)
@@ -976,6 +982,9 @@ async def _process_task_attempt(
     *,
     enable_langfuse: bool,
     attempt_number: int,
+    frozen_config: MAWConfig | None = None,
+    frozen_config_source: str | None = None,
+    frozen_config_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Run one attempt and write its complete result or failure diagnostics."""
     final_answer_contract = (
@@ -1039,9 +1048,7 @@ async def _process_task_attempt(
         backstop = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_BACKSTOP_SECONDS", 180)
         mcp_registry = _gaia_mcp_registry(worker_model)
         code_agent_server = mcp_registry.get("code-agent")
-        code_agent_mcp_timeout = int(
-            getattr(code_agent_server, "timeout", 180)
-        )
+        code_agent_mcp_timeout = int(getattr(code_agent_server, "timeout", 180))
         code_agent_max = _code_agent_max_execution_seconds(code_agent_mcp_timeout)
         code_agent_default = min(
             _env_int("CODE_AGENT_DEFAULT_MAX_EXECUTION_SECONDS", 60),
@@ -1097,19 +1104,29 @@ async def _process_task_attempt(
         # it is set well above the execution budget so the inner timeout fires
         # first and partial state is preserved.
         outer_task_deadline = time.monotonic() + task_timeout
-        state = await asyncio.wait_for(
-            maw.run(
-                query,
-                initial_state={
-                    TASK_DEADLINE_STATE_KEY: outer_task_deadline,
-                    GAIA_TASK_FILE_PATH_STATE_KEY: task.file_path,
-                },
-                timeout=task_timeout,
-                final_answer_contract=final_answer_contract,
-            ),
-            timeout=task_timeout
-            + _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_BACKSTOP_SECONDS", 180),
-        )
+        run_kwargs = {
+            "initial_state": {
+                TASK_DEADLINE_STATE_KEY: outer_task_deadline,
+                GAIA_TASK_FILE_PATH_STATE_KEY: task.file_path,
+            },
+            "timeout": task_timeout,
+            "final_answer_contract": final_answer_contract,
+        }
+        if frozen_config is None:
+            execution = maw.run(query, **run_kwargs)
+        else:
+            execution = maw.build_and_run(frozen_config, query, **run_kwargs)
+        try:
+            state = await asyncio.wait_for(
+                execution,
+                timeout=task_timeout
+                + _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_BACKSTOP_SECONDS", 180),
+            )
+        finally:
+            if frozen_config is not None:
+                finalize = getattr(maw, "_finalize_langfuse", None)
+                if finalize is not None:
+                    finalize()
         pipeline_result = maw.last_result
         pipeline_status = getattr(pipeline_result, "status", "completed")
         config = getattr(maw, "generated_config", None)
@@ -1180,6 +1197,9 @@ async def _process_task_attempt(
             "pipeline_status": pipeline_status,
             "session_state": {k: str(v) for k, v in state.items()},
             "maw_config": _generated_config(maw),
+            **_config_provenance(
+                frozen_config, frozen_config_source, frozen_config_sha256
+            ),
             "tokens": _token_usage(maw, pipeline_result),
             "elapsed": maw.elapsed,
             "research_telemetry": telemetry.snapshot() if telemetry else {},
@@ -1219,6 +1239,9 @@ async def _process_task_attempt(
             **root_cause_summary(exc),
             "session_state": {k: str(v) for k, v in state.items()},
             "maw_config": _generated_config(maw),
+            **_config_provenance(
+                frozen_config, frozen_config_source, frozen_config_sha256
+            ),
             "tokens": _token_usage(
                 maw,
                 getattr(maw, "last_result", None)
@@ -1256,6 +1279,45 @@ async def _process_task_attempt(
 def _generated_config(maw: MAW | None) -> dict[str, Any] | None:
     config = getattr(maw, "generated_config", None) if maw is not None else None
     return config.model_dump(mode="json") if config is not None else None
+
+
+def _config_provenance(
+    config: MAWConfig | None, source: str | None, sha256: str | None
+) -> dict[str, str]:
+    if config is None:
+        return {"config_mode": "generated"}
+    return {
+        "config_mode": "frozen",
+        "frozen_config_source": source or "",
+        "frozen_config_sha256": sha256 or "",
+    }
+
+
+def _load_frozen_config(path: str | Path) -> tuple[MAWConfig, str]:
+    source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(f"Frozen MAW config file not found: {source}")
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid JSON in frozen MAW config {source}: {exc}") from exc
+    if isinstance(payload, dict) and "maw_config" in payload:
+        payload = payload["maw_config"]
+    elif isinstance(payload, dict) and "agents" not in payload:
+        raise ValueError(f"Frozen MAW config is missing maw_config in {source}")
+    if payload is None:
+        raise ValueError(f"Frozen MAW config is missing or null in {source}")
+    try:
+        config = MAWConfig.model_validate(payload)
+    except Exception as exc:
+        raise ValueError(f"Invalid MAWConfig in {source}: {exc}") from exc
+    canonical = json.dumps(
+        config.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return config, hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _token_usage(maw: MAW | None, pipeline_result: Any) -> dict[str, int]:
@@ -1409,6 +1471,9 @@ def _copy_attempt_fields(destination: dict[str, Any], record: dict[str, Any]) ->
     for key in (
         "session_state",
         "maw_config",
+        "config_mode",
+        "frozen_config_source",
+        "frozen_config_sha256",
         "attempt_status",
         "pipeline_status",
         "unresolved_execution_issues",
@@ -1444,8 +1509,22 @@ async def run_gaia(
     enable_langfuse: bool,
     task_ids: list[str] | None = None,
     task_file: str | None = None,
+    frozen_config_path: str | None = None,
 ) -> Any:
     """Run GAIA benchmark using FEDOT.MAS MAW."""
+    if frozen_config_path and not task_file:
+        raise ValueError("--frozen-config can only be used with --task-file")
+    frozen_config = None
+    frozen_config_sha256 = None
+    if frozen_config_path:
+        frozen_config, frozen_config_sha256 = _load_frozen_config(frozen_config_path)
+        _log.info(
+            "MAW config mode: frozen | source={} sha256={}",
+            frozen_config_path,
+            frozen_config_sha256,
+        )
+    else:
+        _log.info("MAW config mode: generated")
     base_log_dir = Path(__file__).resolve().parent / "gaia_logs" / f"run_{RUN_ID}"
     base_log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1490,6 +1569,9 @@ async def run_gaia(
                 gaia,
                 task_log_dir,
                 enable_langfuse=enable_langfuse,
+                frozen_config=frozen_config,
+                frozen_config_source=frozen_config_path,
+                frozen_config_sha256=frozen_config_sha256,
             )
             if _is_custom_task(task):
                 _log.info(
@@ -1534,6 +1616,9 @@ async def run_gaia(
                 partial = json.loads(partial_path.read_text(encoding="utf-8"))
                 for key in (
                     "maw_config",
+                    "config_mode",
+                    "frozen_config_source",
+                    "frozen_config_sha256",
                     "session_state",
                     "tokens",
                     "research_telemetry",
@@ -1567,6 +1652,7 @@ async def run_gaia(
             "num_tasks": len(results),
             "langfuse_enabled": enable_langfuse,
             "task_file": task_file,
+            "config_mode": "frozen" if frozen_config is not None else "generated",
         },
         "metrics": metrics_by_level,
         "token_summary": token_summary,
@@ -1616,7 +1702,15 @@ def main():
         type=str,
         help="Run one local UTF-8 text task instead of loading GAIA.",
     )
+    parser.add_argument(
+        "--frozen-config",
+        type=str,
+        help="Replay a validated MAW config (requires --task-file).",
+    )
     args = parser.parse_args()
+
+    if args.frozen_config and not args.task_file:
+        parser.error("--frozen-config requires --task-file")
 
     enable_langfuse = _env_flag("GAIA_ENABLE_LANGFUSE", True) and not args.no_langfuse
     asyncio.run(
@@ -1626,6 +1720,7 @@ def main():
             enable_langfuse=enable_langfuse,
             task_ids=args.task_id,
             task_file=args.task_file,
+            frozen_config_path=args.frozen_config,
         )
     )
 

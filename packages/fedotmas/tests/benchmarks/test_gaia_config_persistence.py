@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -17,6 +18,7 @@ from benchmarks.gaia.run_gaia import (
     _gaia_max_agent_llm_turns,
     _gaia_mcp_registry,
     _gaia_mcp_servers,
+    _load_frozen_config,
     _log_selected_models,
     _task_from_file,
     build_plugins,
@@ -412,10 +414,12 @@ async def test_successful_gaia_result_persists_serializable_generated_config(
     attempt = json.loads((tmp_path / "attempts" / "attempt_01.json").read_text())
 
     assert result["is_correct"] is True
+    assert result["pipeline_status"] == "completed"
     assert artifact["maw_config"] == _config().model_dump(mode="json")
     assert isinstance(artifact["research_telemetry"], dict)
     assert artifact["attempts"][0]["attempt_status"] == "succeeded"
     assert attempt["maw_config"] == _config().model_dump(mode="json")
+    assert artifact["config_mode"] == "generated"
 
 
 @pytest.mark.asyncio
@@ -509,7 +513,10 @@ async def test_valid_terminal_answer_survives_intermediate_diagnostics(
             initial_state: dict | None = None,
         ) -> dict[str, str]:
             self.last_result = PipelineResult(
-                state={"final_answer": "<solution>65</solution>", diagnostic_key: diagnostic_value},
+                state={
+                    "final_answer": "<solution>65</solution>",
+                    diagnostic_key: diagnostic_value,
+                },
                 status=pipeline_status,
             )
             return self.last_result.state
@@ -605,6 +612,7 @@ async def test_terminal_agent_is_inferred_when_config_omits_optional_field(
         )
     assert result["response"] == "42"
     assert result["is_correct"] is True
+    assert result["pipeline_status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -731,7 +739,183 @@ async def test_generated_config_survives_execution_failure(tmp_path: Path):
     assert artifact["root_cause"] == "exception.RuntimeError"
     assert artifact["research_telemetry"]["researcher"]["attempted_calls"] == 1
     assert attempt["attempt_status"] == "failed"
+    assert attempt["config_mode"] == "generated"
     assert isinstance(artifact["research_telemetry"], dict)
+
+
+def test_frozen_config_loads_raw_config_and_hash_is_canonical(tmp_path: Path):
+    compact = tmp_path / "compact.json"
+    formatted = tmp_path / "formatted.json"
+    payload = _config().model_dump(mode="json")
+    compact.write_text(json.dumps(payload, separators=(",", ":")))
+    formatted.write_text(json.dumps(payload, indent=4))
+
+    config_a, hash_a = _load_frozen_config(compact)
+    config_b, hash_b = _load_frozen_config(formatted)
+
+    assert config_a == _config()
+    assert config_b == config_a
+    assert hash_a == hash_b
+
+
+def test_frozen_config_loads_gaia_result_artifact(tmp_path: Path):
+    artifact = tmp_path / "result.json"
+    artifact.write_text(json.dumps({"maw_config": _config().model_dump(mode="json")}))
+
+    config, digest = _load_frozen_config(artifact)
+
+    assert config == _config()
+    assert len(digest) == 64
+
+
+@pytest.mark.parametrize(
+    ("contents", "error"),
+    [
+        ("{", "Invalid JSON"),
+        ('{"maw_config": null}', "missing or null"),
+        ('{"task_id": "task-1"}', "missing maw_config"),
+        ('{"agents": []}', "Invalid MAWConfig"),
+    ],
+)
+def test_frozen_config_invalid_inputs_fail_clearly(
+    tmp_path: Path, contents: str, error: str
+):
+    path = tmp_path / "bad.json"
+    path.write_text(contents)
+    with pytest.raises(ValueError, match=error):
+        _load_frozen_config(path)
+
+
+def test_frozen_config_missing_file_fails_clearly(tmp_path: Path):
+    with pytest.raises(FileNotFoundError, match="Frozen MAW config file not found"):
+        _load_frozen_config(tmp_path / "absent.json")
+
+
+@pytest.mark.asyncio
+async def test_invalid_frozen_config_fails_before_maw_generation(tmp_path: Path):
+    from benchmarks.gaia.run_gaia import run_gaia
+
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("{")
+    with (
+        patch("benchmarks.gaia.run_gaia.MAW") as maw_class,
+        pytest.raises(ValueError, match="Invalid JSON"),
+    ):
+        await run_gaia(
+            "all",
+            "validation",
+            enable_langfuse=False,
+            task_file="task.txt",
+            frozen_config_path=str(invalid),
+        )
+    maw_class.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_frozen_execution_builds_supplied_config_without_generation(
+    tmp_path: Path,
+):
+    class FrozenMAW(_FakeMAW):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.generated_config = None
+            self.meta_prompt_tokens = 0
+            self.meta_completion_tokens = 0
+            self.elapsed = 1.5
+            self.run_called = False
+            self.build_args = None
+
+        async def run(self, *args, **kwargs):
+            self.run_called = True
+            raise AssertionError("frozen execution must not call run")
+
+        async def build_and_run(self, config, query, **kwargs):
+            self.generated_config = config
+            self.build_args = (query, kwargs)
+            return {"final_answer": "Reasoning <solution>42</solution>"}
+
+    task = SimpleNamespace(
+        task_id="frozen-task",
+        question="Question?",
+        ground_truth="42",
+        file_path=None,
+        file_name=None,
+        difficulty="1",
+    )
+    frozen = _config()
+    digest = "a" * 64
+    with patch("benchmarks.gaia.run_gaia.MAW", FrozenMAW):
+        result = await process_task(
+            task,
+            SimpleNamespace(is_correct_answer=lambda answer, truth: answer == truth),
+            tmp_path,
+            enable_langfuse=False,
+            frozen_config=frozen,
+            frozen_config_source="frozen.json",
+            frozen_config_sha256=digest,
+        )
+
+    artifact = json.loads((tmp_path / "result.json").read_text())
+    attempt = json.loads((tmp_path / "attempts" / "attempt_01.json").read_text())
+    assert result["response"] == "42"
+    assert result["is_correct"] is True
+    assert result["tokens"]["meta_prompt"] == 0
+    assert result["tokens"]["meta_completion"] == 0
+    for saved in (artifact, attempt):
+        assert saved["config_mode"] == "frozen"
+        assert saved["frozen_config_source"] == "frozen.json"
+        assert saved["frozen_config_sha256"] == digest
+        assert saved["maw_config"] == frozen.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_frozen_execution_failure_persists_config_provenance(tmp_path: Path):
+    class FailingFrozenMAW(_FakeMAW):
+        async def run(self, *args, **kwargs):
+            raise AssertionError("frozen execution must not call run")
+
+        async def build_and_run(self, config, query, **kwargs):
+            self.generated_config = config
+            raise RuntimeError("frozen execution failed")
+
+    task = SimpleNamespace(
+        task_id="frozen-failed-task",
+        question="Question?",
+        ground_truth="42",
+        file_path=None,
+        file_name=None,
+        difficulty="1",
+    )
+    with (
+        patch("benchmarks.gaia.run_gaia.MAW", FailingFrozenMAW),
+        patch.dict("os.environ", {"FEDOTMAS_GAIA_TASK_ATTEMPTS": "1"}),
+        pytest.raises(RuntimeError, match="frozen execution failed"),
+    ):
+        await process_task(
+            task,
+            SimpleNamespace(),
+            tmp_path,
+            enable_langfuse=False,
+            frozen_config=_config(),
+            frozen_config_source="frozen.json",
+            frozen_config_sha256="b" * 64,
+        )
+
+    artifact = json.loads((tmp_path / "result.json").read_text())
+    attempt = json.loads((tmp_path / "attempts" / "attempt_01.json").read_text())
+    for saved in (artifact, attempt):
+        assert saved["config_mode"] == "frozen"
+        assert saved["frozen_config_source"] == "frozen.json"
+        assert saved["frozen_config_sha256"] == "b" * 64
+        assert saved["maw_config"] == _config().model_dump(mode="json")
+
+
+def test_frozen_config_cli_requires_task_file(monkeypatch: pytest.MonkeyPatch):
+    from benchmarks.gaia.run_gaia import main
+
+    monkeypatch.setattr(sys, "argv", ["run_gaia.py", "--frozen-config", "config.json"])
+    with pytest.raises(SystemExit, match="2"):
+        main()
 
 
 @pytest.mark.asyncio

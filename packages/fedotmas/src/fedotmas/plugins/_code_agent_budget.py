@@ -19,17 +19,22 @@ TASK_DEADLINE_STATE_KEY = "_fedotmas_task_deadline_monotonic"
 GAIA_TASK_FILE_PATH_STATE_KEY = "_fedotmas_gaia_task_file_path"
 
 _DOCUMENT_READING_ACTIONS = re.compile(
-    r"\b(?:read|print|dump|show|display|view|inspect)\b", re.IGNORECASE
+    r"\b(?:read|print|dump|show|display|view|inspect|output|list|locate|"
+    r"reproduce|report)\b", re.IGNORECASE
 )
 _DOCUMENT_CONTENT_TARGETS = re.compile(
     r"\b(?:file|contents?|rows?|columns?|spreadsheet|csv|json|pdf|document|table)\b",
     re.IGNORECASE,
 )
-_MATERIAL_COMPUTATION = re.compile(
-    r"\b(?:calculat\w*|comput\w*|solv\w*|analy[sz]\w*|count\w*|sum|average|mean|median|"
-    r"max(?:imum)?|min(?:imum)?|highest|lowest|where|matching|satisf\w*|"
-    r"filter\w*|aggregat\w*|group\w*|join\w*|rank\w*|compar\w*|optimi[sz]\w*|"
-    r"convert\w*|transform\w*|derive\w*)\b",
+_EXPLICIT_COMPUTE = re.compile(
+    r"\b(?:solve|optimi[sz](?:e|ed|es|ing)?|calculat\w*|comput\w*|derive\w*|"
+    r"aggregate\w*|transform\w*|rank\w*|join\w*)\b",
+    re.IGNORECASE,
+)
+_CONDITIONAL_COUNT = re.compile(
+    r"\bcount\w*\b.{0,100}\b(?:satisf\w*|match\w*|where|condition|"
+    r"filter\w*|whose|with|having)\b|"
+    r"\b(?:satisf\w*|match\w*|where|condition|filter\w*|whose|having)\b.{0,100}\bcount\w*\b",
     re.IGNORECASE,
 )
 
@@ -42,12 +47,17 @@ def _is_document_reading_call(tool_args: dict[str, Any]) -> bool:
     )
     if not isinstance(task, str) or not task.strip():
         return False
-    if _MATERIAL_COMPUTATION.search(instruction):
-        return False
     has_file = bool(tool_args.get("files")) or bool(
         _DOCUMENT_CONTENT_TARGETS.search(instruction)
     )
-    return has_file and bool(_DOCUMENT_READING_ACTIONS.search(instruction))
+    if not has_file:
+        return False
+    if _CONDITIONAL_COUNT.search(instruction):
+        return False
+    inspection = bool(_DOCUMENT_READING_ACTIONS.search(instruction)) or bool(
+        re.search(r"\b(?:token counts?|field domains?|example rows?|headers?)\b", instruction, re.I)
+    )
+    return inspection and not _EXPLICIT_COMPUTE.search(instruction)
 
 
 class CodeAgentBudgetPlugin(BasePlugin):
@@ -325,3 +335,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
                         if isinstance(duration, int | float):
                             result_seconds = max(result_seconds, float(duration))
             budget["seconds"] = float(budget.get("seconds", 0.0)) + result_seconds
+            payload = result.get("structuredContent") or result if isinstance(result, dict) else {}
+            if isinstance(payload, dict) and payload.get("error_code") == "CODE_AGENT_DOCUMENT_READING_RECOMMENDED":
+                budget["calls"] = max(0, int(budget.get("calls", 0)) - 1)
+                budget["seconds"] = max(0.0, float(budget.get("seconds", 0.0)) - result_seconds)

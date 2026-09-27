@@ -146,7 +146,16 @@ mcp-classic = "mcp_classic:main"
 
     def test_default_when_unset(self, tmp_path, monkeypatch):
         monkeypatch.delenv("FEDOTMAS_MCP_TIMEOUT_S", raising=False)
-        assert self._scan(tmp_path).timeout == DEFAULT_MCP_TIMEOUT_S
+        server = self._scan(tmp_path)
+        assert server.timeout == DEFAULT_MCP_TIMEOUT_S
+        assert server.args[:5] == (
+            "run",
+            "--directory",
+            str(tmp_path / "classic"),
+            "python",
+            "-c",
+        )
+        assert server.args[-1] == "mcp_classic:main"
 
     def test_env_overrides_default(self, tmp_path, monkeypatch):
         monkeypatch.setenv("FEDOTMAS_MCP_TIMEOUT_S", "600")

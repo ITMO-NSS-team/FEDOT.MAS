@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import keyword
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from google.adk.agents.base_agent import BaseAgent
 
@@ -63,8 +63,27 @@ class MAW(BaseMAS[MAWConfig]):
 
     @property
     def generated_config(self) -> MAWConfig | None:
-        """The most recently generated pipeline config, if any."""
+        """The most recently generated or executed pipeline config, if any."""
         return self._generated_config
+
+    async def build_and_run(
+        self,
+        config: MAWConfig,
+        user_query: str,
+        *,
+        initial_state: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        final_answer_contract: str | None = None,
+    ) -> dict[str, Any]:
+        """Execute *config* and expose it as this instance's active config."""
+        self._generated_config = config
+        return await super().build_and_run(
+            config,
+            user_query,
+            initial_state=initial_state,
+            timeout=timeout,
+            final_answer_contract=final_answer_contract,
+        )
 
     async def generate_config(
         self,

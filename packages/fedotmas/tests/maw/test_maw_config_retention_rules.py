@@ -45,6 +45,24 @@ async def test_generate_config_is_retained_on_maw():
 
 
 @pytest.mark.asyncio
+async def test_build_and_run_retains_caller_supplied_config():
+    config = _config()
+    with (
+        patch("fedotmas.core.base.setup_logging"),
+        patch(
+            "fedotmas.core.base.BaseMAS.build_and_run",
+            new=AsyncMock(return_value={"findings": "done"}),
+        ),
+    ):
+        maw = MAW(mcp_servers=[])
+        assert maw.generated_config is None
+        result = await maw.build_and_run(config, "task")
+
+    assert result == {"findings": "done"}
+    assert maw.generated_config is config
+
+
+@pytest.mark.asyncio
 async def test_failed_meta_generation_usage_is_retained_on_maw():
     error = RuntimeError("invalid structured response")
     error.prompt_tokens = 11

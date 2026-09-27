@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from fedotmas.mcp._config import (
     DEFAULT_MCP_TIMEOUT_S,
     HttpMCPServer,
     StdioMCPServer,
 )
-from fedotmas.mcp.registry import create_toolset, strip_tool_name_prefix
+from fedotmas.mcp.registry import (
+    create_toolset,
+    list_server_tools,
+    strip_tool_name_prefix,
+)
+from fedotmas.mcp.discovery import discover_local_servers
 
 
 class TestStdioEnvPropagation:
@@ -110,3 +119,21 @@ class TestStripToolNamePrefix:
     def test_does_not_strip_a_coincidental_lookalike(self):
         """No registered prefix matches, so the name survives intact."""
         assert strip_tool_name_prefix("download_file") == "download_file"
+
+
+@pytest.mark.asyncio
+async def test_local_code_agent_can_restart_and_exposes_solver_each_time():
+    repo = Path(__file__).resolve().parents[4]
+    registry = discover_local_servers(repo / "mcp-servers")
+    for _ in range(2):
+        tools = await list_server_tools("code-agent", registry)
+        assert "solve_with_code" in {tool.name for tool in tools}
+
+
+@pytest.mark.asyncio
+async def test_required_local_mcp_startup_failure_is_raised():
+    registry = {
+        "required": StdioMCPServer(command="/missing/mcp-server", args=(), timeout=1)
+    }
+    with pytest.raises(Exception):
+        await list_server_tools("required", registry)
