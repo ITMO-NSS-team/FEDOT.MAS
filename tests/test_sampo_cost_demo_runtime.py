@@ -192,6 +192,9 @@ def test_live_telemetry_counts_provider_retries_separately_and_model_usage(monke
     import asyncio
     asyncio.run(capture("coordinator",10,4));asyncio.run(capture("worker",20,5))
     data=trace.dump()
+    from sampo_cost_runtime import BUDGETS, FEDOT_BUDGETS
+    assert FEDOT_BUDGETS["max_output_tokens_per_call"]==16384
+    assert BUDGETS["max_output_tokens_per_call"]==8192
     assert data["provider_request_count"]==2
     assert data["malformed_tool_retry_requests"]==1
     assert sum(x["input_tokens"] for x in data["model_calls"])>0
@@ -218,6 +221,22 @@ async def test_phase5_blocks_second_worker_delegation_and_records_truncation(tmp
     assert data["worker_delegations"]==2
     assert "duplicate_worker_delegation" in data["failures"]
     assert data["output_truncation_count"]==1 and data["output_truncation_hit"] is True
+    assert smoke_system_failed({"assigned_ids":["1"],"completed_examples":1,"cost_complete":True,
+                               "output_truncation_hit":True,"safety_ceiling_hit":False,"failures":[]}) is True
+
+@pytest.mark.asyncio
+async def test_phase5_provider_request_config_uses_16384_output_budget(tmp_path):
+    from types import SimpleNamespace
+    from sampo_cost_runtime import BUDGETS, FEDOT_BUDGETS, RuntimeTrace
+    trace=RuntimeTrace(["1"],"run",tmp_path/"fedotmas_cost_aware"/"batch_0000","m")
+    request=SimpleNamespace(model="m",config=None)
+    await trace.before_model_callback(callback_context=SimpleNamespace(agent_name="worker"),llm_request=request)
+    assert FEDOT_BUDGETS["max_output_tokens_per_call"]==16384
+    assert BUDGETS["max_output_tokens_per_call"]==8192
+    assert request.config.max_output_tokens==16384
+    trace.record_provider_request({"request_id":"r","model":"m","finish_reason":"stop","output_tokens":37,"usage_known":True})
+    assert trace.provider_requests[0]["max_output_tokens"]==16384
+    assert trace.provider_requests[0]["output_tokens"]==37
 
 @pytest.mark.asyncio
 async def test_complementary_phase5_persistence_terminates_invocation_successfully(tmp_path):
@@ -259,7 +278,10 @@ async def test_completed_batch_prevents_later_model_turn_or_worker_delegation(tm
     parent_context=SimpleNamespace(_invocation_context=parent_invocation,actions=SimpleNamespace(end_of_agent=False))
     await trace.after_tool_callback(tool=SimpleNamespace(name="construction_batch_specialist"),tool_args={},tool_context=parent_context,result={"isError":False})
     assert parent_invocation.end_invocation is True and parent_context.actions.end_of_agent is True
-    await trace.before_model_callback(callback_context=SimpleNamespace(_invocation_context=parent_invocation),llm_request=SimpleNamespace(model="m"))
+    skipped=await trace.before_tool_callback(tool=SimpleNamespace(name="construction_batch_specialist"),tool_args={},tool_context=parent_context)
+    assert skipped=={"status":"terminal_success","terminal_reason":"durable_batch_complete"}
+    response=await trace.before_model_callback(callback_context=SimpleNamespace(_invocation_context=parent_invocation),llm_request=SimpleNamespace(model="m"))
+    assert response is not None and response.content.parts[0].text=="Assigned batch is durably complete."
     assert parent_invocation.end_invocation is True
     assert trace.worker_delegations==0 and trace.calls==[]
 

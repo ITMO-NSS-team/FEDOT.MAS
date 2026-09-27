@@ -1,0 +1,1 @@
+{"run_id": "sampo-final-1000-20260927T211545Z", "system": "tfidf", "model": "tfidf_char_ngrams", "batch_size": 20}

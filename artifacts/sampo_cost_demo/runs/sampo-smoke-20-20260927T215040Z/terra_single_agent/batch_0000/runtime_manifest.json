@@ -1,0 +1,31 @@
+{
+  "run_id": "sampo-smoke-20-20260927T215040Z",
+  "system": "terra_single_agent",
+  "harness": "standalone_openai_tool_loop",
+  "fedotmas_dependency": false,
+  "model": "openai/gpt-5.6-terra",
+  "endpoint": "https://openrouter.ai/api/v1",
+  "batch_size": 20,
+  "budgets": {
+    "batch_size": 20,
+    "max_model_calls": 30,
+    "max_mcp_calls": 60,
+    "max_prompt_tokens_per_call": 64000,
+    "max_batch_seconds": 300,
+    "max_output_tokens_per_call": 8192
+  },
+  "mcp_server_script": "/Users/daniel/Documents/nss_lab/FEDOT.MAS/mcp-servers/sampo-cost-demo/src/mcp_sampo_cost_demo/server.py",
+  "fresh_mcp_process": true,
+  "fresh_model_conversation": true,
+  "tools": [
+    "list_methods",
+    "prepare_candidates",
+    "inspect_candidates",
+    "save_default_top3",
+    "save_ranked_top3",
+    "get_prediction_status"
+  ],
+  "private_gt_path_provided": false,
+  "phase5_config_exposed": false,
+  "git_commit": "77d66f739b3530d6b8c5ad427cf72c619d05079a"
+}

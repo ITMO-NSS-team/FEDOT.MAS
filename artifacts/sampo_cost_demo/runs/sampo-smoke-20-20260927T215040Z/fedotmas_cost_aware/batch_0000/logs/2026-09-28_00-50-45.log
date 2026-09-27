@@ -1,0 +1,15 @@
+2026-09-28 00:50:45.032 | DEBUG    | fedotmas.settings:setup_logging:64 | Loaded .env from /Users/daniel/Documents/nss_lab/FEDOT.MAS/.env
+2026-09-28 00:50:45.033 | INFO     | fedotmas.mas:build:64 | Building routing system
+2026-09-28 00:50:45.033 | DEBUG    | fedotmas.mcp.registry:create_toolset:49 | Creating MCP toolset | server=sampo-cost-demo-phase5
+2026-09-28 00:50:45.041 | DEBUG    | fedotmas.mas.builder:_build_routing_agent:81 | Built routing agent | name=construction_batch_specialist model=model='deepseek/deepseek-v4.1-flash' llm_client=_ProxyClient(base_url=URL('https://openrouter.ai/api/v1/'))
+2026-09-28 00:50:45.052 | DEBUG    | fedotmas.mas.builder:_build_routing_agent:81 | Built routing agent | name=construction_label_batch_coordinator model=model='deepseek/deepseek-v4.1-flash' llm_client=_ProxyClient(base_url=URL('https://openrouter.ai/api/v1/'))
+2026-09-28 00:50:45.052 | INFO     | fedotmas.mas.builder:build_routing_system:57 | Built routing system | coordinator=construction_label_batch_coordinator workers=['construction_batch_specialist']
+2026-09-28 00:50:45.053 | INFO     | fedotmas.mas:build:71 | Config:
+Coordinator: construction_label_batch_coordinator  model: deepseek/deepseek-v4.1-flash
+Workers:
+  construction_batch_specialist 'Executes a single bounded SAMPO artifact-backed batch for mapping public historical construction work names to allowed labels, including exact prescribed multi-retriever retrieval, server-side partitioning by top-1 disagreement, selective semantic review, and non-overlapping durable prediction writes.'
+2026-09-28 00:50:45.054 | DEBUG    | fedotmas.core.runner:run_pipeline:105 | Creating session | app=fedotmas user=user
+2026-09-28 00:50:45.059 | INFO     | fedotmas.core.runner:run_pipeline:127 | Pipeline run started | pipeline=construction_label_batch_coordinator
+2026-09-28 00:50:45.252 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=deepseek/deepseek-v4.1-flash tools=construction_batch_specialist
+2026-09-28 00:50:47.006 | ERROR    | fedotmas.core.runner:_consume_runner_events:276 | LLM error | agent=construction_label_batch_coordinator code=APIConnectionError msg=Connection error.
+2026-09-28 00:50:47.008 | INFO     | fedotmas.core.runner:run_pipeline:157 | Pipeline complete | total_elapsed=1.9s total_prompt=0 total_completion=0

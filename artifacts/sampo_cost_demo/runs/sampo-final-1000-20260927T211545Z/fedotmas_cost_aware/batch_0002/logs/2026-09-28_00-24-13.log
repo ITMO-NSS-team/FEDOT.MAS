@@ -1,0 +1,27 @@
+2026-09-28 00:24:13.186 | DEBUG    | fedotmas.settings:setup_logging:64 | Loaded .env from /Users/daniel/Documents/nss_lab/FEDOT.MAS/.env
+2026-09-28 00:24:13.187 | INFO     | fedotmas.mas:build:64 | Building routing system
+2026-09-28 00:24:13.187 | DEBUG    | fedotmas.mcp.registry:create_toolset:49 | Creating MCP toolset | server=sampo-cost-demo-phase5
+2026-09-28 00:24:13.196 | DEBUG    | fedotmas.mas.builder:_build_routing_agent:81 | Built routing agent | name=construction_batch_specialist model=model='deepseek/deepseek-v4.1-flash' llm_client=_ProxyClient(base_url=URL('https://openrouter.ai/api/v1/'))
+2026-09-28 00:24:13.202 | DEBUG    | fedotmas.mas.builder:_build_routing_agent:81 | Built routing agent | name=construction_label_batch_coordinator model=model='deepseek/deepseek-v4.1-flash' llm_client=_ProxyClient(base_url=URL('https://openrouter.ai/api/v1/'))
+2026-09-28 00:24:13.202 | INFO     | fedotmas.mas.builder:build_routing_system:57 | Built routing system | coordinator=construction_label_batch_coordinator workers=['construction_batch_specialist']
+2026-09-28 00:24:13.203 | INFO     | fedotmas.mas:build:71 | Config:
+Coordinator: construction_label_batch_coordinator  model: deepseek/deepseek-v4.1-flash
+Workers:
+  construction_batch_specialist 'Executes a single bounded SAMPO artifact-backed batch for mapping public historical construction work names to allowed labels, including exact prescribed multi-retriever retrieval, server-side partitioning by top-1 disagreement, selective semantic review, and non-overlapping durable prediction writes.'
+2026-09-28 00:24:13.209 | DEBUG    | fedotmas.core.runner:run_pipeline:105 | Creating session | app=fedotmas user=user
+2026-09-28 00:24:13.209 | INFO     | fedotmas.core.runner:run_pipeline:127 | Pipeline run started | pipeline=construction_label_batch_coordinator
+2026-09-28 00:24:13.227 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=deepseek/deepseek-v4.1-flash tools=construction_batch_specialist
+2026-09-28 00:24:20.558 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-28 00:24:21.591 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=deepseek/deepseek-v4.1-flash tools=get_candidate_evidence,get_prediction_status,list_methods,partition_candidate_batch,prepare_candidate_batch,save_candidate_predictions,save_review_decisions
+2026-09-28 00:24:23.197 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=2 content_chars=0
+2026-09-28 00:24:23.399 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=deepseek/deepseek-v4.1-flash tools=get_candidate_evidence,get_prediction_status,list_methods,partition_candidate_batch,prepare_candidate_batch,save_candidate_predictions,save_review_decisions
+2026-09-28 00:24:24.700 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-28 00:24:24.752 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=deepseek/deepseek-v4.1-flash tools=get_candidate_evidence,get_prediction_status,list_methods,partition_candidate_batch,prepare_candidate_batch,save_candidate_predictions,save_review_decisions
+2026-09-28 00:24:27.161 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=5 content_chars=0
+2026-09-28 00:24:27.271 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=deepseek/deepseek-v4.1-flash tools=get_candidate_evidence,get_prediction_status,list_methods,partition_candidate_batch,prepare_candidate_batch,save_candidate_predictions,save_review_decisions
+2026-09-28 00:24:51.208 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=length tool_calls=0 content_chars=0
+2026-09-28 00:24:51.213 | WARNING  | fedotmas.core.runner:_consume_runner_events:257 | Agent 'construction_batch_specialist' produced no content within its token budget; continuing with an empty result for this step
+2026-09-28 00:24:51.234 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=deepseek/deepseek-v4.1-flash tools=construction_batch_specialist
+2026-09-28 00:24:58.141 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-28 00:24:58.153 | ERROR    | fedotmas.core.runner:_consume_runner_events:276 | LLM error | agent=construction_label_batch_coordinator code=RuntimeError msg=Error in plugin 'sampo_cost_demo_trace' during 'before_tool_callback' callback: duplicate_worker_delegation
+2026-09-28 00:24:58.308 | INFO     | fedotmas.core.runner:run_pipeline:157 | Pipeline complete | total_elapsed=45.1s total_prompt=97324 total_completion=12305

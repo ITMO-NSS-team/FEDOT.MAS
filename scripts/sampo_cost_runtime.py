@@ -12,6 +12,7 @@ _DOTENV_PATH=find_dotenv(usecwd=True)
 if _DOTENV_PATH: load_dotenv(_DOTENV_PATH,override=False)
 
 BUDGETS = {"batch_size": 20, "max_model_calls": 30, "max_mcp_calls": 60, "max_prompt_tokens_per_call": 64000, "max_batch_seconds": 300, "max_output_tokens_per_call": 8192}
+FEDOT_BUDGETS = {**BUDGETS, "max_output_tokens_per_call": 16384}
 NEUTRAL_TASK = "Map each assigned historical construction work name to three distinct allowed labels using only the supplied public data and tools. Produce valid top-3 predictions for all assigned IDs."
 NEUTRAL_SYSTEM = "You are a single agent completing a batch of SAMPO construction work name mappings. Follow the task and use only public batch data, allowed labels, and available tools. Return valid top-three predictions for every assigned ID."
 
@@ -20,7 +21,7 @@ def required_runtime() -> tuple[str, str, str, str]:
     endpoint = os.getenv("SAMPO_BASE_URL") or os.getenv("OPENAI_BASE_URL")
     provider = os.getenv("SAMPO_PROVIDER", "openai-compatible" if endpoint else "")
     missing = [name for name, value in (("SAMPO_FEDOT_MODEL", cheap), ("SAMPO_TERRA_MODEL", strong), ("SAMPO_PROVIDER/endpoint", provider and endpoint)) if not value]
-    if cheap and cheap != "openai/gpt-5.6-luna": missing.append("SAMPO_FEDOT_MODEL must be openai/gpt-5.6-luna")
+    if cheap and cheap != "deepseek/deepseek-v4.1-flash": missing.append("SAMPO_FEDOT_MODEL must be deepseek/deepseek-v4.1-flash")
     if strong and strong != "openai/gpt-5.6-terra": missing.append("SAMPO_TERRA_MODEL must be openai/gpt-5.6-terra")
     if not (os.getenv("SAMPO_API_KEY") or os.getenv("OPENAI_API_KEY")): missing.append("SAMPO_API_KEY/OPENAI_API_KEY")
     if missing: raise RuntimeError("Missing live inference configuration: " + ", ".join(missing))
@@ -89,21 +90,31 @@ class RuntimeTrace:
             async def on_tool_error_callback(self, **kwargs): return await owner.on_tool_error_callback(**kwargs)
         self.plugin = Plugin(name="sampo_cost_demo_trace")
         self.ids, self.run_id, self.output, self.model, self.batch = ids, run_id, output, model, batch
+        self.max_output_tokens = (FEDOT_BUDGETS if output.parent.name == "fedotmas_cost_aware" else BUDGETS)["max_output_tokens_per_call"]
         self.tool_names=tool_names or set(); self.calls: list[dict[str, Any]]=[]; self.tools: list[dict[str, Any]]=[]; self.worker_calls: list[dict[str, Any]]=[]; self.provider_requests: list[dict[str, Any]]=[]; self.failures=[]; self.transcript=[]; self.started=time.monotonic(); self.call_started=0.0
         self.worker_delegations = 0
         self.allowed_labels=allowed_labels or set(); self.terminal_success=False; self.terminal_reason=None
 
     def record_provider_request(self, request: dict[str, Any]) -> None:
-        self.provider_requests.append(request)
-        self.transcript.append({"type": "provider_request", **request})
-        if request.get("finish_reason") in {"length", "max_tokens"}:
+        observed={**request,"max_output_tokens":self.max_output_tokens}
+        self.provider_requests.append(observed)
+        self.transcript.append({"type": "provider_request", **observed})
+        if observed.get("finish_reason") in {"length", "max_tokens"}:
             self.failures.append("output_truncation")
 
     async def before_model_callback(self, *, callback_context, llm_request):
         if self.terminal_success:
             invocation=getattr(callback_context,"_invocation_context",None)
             if invocation is not None: invocation.end_invocation=True
-            return
+            from google.adk.models import LlmResponse
+            from google.genai import types
+            return LlmResponse(content=types.Content(role="model",parts=[types.Part(text="Assigned batch is durably complete.")]),turn_complete=True)
+        config=getattr(llm_request,"config",None)
+        if config is None:
+            from google.genai import types
+            llm_request.config=types.GenerateContentConfig(max_output_tokens=self.max_output_tokens)
+        else:
+            config.max_output_tokens=self.max_output_tokens
         if "duplicate_worker_delegation" in self.failures:
             raise RuntimeError("duplicate_worker_delegation")
         if len(self.calls) >= BUDGETS["max_model_calls"]: self.failures.append("model_call_limit"); raise RuntimeError("model_call_limit")
@@ -127,6 +138,10 @@ class RuntimeTrace:
     async def before_tool_callback(self, *, tool, tool_args, tool_context):
         name=tool.name or "unknown"
         is_mcp=name in self.tool_names or any(name.endswith("_"+x) for x in self.tool_names)
+        if self.terminal_success:
+            self._terminate_invocation(tool_context)
+            self.transcript.append({"type":"invocation_terminated","reason":self.terminal_reason,"before_tool":name})
+            return {"status":"terminal_success","terminal_reason":self.terminal_reason}
         if is_mcp and len(self.tools)>=BUDGETS["max_mcp_calls"]: self.failures.append("mcp_call_limit"); raise RuntimeError("mcp_call_limit")
         args=tool_args or {}; ids=args.get("example_ids",[]) if isinstance(args, Mapping) else []
         if ids and not set(ids)<=set(self.ids): self.failures.append("out_of_scope_tool_ids"); raise RuntimeError("out_of_scope_tool_ids")

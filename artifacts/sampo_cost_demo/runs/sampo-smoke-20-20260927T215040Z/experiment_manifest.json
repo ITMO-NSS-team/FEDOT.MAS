@@ -1,0 +1,95 @@
+{
+  "run_stage": "smoke",
+  "input_file": "artifacts/sampo_cost_demo/operational_inputs.csv",
+  "input_sha256": "c1867399dd3b3869cb0335d42055bf2fb6c6a913c15fd1cef25760ca9f88d957",
+  "models": {
+    "tfidf": "tfidf_char_ngrams",
+    "fedotmas_cost_aware": "deepseek/deepseek-v4.1-flash",
+    "terra_single_agent": "openai/gpt-5.6-terra"
+  },
+  "endpoint": "https://openrouter.ai/api/v1",
+  "provider": "openai-compatible",
+  "phase5_config_sha256": "c13b1d1522533006e57f541ae7cd32d19d34356e46335f4739f494d84b78c6f2",
+  "pricing_sha256": "81b8b1e981cb70490b487dd3f5666eaf6bf903cd603171ac14f870efa376fc72",
+  "batch_size": 20,
+  "budgets": {
+    "fedotmas_cost_aware": {
+      "batch_size": 20,
+      "max_model_calls": 30,
+      "max_mcp_calls": 60,
+      "max_prompt_tokens_per_call": 64000,
+      "max_batch_seconds": 300,
+      "max_output_tokens_per_call": 16384
+    },
+    "terra_single_agent": {
+      "batch_size": 20,
+      "max_model_calls": 30,
+      "max_mcp_calls": 60,
+      "max_prompt_tokens_per_call": 64000,
+      "max_batch_seconds": 300,
+      "max_output_tokens_per_call": 8192
+    }
+  },
+  "run_id": "sampo-smoke-20-20260927T215040Z",
+  "assigned_ids": [
+    "696",
+    "6282",
+    "1714",
+    "14772",
+    "2896",
+    "2436",
+    "3378",
+    "11317",
+    "13530",
+    "8297",
+    "6135",
+    "7638",
+    "6090",
+    "12976",
+    "2202",
+    "6019",
+    "7433",
+    "4335",
+    "2786",
+    "7238"
+  ],
+  "private_gt_evaluation_allowed": false,
+  "created_at_utc": "2026-09-27T21:50:40.129915+00:00",
+  "git_commit": "77d66f739b3530d6b8c5ad427cf72c619d05079a",
+  "frozen_test_sha256": "a789e6c20cdae0d4f6dc31a3a39cb213063abfd1790705dce11c24046187129d",
+  "operational_set_sha256": "c1867399dd3b3869cb0335d42055bf2fb6c6a913c15fd1cef25760ca9f88d957",
+  "configuration_signature": {
+    "run_stage": "smoke",
+    "input_file": "artifacts/sampo_cost_demo/operational_inputs.csv",
+    "input_sha256": "c1867399dd3b3869cb0335d42055bf2fb6c6a913c15fd1cef25760ca9f88d957",
+    "models": {
+      "tfidf": "tfidf_char_ngrams",
+      "fedotmas_cost_aware": "deepseek/deepseek-v4.1-flash",
+      "terra_single_agent": "openai/gpt-5.6-terra"
+    },
+    "endpoint": "https://openrouter.ai/api/v1",
+    "provider": "openai-compatible",
+    "phase5_config_sha256": "c13b1d1522533006e57f541ae7cd32d19d34356e46335f4739f494d84b78c6f2",
+    "pricing_sha256": "81b8b1e981cb70490b487dd3f5666eaf6bf903cd603171ac14f870efa376fc72",
+    "batch_size": 20,
+    "budgets": {
+      "fedotmas_cost_aware": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 16384
+      },
+      "terra_single_agent": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 8192
+      }
+    }
+  },
+  "private_gt_exposed": false
+}

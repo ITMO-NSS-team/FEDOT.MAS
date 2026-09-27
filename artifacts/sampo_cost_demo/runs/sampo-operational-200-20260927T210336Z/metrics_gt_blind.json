@@ -1,0 +1,38 @@
+{
+  "run_id": "sampo-operational-200-20260927T210336Z",
+  "stage": "operational",
+  "completion_counts": {
+    "tfidf": {
+      "completed": 200,
+      "assigned": 200
+    },
+    "fedotmas_cost_aware": {
+      "completed": 0,
+      "assigned": 200
+    },
+    "terra_single_agent": {
+      "completed": 200,
+      "assigned": 200
+    }
+  },
+  "operational_pass": {
+    "tfidf": true,
+    "fedotmas_cost_aware": false,
+    "terra_single_agent": true
+  },
+  "fedotmas_total_cost_usd": 0.329349123,
+  "terra_total_cost_usd": 0.7672026,
+  "terra_over_fedotmas_cost_ratio": 2.3294508666415967,
+  "token_ratios": {
+    "input": 0.29885042328992023,
+    "output": 0.11961118128398045,
+    "total": 0.28182626339701206
+  },
+  "provider_request_ratio": 0.5797101449275363,
+  "runtime_ratio": 0.36004317454330004,
+  "cost_complete": {
+    "fedotmas_cost_aware": true,
+    "terra_single_agent": true
+  },
+  "private_gt_used": false
+}

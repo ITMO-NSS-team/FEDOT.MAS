@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sampo_cost_demo import OUT, read_csv, paired_stats
 from sampo_cost_evaluation_contract import (
-    comparison, evaluate_once, sha256_file, validate_and_seal,
+    comparison, evaluate_run,
 )
 
 
@@ -30,21 +30,10 @@ def main() -> None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("run_id") != args.run_id:
         raise SystemExit("Experiment manifest run_id mismatch")
-    public_path = OUT / "operational_inputs.csv"
-    frozen_input_hash = manifest.get("operational_set_sha256")
-    if not frozen_input_hash or sha256_file(public_path) != frozen_input_hash:
-        raise SystemExit("Frozen public input SHA256 mismatch")
-    frozen_ids = [row["example_id"] for row in read_csv(public_path)]
-    if manifest.get("assigned_ids") != frozen_ids:
-        raise SystemExit("Frozen run scope mismatch")
-
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=OUT.parents[1], text=True).strip()
-    validate_and_seal(run_dir, args.run_id, frozen_ids, frozen_input_hash, commit)
-
-    # Private GT is opened exactly once, after the successful durable seal.
-    gt_bytes = (OUT / "private_ground_truth.csv").read_bytes()
     labels = {row["target_label"] for row in read_csv(OUT / "allowed_target_labels.csv")}
-    evaluation = evaluate_once(run_dir, args.run_id, frozen_ids, gt_bytes, commit, labels)
+    evaluation = evaluate_run(run_dir, args.run_id, manifest, OUT,
+                              OUT / "private_ground_truth.csv", labels, commit)
     gt_mapping = evaluation.pop("_gt")
     predictions = evaluation.pop("_predictions")
     ids = evaluation.pop("_ids")

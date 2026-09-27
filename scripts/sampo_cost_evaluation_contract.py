@@ -29,7 +29,8 @@ def _json(path: Path) -> dict[str, Any]:
 
 
 def validate_and_seal(run_dir: Path, run_id: str, frozen_ids: list[str],
-                      frozen_input_sha256: str, git_commit: str) -> dict[str, Any]:
+                      frozen_input_sha256: str, git_commit: str,
+                      labels: set[str]) -> dict[str, Any]:
     manifest_path = run_dir / "experiment_manifest.json"
     manifest = _json(manifest_path)
     if manifest.get("run_id") != run_id:
@@ -52,11 +53,21 @@ def validate_and_seal(run_dir: Path, run_id: str, frozen_ids: list[str],
             if reader.fieldnames != PREDICTION_HEADER:
                 raise ValueError(f"Prediction schema must be exactly {','.join(PREDICTION_HEADER)}: {paths['predictions_csv']}")
             rows = list(reader)
+        if any(None in row or set(row) != set(PREDICTION_HEADER) for row in rows):
+            raise ValueError(f"Prediction row does not match the exact schema: {paths['predictions_csv']}")
         ids = [row["example_id"] for row in rows]
         if len(ids) != len(set(ids)):
             raise ValueError(f"Duplicate prediction IDs: {system}")
         if not set(ids) <= expected_ids:
             raise ValueError(f"Prediction IDs outside frozen run scope: {system}")
+        for row in rows:
+            ranked = [row.get(f"top_{rank}", "") for rank in (1, 2, 3)]
+            if any(not label for label in ranked):
+                raise ValueError(f"Prediction contains an empty label: {system}")
+            if any(label not in labels for label in ranked):
+                raise ValueError(f"Prediction contains a label outside the frozen label set: {system}")
+            if len(set(ranked)) != 3:
+                raise ValueError(f"Prediction contains duplicate ranked labels: {system}")
         metrics = _json(paths["metrics_json"])
         telemetry = _json(paths["telemetry_json"])
         runtime = _json(paths["runtime_manifest_json"])
@@ -64,6 +75,10 @@ def validate_and_seal(run_dir: Path, run_id: str, frozen_ids: list[str],
             raise ValueError(f"{system} metrics run_id mismatch")
         if telemetry.get("run_id") != run_id or runtime.get("run_id") != run_id:
             raise ValueError(f"{system} artifact run_id mismatch")
+        if metrics.get("stage") != "final" or telemetry.get("run_stage") != "final":
+            raise ValueError(f"{system} artifact stage mismatch")
+        if metrics.get("assigned_examples") != len(frozen_ids):
+            raise ValueError(f"{system} metrics assigned scope mismatch")
         systems[system] = {key: sha256_file(path) for key, path in paths.items()}
     seal = {"run_id": run_id, "git_commit": git_commit,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -74,6 +89,51 @@ def validate_and_seal(run_dir: Path, run_id: str, frozen_ids: list[str],
         raise ValueError("Predictions already sealed for this run")
     seal_path.write_text(json.dumps(seal, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return seal
+
+
+def resolve_final_scope(manifest: dict[str, Any], run_id: str, artifact_root: Path
+                        ) -> tuple[Path, str, list[str]]:
+    if manifest.get("run_id") != run_id:
+        raise ValueError("experiment manifest run_id mismatch")
+    if manifest.get("run_stage") != "final" or manifest.get("private_gt_evaluation_allowed") is not True:
+        raise ValueError("Private GT evaluation is prohibited for this run stage")
+    input_file = manifest.get("input_file")
+    if not isinstance(input_file, str) or not input_file:
+        raise ValueError("Run manifest is missing input_file")
+    repo_root = artifact_root.parent.parent
+    input_path = (repo_root / input_file).resolve()
+    if not input_path.is_relative_to(repo_root.resolve()):
+        raise ValueError("Run manifest input_file escapes repository root")
+    expected_final = (artifact_root / "public_inputs.csv").resolve()
+    if input_path != expected_final:
+        raise ValueError("Final evaluation must use the frozen public_inputs.csv artifact")
+    input_hash = manifest.get("input_sha256")
+    if not isinstance(input_hash, str) or sha256_file(input_path) != input_hash:
+        raise ValueError("Frozen public input SHA256 mismatch")
+    with input_path.open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    ids = [row.get("example_id", "") for row in rows]
+    if not ids or any(not example_id for example_id in ids) or len(ids) != len(set(ids)):
+        raise ValueError("Frozen run input contains empty or duplicate IDs")
+    assigned_ids = manifest.get("assigned_ids")
+    if not isinstance(assigned_ids, list) or assigned_ids != ids:
+        raise ValueError("Frozen run scope does not match manifest assigned_ids")
+    return input_path, input_hash, ids
+
+
+def _read_private_gt_bytes(path: Path) -> bytes:
+    return path.read_bytes()
+
+
+def evaluate_run(run_dir: Path, run_id: str, manifest: dict[str, Any],
+                 artifact_root: Path, private_gt_path: Path, labels: set[str],
+                 evaluator_commit: str) -> dict[str, Any]:
+    """Validate and seal public artifacts, verify the seal, then read private GT once."""
+    _, frozen_input_hash, frozen_ids = resolve_final_scope(manifest, run_id, artifact_root)
+    validate_and_seal(run_dir, run_id, frozen_ids, frozen_input_hash, evaluator_commit, labels)
+    verify_seal(run_dir, run_id)
+    gt_bytes = _read_private_gt_bytes(private_gt_path)
+    return evaluate_once(run_dir, run_id, frozen_ids, gt_bytes, evaluator_commit, labels)
 
 
 def verify_seal(run_dir: Path, run_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -108,12 +168,6 @@ def evaluate_once(run_dir: Path, run_id: str, frozen_ids: list[str], gt_bytes: b
     for system in SYSTEMS:
         with (run_dir / system / "predictions.csv").open(encoding="utf-8", newline="") as stream:
             rows = list(csv.DictReader(stream))
-        for row in rows:
-            ranked = [row.get(f"top_{rank}") for rank in (1, 2, 3)]
-            if any(label not in labels for label in ranked):
-                raise ValueError(f"Prediction contains a label outside the frozen label set: {system}")
-            if len(set(ranked)) != 3:
-                raise ValueError(f"Prediction contains duplicate ranked labels: {system}")
         by_id = {row["example_id"]: row for row in rows}
         predictions_by_system[system] = by_id
         total = len(frozen_ids)

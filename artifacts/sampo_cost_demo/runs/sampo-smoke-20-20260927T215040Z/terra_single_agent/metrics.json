@@ -1,0 +1,28 @@
+{
+  "run_id": "sampo-smoke-20-20260927T215040Z",
+  "stage": "smoke",
+  "system": "terra_single_agent",
+  "model": "openai/gpt-5.6-terra",
+  "harness": "standalone_openai_tool_loop",
+  "assigned_examples": 20,
+  "completed_examples": 0,
+  "failed_examples": 20,
+  "provider_request_count": 1,
+  "model_call_count": 1,
+  "MCP_call_count": 0,
+  "uncached_input_tokens": 0,
+  "cached_input_tokens": 0,
+  "total_input_tokens": 0,
+  "output_tokens": 0,
+  "provider_reported_cost_usd": null,
+  "fallback_calculated_cost_usd": 0,
+  "authoritative_total_cost_usd": null,
+  "cost_complete": false,
+  "runtime_seconds": 2.627608249997138,
+  "finish_reasons": [
+    null
+  ],
+  "output_truncation_count": 0,
+  "safety_ceiling_hit": false,
+  "operational_pass": false
+}
