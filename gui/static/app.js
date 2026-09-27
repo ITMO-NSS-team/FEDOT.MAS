@@ -1671,6 +1671,36 @@ function renderKeyChip() {
   chip.title = ok ? "Ключ провайдера принят. Нажмите, чтобы сменить" : "Ввести ключ провайдера";
 }
 
+async function exportCode() {
+  if (!S.preset) { alert("Сначала выберите сценарий."); return; }
+  const preset = S.preset;
+  const button = $("p-export-code");
+  button.disabled = true;
+  try {
+    const response = await fetch("api/export-code", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({config: preset.config, kind: preset.kind,
+        model: S.models.run, tools: preset.tools || null,
+        custom_mcp: preset.customMcp || null}),
+    });
+    if (!response.ok) {
+      const data = await readJson(response, "экспорт кода");
+      throw new Error(data.detail || data.error || `сервер ответил ${response.status}`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const name = (preset.title || "mas").replace(/[^\wа-яёА-ЯЁ -]+/g, "").trim() || "mas";
+    link.href = url; link.download = `${name}_код_МАС.zip`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    alert("Не удалось скачать код МАС.\n" + err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderModelKeyAccess() {
   const serverKey = !!S.backend?.openrouter_ready && !S.backend?.public && !S.backend?.user_key;
   $("models-key").classList.toggle("hidden", serverKey || !S.backend);
@@ -2598,6 +2628,7 @@ function init() {
   });
   $("p-export").addEventListener("click", exportScenario);
   $("p-export-ipr2").addEventListener("click", exportIPR2);
+  $("p-export-code").addEventListener("click", exportCode);
   $("btn-import").addEventListener("click", () => $("import-file").click());
   $("import-file").addEventListener("change", (e) => {
     const file = e.target.files && e.target.files[0];

@@ -20,8 +20,8 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fedotmas import MAS, MAW, MASConfig, MAWConfig
 from fedotmas.common.codex_cli import codex_login_status, find_codex_cli
@@ -33,6 +33,7 @@ from fedotmas.plugins import LoggingPlugin, UnknownToolRecoveryPlugin
 
 from . import security
 from .agent_names import AgentNames, latinize_mas
+from .code_export import build_code_archive
 from .config import (
     AGENT_MAX_OUTPUT_TOKENS,
     DEFAULT_MODEL,
@@ -77,6 +78,7 @@ from .schemas import (
     EffortIn,
     ExportIn,
     SynapseExportIn,
+    CodeExportIn,
     GenerateIn,
     JudgeIn,
     PrepareIn,
@@ -413,6 +415,20 @@ async def export_synapse(body: SynapseExportIn) -> dict:
                 "tools_checked": False}
     except (ValueError, KeyError) as exc:
         return {"ok": False, "error": f"Ошибка конвертации: {exc}"}
+
+
+@app.post("/api/export-code")
+async def export_code(body: CodeExportIn) -> Response:
+    """Download executable source and configuration without running the system."""
+    try:
+        data = build_code_archive(body, tools=_allowed_tools(body.tools),
+                                  default_model=DEFAULT_MODEL)
+    except (ValueError, KeyError, AttributeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Ошибка экспорта кода: {exc}") from exc
+    return Response(data, media_type="application/zip", headers={
+        "Content-Disposition": 'attachment; filename="fedotmas-source.zip"',
+        "Cache-Control": "no-store",
+    })
 
 
 @app.get("/api/rubber-quality")

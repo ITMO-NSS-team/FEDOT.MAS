@@ -102,3 +102,11 @@ class SynapseExportIn(BaseModel):
     kind: str = "maw"
     workflow_id: str = Field(min_length=1, max_length=200)
     workflow_name: str = Field(min_length=1, max_length=300)
+
+
+class CodeExportIn(BaseModel):
+    config: dict
+    kind: str = "mas"
+    tools: list[str] | None = None
+    model: str | None = None
+    custom_mcp: list[CustomMCP] | None = None
