@@ -104,7 +104,8 @@ const S = {
   k: 1, cx: 0, cy: 0, bbox: null, needFit: true, userAdjusted: false, group: null,
   backend: null, live: true, abort: null, liveTimer: null, custom: [], hidden: [],
   models: { gen: "", run: "", single: "", judge: "" }, mcpCustom: [],   // мета-агент, исполнение, судья
-  answer: null, baseline: null, judge: null, review: null, evaluationBusy: false, query: "", syntheticExamples: [],
+  answer: null, baseline: null, judge: null, review: null, evaluationBusy: false, evaluationEpoch: 0,
+  query: "", syntheticExamples: [],
 };
 
 /* ─────────────────────────── Утилиты ─────────────────────────── */
@@ -873,6 +874,7 @@ function renderAnswer() {
 async function runBaseline() {
   if (!S.backend || !S.answer || S.evaluationBusy) return;
   const preset = S.preset, answer = S.answer;
+  const epoch = S.evaluationEpoch;
   const query = S.query || $("query").value;
   S.evaluationBusy = true;
   S.baseline = null;
@@ -897,21 +899,25 @@ async function runBaseline() {
     if (S.preset === preset && S.answer === answer)
       S.judge = { winner: "error", verdict: "Не удалось сравнить: " + err.message, model: "—" };
   } finally {
-    S.evaluationBusy = false;
-    btn.textContent = "Сравнить с одной моделью";
-    renderAnswer();
+    if (S.evaluationEpoch === epoch) {
+      S.evaluationBusy = false;
+      btn.textContent = "Сравнить с одной моделью";
+      renderAnswer();
+    }
   }
 }
 
 // Прогресс судьи: он работает минутами и без обратной связи выглядит зависшим.
 // Устроен так же, как прогресс генерации конфигурации.
 function judgeProgress() {
+  const epoch = S.evaluationEpoch;
   const box = $("judge-progress");
   const fill = $("judge-progress-fill");
   const log = $("judge-progress-log");
   const t0 = Date.now();
   let pct = 6;
   const timer = setInterval(() => {
+    if (S.evaluationEpoch !== epoch) { clearInterval(timer); return; }
     $("judge-progress-time").textContent = Math.round((Date.now() - t0) / 1000) + " с";
   }, 250);
   box.classList.remove("hidden");
@@ -919,24 +925,27 @@ function judgeProgress() {
   fill.style.width = pct + "%";
   return {
     step(text, percent) {
+      if (S.evaluationEpoch !== epoch) return;
       $("judge-progress-step").textContent = text;
       if (percent != null) pct = percent;
       fill.style.width = pct + "%";
     },
     note(text) {
+      if (S.evaluationEpoch !== epoch) return;
       const line = document.createElement("div");
       line.textContent = text;
       log.appendChild(line);
       log.scrollTop = log.scrollHeight;
     },
-    bump(delta) { pct = Math.min(92, pct + delta); fill.style.width = pct + "%"; },
-    stop() { clearInterval(timer); box.classList.add("hidden"); },
+    bump(delta) { if (S.evaluationEpoch === epoch) { pct = Math.min(92, pct + delta); fill.style.width = pct + "%"; } },
+    stop() { clearInterval(timer); if (S.evaluationEpoch === epoch) box.classList.add("hidden"); },
   };
 }
 
 async function runComparisonJudge() {
   if (!S.backend || !S.answer || !S.baseline) return;
   const preset = S.preset, answer = S.answer;
+  const epoch = S.evaluationEpoch;
   const btn = $("btn-baseline");
   btn.disabled = true; btn.textContent = "Судья сравнивает…";
   const ui = judgeProgress();
@@ -969,18 +978,21 @@ async function runComparisonJudge() {
       S.judge = { verdict: "Не удалось получить оценку: " + err.message, winner: "error", model: "—" };
   } finally {
     ui.stop();
-    btn.disabled = false;
-    btn.textContent = "Оценить заново";
-    if (S.preset === preset && S.answer === answer && preset && S.judge?.winner !== "error") {
-      preset.judge = S.judge; persistPreset();
+    if (S.evaluationEpoch === epoch) {
+      btn.disabled = false;
+      btn.textContent = "Оценить заново";
+      if (S.preset === preset && S.answer === answer && preset && S.judge?.winner !== "error") {
+        preset.judge = S.judge; persistPreset();
+      }
+      renderAnswer();
     }
-    renderAnswer();
   }
 }
 
 async function runJudge() {
   if (!S.backend || !S.answer || S.evaluationBusy) return;
   const preset = S.preset, answer = S.answer;
+  const epoch = S.evaluationEpoch;
   const payload = { query: S.query || $("query").value, system_answer: answer.text,
                     trace: preset?.trace || [], model: S.models.judge };
   S.evaluationBusy = true;
@@ -1002,9 +1014,11 @@ async function runJudge() {
     if (S.preset === preset && S.answer === answer)
       S.review = { verdict: "Не удалось получить оценку: " + err.message, model: "—" };
   } finally {
-    S.evaluationBusy = false;
     ui.stop();
-    renderAnswer();
+    if (S.evaluationEpoch === epoch) {
+      S.evaluationBusy = false;
+      renderAnswer();
+    }
   }
 }
 
@@ -1104,8 +1118,10 @@ async function generateSyntheticExamples() {
       ? `Добавлено: ${added}. Затрачено токенов: ${nfmt(data.tokens || 0)}.`
       : "Модель не вернула новых уникальных вариантов.";
   } catch (error) {
-    note.classList.add("error");
-    note.textContent = "Не удалось сгенерировать: " + (error.message || error);
+    if (S.preset === preset) {
+      note.classList.add("error");
+      note.textContent = "Не удалось сгенерировать: " + (error.message || error);
+    }
   } finally {
     button.textContent = "Сгенерировать синтетический пример";
     renderSyntheticExamples();
@@ -1287,6 +1303,10 @@ function renderSources(p) {
 /* ─────────────────────────── Загрузка сценария ─────────────────────────── */
 function loadPreset(p) {
   pause();
+  stopLive();
+  S.evaluationEpoch++;
+  S.evaluationBusy = false;
+  $("judge-progress").classList.add("hidden");
   S.preset = p;
   S.agents = indexAgents(p);
   S.events = p.trace;
@@ -1740,6 +1760,7 @@ function stopLive() {
 async function liveRun() {
   if (!S.preset) return;
   stopLive();
+  const preset = S.preset;
   S.answer = null; S.baseline = null; S.judge = null; S.review = null;
   Object.assign(S.preset, { answer: null, answerMeta: null, runStats: null, rubberValidation: null,
     auto: "—", baseline: null, judge: null, review: null, trace: [] });
@@ -1759,7 +1780,8 @@ async function liveRun() {
   setPlayIcon(true);
   liveMessage("запуск", "runner", "Система запущена. Первые ответы агентов появятся здесь.");
 
-  S.abort = new AbortController();
+  const controller = new AbortController();
+  S.abort = controller;
   try {
     const r = await fetch("api/run", {
       method: "POST",
@@ -1768,8 +1790,9 @@ async function liveRun() {
                              query: $("query").value, model: S.models.run,
                              tools: S.preset.tools || null,
                              custom_mcp: S.preset.customMcp || null }),
-      signal: S.abort.signal,
+      signal: controller.signal,
     });
+    if (S.preset !== preset || S.abort !== controller) return;
     // Единственный поток, где код ответа не проверялся: при 401 (нет токена доступа)
     // или 403 (запрос сочтён межсайтовым) тело — обычный JSON без строк «data:»,
     // цикл молча заканчивался, и человек видел «Система запущена…» и тишину.
@@ -1786,6 +1809,7 @@ async function liveRun() {
     let buf = "";
     for (;;) {
       const { value, done } = await reader.read();
+      if (S.preset !== preset || S.abort !== controller) return;
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       const chunks = buf.split("\n\n");
@@ -1908,10 +1932,13 @@ async function liveRun() {
       }
     }
   } catch (err) {
-    if (err.name !== "AbortError") liveMessage("ошибка", "gui", String(err.message || err));
+    if (S.preset === preset && S.abort === controller && err.name !== "AbortError")
+      liveMessage("ошибка", "gui", String(err.message || err));
   } finally {
-    stopLive();
-    $("graph").querySelectorAll(".node.active").forEach((n) => { n.classList.remove("active"); n.classList.add("done"); });
+    if (S.preset === preset && S.abort === controller) {
+      stopLive();
+      $("graph").querySelectorAll(".node.active").forEach((n) => { n.classList.remove("active"); n.classList.add("done"); });
+    }
   }
 }
 
@@ -2253,7 +2280,15 @@ function scenarioList() {
 
 /** Стартовый вид без сценариев: показываем, с чего начать, вместо пустого графа. */
 function showEmptyState() {
+  pause();
+  stopLive();
+  S.evaluationEpoch++;
+  S.evaluationBusy = false;
+  $("judge-progress").classList.add("hidden");
   S.preset = null; S.events = []; S.answer = null; S.baseline = null; S.judge = null; S.review = null;
+  S.agents = new Map();
+  S.query = "";
+  $("query").value = "";
   S.syntheticExamples = [];
   $("synthetic-note").textContent = "";
   $("synthetic-note").classList.remove("error");
@@ -2261,6 +2296,10 @@ function showEmptyState() {
   $("scenario-sub").textContent = "Нажмите «Добавить сценарий», опишите задачу — система соберётся под неё.";
   $("kind-badge").textContent = "";
   $("graph").innerHTML = "";
+  $("agent-cards").innerHTML = "";
+  $("tool-cards").innerHTML = "";
+  $("json").innerHTML = "";
+  $("json-label").textContent = "config.json";
   $("feed").innerHTML = '<div class="empty">Журнал появится после запуска системы</div>';
   $("answer").innerHTML = '<div class="empty">Ответ системы появится после запуска</div>';
   ["m-agents", "m-steps", "m-tools", "m-tokens"].forEach((id) => { $(id).textContent = "0"; });
