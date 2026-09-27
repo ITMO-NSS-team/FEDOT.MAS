@@ -563,7 +563,7 @@ function pushMessage(e) {
        <span class="msg-name">${esc(e.agent)}</span>
        <span class="msg-phase">${esc(e.phase)}${e.group ? " · параллельно" : ""}</span>
      </div>
-     <div class="msg-text">${esc(e.text)}</div>` +
+     <div class="msg-text md">${mdToHtml(e.text)}</div>` +
     (e.io ? `<details class="msg-io">
        <summary>вход и выход</summary>
        <div class="io-label">инструкция агента</div>
@@ -688,11 +688,11 @@ function renderInspector() {
     (key, value) => key === "model" ? undefined : value)));
 }
 
-/** Лёгкий рендер Markdown: агенты отвечают заголовками, списками и таблицами. */
+/** Безопасный рендер Markdown для ответов и ленты: исходный текст сначала экранируется. */
 function mdToHtml(src) {
   const lines = esc(String(src || "")).split("\n");
   const out = [];
-  let list = null, table = null;
+  let list = null, table = null, code = null;
 
   const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
   const closeTable = () => {
@@ -704,13 +704,22 @@ function mdToHtml(src) {
       table = null;
     }
   };
-  const inline = (s) => s
-    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-    .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<i>$2</i>")
-    .replace(/`([^`]+)`/g, "<code>$1</code>");
+  const closeCode = () => {
+    if (code) { out.push(`<pre><code>${code.join("\n")}</code></pre>`); code = null; }
+  };
+  const inline = (s) => s.split(/(`[^`]+`)/g).map((part) => /^`[^`]+`$/.test(part)
+    ? `<code>${part.slice(1, -1)}</code>`
+    : part.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+          .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<i>$2</i>")).join("");
 
   for (const raw of lines) {
     const line = raw.trimEnd();
+    if (/^\s*```/.test(line)) {
+      if (code) closeCode();
+      else { closeList(); closeTable(); code = []; }
+      continue;
+    }
+    if (code) { code.push(raw); continue; }
     const cells = line.trim().startsWith("|") && line.trim().endsWith("|")
       ? line.trim().slice(1, -1).split("|").map((c) => c.trim()) : null;
 
@@ -737,7 +746,7 @@ function mdToHtml(src) {
     closeList();
     out.push(`<p>${inline(line)}</p>`);
   }
-  closeList(); closeTable();
+  closeList(); closeTable(); closeCode();
   return out.join("");
 }
 
