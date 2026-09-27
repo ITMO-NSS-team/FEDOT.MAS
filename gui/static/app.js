@@ -171,10 +171,39 @@ function pipelineDepth(node) {
 
 /* ─────────────────────────── Раскладка графа ─────────────────────────── */
 const NW = 224, NH = 68, HGAP = 54, VGAP = 24, JUNC = 38, PAD = 24, LOOPTOP = 26;
+const NAME_CHARS = 20, NAME_SIZE = 12, NAME_LINE_H = 15;
+
+function wrapNodeName(value) {
+  const pending = Array.from(String(value || "?").trim().replace(/\s+/g, " "));
+  const lines = [];
+  while (pending.length) {
+    if (pending.length <= NAME_CHARS) {
+      lines.push(pending.join(""));
+      break;
+    }
+    const part = pending.slice(0, NAME_CHARS);
+    let split = NAME_CHARS;
+    for (let i = part.length - 1; i >= NAME_CHARS / 4; i--) {
+      if (part[i] === " " || part[i] === "_" || part[i] === "-") {
+        split = i + 1;
+        break;
+      }
+    }
+    const line = pending.splice(0, split).join("").trim();
+    if (line) lines.push(line);
+    while (pending[0] === " ") pending.shift();
+  }
+  return lines.length ? lines : ["?"];
+}
+
+function nodeHeight(name) {
+  return NH + Math.max(0, wrapNodeName(name).length - 2) * NAME_LINE_H;
+}
 
 function measure(n) {
   if (n.type === "agent" || !(n.children || []).length)
-    return { w: NW, h: NH, node: { ...n, type: "agent", agent_name: n.agent_name || "?" } };
+    return { w: NW, h: nodeHeight(n.agent_name),
+             node: { ...n, type: "agent", agent_name: n.agent_name || "?" } };
   const kids = n.children.map(measure);
   if (n.type === "parallel") {
     return { w: Math.max(...kids.map((k) => k.w)) + 2 * JUNC,
@@ -204,8 +233,8 @@ function layoutMAW(pipeline, stageW) {
   function place(m, x, y) {
     const n = m.node;
     if (n.type === "agent") {
-      nodes.push({ name: n.agent_name, x, y, w: NW, h: NH });
-      return { entry: { x, y: y + NH / 2 }, exit: { x: x + NW, y: y + NH / 2 }, name: n.agent_name };
+      nodes.push({ name: n.agent_name, x, y, w: NW, h: m.h });
+      return { entry: { x, y: y + m.h / 2 }, exit: { x: x + NW, y: y + m.h / 2 }, name: n.agent_name };
     }
     if (n.type === "parallel") {
       const sp = { x: x + JUNC / 2, y: y + m.h / 2 }, mp = { x: x + m.w - JUNC / 2, y: y + m.h / 2 };
@@ -266,7 +295,8 @@ function layoutMAS(cfg) {
   const nodes = [], edges = [], groups = [], junctions = [];
   const ws = cfg.workers || [];
   if (!ws.length) {
-    nodes.push({ name: cfg.coordinator.name, x: 0, y: 0, w: NW, h: NH, coord: true });
+    nodes.push({ name: cfg.coordinator.name, x: 0, y: 0, w: NW,
+                 h: nodeHeight(cfg.coordinator.name), coord: true });
     return { nodes, edges, groups, junctions };
   }
   const per = ws.length > 3 ? Math.ceil(ws.length / 2) : ws.length;
@@ -276,15 +306,19 @@ function layoutMAS(cfg) {
   const maxW = Math.max(...rows.map((r) => rowW(r.length)));
   const cx = maxW / 2 - NW / 2;
 
-  nodes.push({ name: cfg.coordinator.name, x: cx, y: 0, w: NW, h: NH, coord: true });
-  rows.forEach((row, ri) => {
+  const coordH = nodeHeight(cfg.coordinator.name);
+  nodes.push({ name: cfg.coordinator.name, x: cx, y: 0, w: NW, h: coordH, coord: true });
+  let rowY = coordH + 92;
+  rows.forEach((row) => {
     const x0 = (maxW - rowW(row.length)) / 2;
-    const y = NH + 92 + ri * (NH + 58);
+    const rowH = Math.max(...row.map((w) => nodeHeight(w.name)));
     row.forEach((w, i) => {
       const x = x0 + i * (NW + 30);
-      nodes.push({ name: w.name, x, y, w: NW, h: NH });
-      edges.push({ from: { x: cx + NW / 2, y: NH }, to: { x: x + NW / 2, y }, vertical: true, toName: w.name });
+      const h = nodeHeight(w.name), y = rowY + (rowH - h) / 2;
+      nodes.push({ name: w.name, x, y, w: NW, h });
+      edges.push({ from: { x: cx + NW / 2, y: coordH }, to: { x: x + NW / 2, y }, vertical: true, toName: w.name });
     });
+    rowY += rowH + 58;
   });
   return { nodes, edges, groups, junctions };
 }
@@ -316,20 +350,21 @@ function bezier(e) {
 
 function drawNode(nd, i) {
   const a = S.agents.get(nd.name) || { name: nd.name, role: roleOf(nd.name, !!nd.coord), tools: [] };
+  const h = nd.h || NH;
   const pos = el("g", { transform: `translate(${nd.x},${nd.y})` });
   const g = el("g", { class: `node ${ROLE_CLASS[a.role.kind]} ${a.isCoord || nd.coord ? "coord" : ""}`,
                       "data-agent": nd.name, style: `animation-delay:${i * 55}ms` });
 
-  g.appendChild(el("rect", { class: "ring", x: -4, y: -4, width: NW + 8, height: NH + 8, rx: 15 }));
-  g.appendChild(el("rect", { class: "node-box", width: NW, height: NH, rx: 12 }));
-  g.appendChild(el("rect", { class: "node-av-bg", x: 13, y: NH / 2 - 16, width: 32, height: 32, rx: 9 }));
+  g.appendChild(el("rect", { class: "ring", x: -4, y: -4, width: NW + 8, height: h + 8, rx: 15 }));
+  g.appendChild(el("rect", { class: "node-box", width: NW, height: h, rx: 12 }));
+  g.appendChild(el("rect", { class: "node-av-bg", x: 13, y: h / 2 - 16, width: 32, height: 32, rx: 9 }));
 
-  const glyph = el("g", { class: "node-av", transform: `translate(17,${NH / 2 - 12})` });
+  const glyph = el("g", { class: "node-av", transform: `translate(17,${h / 2 - 12})` });
   ICONS[a.role.icon].forEach((d) => glyph.appendChild(el("path", { d })));
   g.appendChild(glyph);
 
-  // Имена от мета-агента бывают длинными (особенно русские): кегль подбирается
-  // под ширину карточки, а ниже пола 8px имя обрезается — полное видно в подсказке.
+  // Длинное имя переносим по словам/подчёркиваниям; длинное слово делим на части.
+  // Высота узла уже учтена в раскладке графа, поэтому не приходится обрезать имя.
   const TEXT_W = NW - 53 - 12;
   const fit = (s, max, min) => {
     const size = Math.min(max, TEXT_W / (Math.max(s.length, 1) * 0.6));
@@ -338,13 +373,16 @@ function drawNode(nd, i) {
       : { size: min, text: trunc(s, Math.floor(TEXT_W / (min * 0.6))) };
   };
 
-  const name = fit(String(nd.name || ""), 14, 10);
-  const nameEl = el("text", { class: "node-name", x: 53, y: NH / 2 - 4, style: `font-size:${name.size.toFixed(1)}px` }, name.text);
+  const lines = wrapNodeName(nd.name);
+  const labelY = lines.length === 1 ? 27 : 20;
+  const nameEl = el("text", { class: "node-name", x: 53, y: labelY, style: `font-size:${NAME_SIZE}px` });
+  lines.forEach((line, n) => nameEl.appendChild(el("tspan", { x: 53, dy: n ? NAME_LINE_H : 0 }, line)));
   nameEl.appendChild(el("title", {}, String(nd.name)));
   g.appendChild(nameEl);
 
   const sub = fit(a.output_key ? "→ " + a.output_key : trunc(a.description || "", 30), 12, 9);
-  const subEl = el("text", { class: "node-sub", x: 53, y: NH / 2 + 16, style: `font-size:${sub.size.toFixed(1)}px` }, sub.text);
+  const subY = labelY + (lines.length - 1) * NAME_LINE_H + 18;
+  const subEl = el("text", { class: "node-sub", x: 53, y: subY, style: `font-size:${sub.size.toFixed(1)}px` }, sub.text);
   subEl.appendChild(el("title", {}, a.output_key ? "→ " + a.output_key : String(a.description || "")));
   g.appendChild(subEl);
 
