@@ -9,6 +9,7 @@ from fedotmas import MASConfig, MAWConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 app = importlib.import_module("server.app")
+from server.config import AGENT_MAX_OUTPUT_TOKENS
 from server.schemas import GenerateIn, RunIn
 
 
@@ -77,6 +78,36 @@ async def test_saved_scenario_with_unselected_sandbox_can_build(monkeypatch, kin
     events = [chunk async for chunk in response.body_iterator]
     assert built
     assert not any('"type": "error"' in str(chunk) for chunk in events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["mas", "maw"])
+@pytest.mark.parametrize("budget", [None, 600, 131072])
+async def test_saved_run_never_requests_the_entire_context(monkeypatch, kind, budget):
+    original = config_for(kind, [])
+    for agent in agents(original):
+        agent.max_output_tokens = budget
+    payload = original.model_dump()
+    expected = 600 if budget == 600 else AGENT_MAX_OUTPUT_TOKENS
+    built = []
+
+    class FakeSystem:
+        last_result = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def build_and_run(self, config, query):
+            built.append(config)
+            assert all(agent.max_output_tokens == expected for agent in agents(config))
+            return {"answer": "ok"}
+
+    monkeypatch.setattr(app, "MAS" if kind == "mas" else "MAW", FakeSystem)
+    response = await app.run(RunIn(kind=kind, tools=[], query="test", config=payload))
+    events = [chunk async for chunk in response.body_iterator]
+    assert built
+    assert not any('"type": "error"' in str(chunk) for chunk in events)
+    assert payload == original.model_dump()  # Saved scenarios keep their editable values.
 
 
 def test_custom_tools_are_preserved_only_when_connected():

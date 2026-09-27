@@ -54,6 +54,7 @@ from .config import (
 from .judge import _judge_impl, _review_impl
 from .llm import complete
 from .normalize import (
+    cap_run_tokens,
     _ensure_calculator,
     _ensure_data_tools,
     _ensure_dependent_after_parallel,
@@ -184,10 +185,7 @@ async def _generate_impl(body: GenerateIn, queue: asyncio.Queue) -> dict:
     config = sanitize_config(config, body.kind, custom_names, available_tools=servers)
     # Кап на выход нужен всем агентам обеих схем: у MASConfig нет .agents,
     # его агенты — координатор и workers.
-    capped = (getattr(config, "agents", None)
-              or [config.coordinator] + list(config.workers))
-    for agent in capped:
-        agent.max_output_tokens = AGENT_MAX_OUTPUT_TOKENS
+    cap_run_tokens(config, AGENT_MAX_OUTPUT_TOKENS)
 
     return {
         "ok": True,
@@ -229,6 +227,7 @@ async def run(body: RunIn) -> StreamingResponse:
     config = MASConfig(**body.config) if is_mas else MAWConfig(**body.config)
     config = sanitize_config(config, body.kind, custom_names,
                              available_tools=servers)   # может прийти из файла
+    cap_run_tokens(config, AGENT_MAX_OUTPUT_TOKENS)
     # Исполнители MAS становятся инструментами координатора, а OpenAI не принимает
     # кириллицу в имени инструмента. Сценарий и экран сохраняют русские имена: под
     # латинскими идёт только запуск, поток переводит их обратно.

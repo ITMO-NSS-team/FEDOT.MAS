@@ -15,6 +15,7 @@ from fedotmas import MASConfig, MAWConfig
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 app = importlib.import_module("server.app")
 from server.schemas import CodeExportIn, CustomMCP
+from server.config import AGENT_MAX_OUTPUT_TOKENS
 
 
 def configuration(kind):
@@ -47,8 +48,10 @@ async def test_archive_contains_valid_runnable_code_and_config(kind):
         if kind == "mas":
             assert config["workers"][0]["name"] == "raschetchik"
             assert "raschetchik" in config["coordinator"]["instruction"]
+            assert config["coordinator"]["max_output_tokens"] == AGENT_MAX_OUTPUT_TOKENS
         else:
             assert config["pipeline"]["agent_name"] == "сборщик"
+            assert config["agents"][0]["max_output_tokens"] == AGENT_MAX_OUTPUT_TOKENS
     assert body.config == source
 
 
