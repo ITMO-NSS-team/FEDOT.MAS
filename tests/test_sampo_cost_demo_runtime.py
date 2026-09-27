@@ -25,10 +25,12 @@ def test_neutral_prompts_are_identical_without_inline_labels_and_gt_blind():
     assert NEUTRAL_SYSTEM == "You are a single agent completing a batch of SAMPO construction work name mappings. Follow the task and use only public batch data, allowed labels, and available tools. Return valid top-three predictions for every assigned ID."
     assert NEUTRAL_TASK == "Map each assigned historical construction work name to three distinct allowed labels using only the supplied public data and tools. Produce valid top-3 predictions for all assigned IDs."
     rows=[{"example_id":"x","raw_work_name":"Публичная работа"}]
-    prompt_b=neutral_user(rows); prompt_d=neutral_user(rows)
+    prompt_b=neutral_user(rows,"same-run"); prompt_d=neutral_user(rows,"same-run")
     assert prompt_b.encode()==prompt_d.encode()
     assert "private_ground_truth" not in prompt_b and "ground_truth" not in prompt_b
     assert "Метка" not in prompt_b and "Allowed target labels:" not in prompt_b
+    assert "Persistence run ID: same-run" in prompt_b
+    assert "at most 10 example IDs" in prompt_b
 
 def test_phase5_historical_sources_unchanged():
     paths=["scripts/sampo_phase_5_policy.py","scripts/run_sampo_phase_5_full.py","artifacts/sampo_phase_5/qualification_terminal_result.json"]
@@ -157,8 +159,8 @@ async def test_phase5_adapter_contract_is_gt_blind_bounded_and_durable(tmp_path)
             assert status.structuredContent["missing_ids"]==[]
 
 def test_preflight_rejects_null_model_ids(monkeypatch):
-    monkeypatch.delenv("SAMPO_CHEAP_MODEL",raising=False);monkeypatch.delenv("SAMPO_CODEX_MODEL",raising=False)
-    with pytest.raises(RuntimeError,match="SAMPO_CHEAP_MODEL"):
+    monkeypatch.delenv("SAMPO_FEDOT_MODEL",raising=False);monkeypatch.delenv("SAMPO_TERRA_MODEL",raising=False)
+    with pytest.raises(RuntimeError,match="SAMPO_FEDOT_MODEL"):
         required_runtime()
 
 def test_pricing_preflight_rejects_empty_config(monkeypatch,tmp_path):
@@ -175,7 +177,7 @@ def test_pricing_preflight_accepts_valid_explicit_prices(monkeypatch,tmp_path):
 def test_live_telemetry_counts_provider_retries_separately_and_model_usage(monkeypatch,tmp_path):
     from types import SimpleNamespace
     from sampo_cost_runtime import RuntimeTrace
-    trace=RuntimeTrace(["x"],"run",tmp_path/"cheap_single_agent"/"batch_0000","m")
+    trace=RuntimeTrace(["x"],"run",tmp_path/"terra_single_agent"/"batch_0000","m")
     trace.record_provider_request({"request_id":"one","model":"m","request_kind":"initial","success":True,"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"finish_reason":"stop","elapsed_seconds":0.1,"usage_known":True})
     trace.record_provider_request({"request_id":"two","model":"m","request_kind":"malformed_tool_retry","success":True,"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"finish_reason":"stop","elapsed_seconds":0.1,"usage_known":True})
     async def capture(agent, prompt, completion):
@@ -188,10 +190,34 @@ def test_live_telemetry_counts_provider_retries_separately_and_model_usage(monke
     assert sum(x["input_tokens"] for x in data["model_calls"])>0
     assert {x["agent_name"] for x in data["model_calls"]}=={"coordinator","worker"}
 
+def test_jsonable_keeps_nested_mapping_arguments_structured():
+    from sampo_cost_runtime import _jsonable
+    from collections import UserDict
+    assert _jsonable(UserDict({"artifact_id":"a","example_ids":["1","2"]}))=={"artifact_id":"a","example_ids":["1","2"]}
+
+@pytest.mark.asyncio
+async def test_phase5_blocks_second_worker_delegation_and_records_truncation(tmp_path):
+    from types import SimpleNamespace
+    from sampo_cost_runtime import RuntimeTrace
+    trace=RuntimeTrace(["1","2"],"run",tmp_path/"fedotmas_cost_aware"/"batch_0000","m")
+    tool=SimpleNamespace(name="construction_batch_specialist")
+    args={"artifact_id":"a","example_ids":["1","2"]}
+    await trace.before_tool_callback(tool=tool,tool_args=args,tool_context=None)
+    assert trace.worker_calls[0]["arguments"]==args
+    with pytest.raises(RuntimeError,match="duplicate_worker_delegation"):
+        await trace.before_tool_callback(tool=tool,tool_args=args,tool_context=None)
+    trace.record_provider_request({"request_id":"r","model":"m","request_kind":"initial","success":True,"input_tokens":3,"cached_input_tokens":0,"output_tokens":8192,"finish_reason":"length","elapsed_seconds":1,"usage_known":True})
+    data=trace.dump()
+    assert data["worker_delegations"]==2
+    assert "duplicate_worker_delegation" in data["failures"]
+    assert data["output_truncation_count"]==1 and data["output_truncation_hit"] is True
+
 def test_all_system_prediction_schema_is_common():
     source=(ROOT/"scripts/run_sampo_cost_demo.py").read_text()
-    for system in ("tfidf","cheap_single_agent","fedotmas_cost_aware","codex"):
+    for system in ("tfidf","fedotmas_cost_aware","terra_single_agent"):
         assert system in source
+    assert "cheap_single_agent" not in source
+    assert "codex" not in source.lower()
     assert 'fieldnames=["example_id","top_1","top_2","top_3"]' in source
 
 def test_runtime_server_environment_never_includes_gt_path():

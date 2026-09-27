@@ -47,7 +47,7 @@ def test_failures_stay_in_end_to_end_denominator():
 
 def test_system_names_are_common_and_runner_exposes_only_smoke():
     runner = (ROOT / "scripts/run_sampo_cost_demo.py").read_text()
-    for name in ("tfidf", "cheap_single_agent", "fedotmas_cost_aware", "codex"):
+    for name in ("tfidf", "fedotmas_cost_aware", "terra_single_agent"):
         assert name in runner
     assert 'sub.add_parser("smoke")' in runner
     assert 'sub.add_parser("final")' not in runner
@@ -55,5 +55,6 @@ def test_system_names_are_common_and_runner_exposes_only_smoke():
 
 def test_preregistration_contains_fixed_primary_success_threshold():
     prereg = json.loads((demo.OUT / "preregistration.json").read_text())
-    assert prereg["success_criterion"]["fedotmas_top1_minimum_codex_top1_minus_pp"] == 3.0
-    assert prereg["success_criterion"]["fedotmas_inference_cost_at_most_fraction_of_codex"] == .5
+    assert prereg["success_criterion"]["fedotmas_top1_minimum_terra_top1_minus_pp"] == 3.0
+    assert prereg["success_criterion"]["fedotmas_inference_cost_at_most_fraction_of_terra"] == .5
+    assert prereg["dropped_comparisons"]["cheap_single_agent"]["reason"] == "experiment simplified before final GT evaluation; primary question is end-to-end FEDOT.MAS vs Terra cost/quality"

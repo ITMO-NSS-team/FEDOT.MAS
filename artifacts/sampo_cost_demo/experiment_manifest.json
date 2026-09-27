@@ -1007,18 +1007,16 @@
   "batch_size": 20,
   "fresh_session_per_batch": true,
   "models": {
-    "cheap_single_agent": null,
     "fedotmas_cost_aware": null,
-    "codex": null
+    "terra_single_agent": null
   },
   "providers_and_endpoints": {
     "provider": null,
     "endpoint": null
   },
   "prompts": {
-    "cheap_single_agent": "Map each assigned historical construction work name to three distinct allowed labels using only the supplied public data and tools. Produce valid top-3 predictions for all assigned IDs.",
     "fedotmas_cost_aware": "FEDOT.MAS-executed stable Phase-5-style workflow. Use retrieval, selectively request semantic review where the frozen Phase 5 policy requires it, persist safely, and terminate on completion. Map each assigned historical construction work name to three distinct allowed labels using only the supplied public data and tools. Produce valid top-3 predictions for all assigned IDs.",
-    "codex": "Map each assigned historical construction work name to three distinct allowed labels using only the supplied public data and tools. Produce valid top-3 predictions for all assigned IDs."
+    "terra_single_agent": "Map each assigned historical construction work name to three distinct allowed labels using only the supplied public data and tools. Produce valid top-3 predictions for all assigned IDs."
   },
   "tool_surface": [
     {
@@ -1037,5 +1035,5 @@
   },
   "pricing_file": "artifacts/sampo_cost_demo/pricing.json",
   "private_ground_truth_exposed": false,
-  "codex_audit": "Record exact system/user prompts and function schemas in each run's transcript.jsonl."
+  "agent_transcript_audit": "Record exact system/user prompts and function schemas in each run transcript.jsonl."
 }

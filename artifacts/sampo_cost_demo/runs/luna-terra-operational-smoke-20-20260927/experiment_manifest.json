@@ -1,0 +1,488 @@
+{
+  "git_commit": "e5a3b6f9849996a9542ec4b6e51ce73dd3e3a041",
+  "created_at_utc": "2026-09-27T19:40:51.314479+00:00",
+  "frozen_test_sha256": "a789e6c20cdae0d4f6dc31a3a39cb213063abfd1790705dce11c24046187129d",
+  "operational_set_sha256": "c1867399dd3b3869cb0335d42055bf2fb6c6a913c15fd1cef25760ca9f88d957",
+  "models": {
+    "tfidf": null,
+    "fedotmas_cost_aware": "openai/gpt-5.6-luna",
+    "terra_single_agent": "openai/gpt-5.6-terra"
+  },
+  "provider": "openai-compatible",
+  "endpoint": "https://openrouter.ai/api/v1",
+  "batch_size": 20,
+  "budgets": {
+    "batch_size": 20,
+    "max_model_calls": 30,
+    "max_mcp_calls": 60,
+    "max_prompt_tokens_per_call": 64000,
+    "max_batch_seconds": 300,
+    "max_output_tokens_per_call": 8192
+  },
+  "primary_question": "Can a FEDOT.MAS cost-aware workflow using GPT-5.6 Luna achieve accuracy reasonably close to a strong GPT-5.6 Terra single agent while using substantially less inference cost?",
+  "prompts": {
+    "terra_single_agent": {
+      "system": "You are a single agent completing a batch of SAMPO construction work name mappings. Follow the task and use only public batch data, allowed labels, and available tools. Return valid top-three predictions for every assigned ID.",
+      "user": "Map each assigned historical construction work name to three distinct allowed labels using only the supplied public data and tools. Produce valid top-3 predictions for all assigned IDs.\nAssigned public examples (IDs and work names):\n[{\"example_id\": \"696\", \"raw_work_name\": \"АКЗ площадки КТП (Политон-УР(УФ))\"}, {\"example_id\": \"6282\", \"raw_work_name\": \"Монтаж кабеля силового (С143)\"}, {\"example_id\": \"1714\", \"raw_work_name\": \"АС/Поз.303/Погружение свай с АКЗ (СМ1) (325х8  L=9400 мм) (Площадка газосепараторов)\"}, {\"example_id\": \"14772\", \"raw_work_name\": \"поз. 4.1.6.1/ПНР. Система автоматизации и сигнализации\"}, {\"example_id\": \"2896\", \"raw_work_name\": \"АС/поз.5/Погружение свай с АКЗ (Площадка технологических аппаратов) \"}, {\"example_id\": \"2436\", \"raw_work_name\": \"АС/поз.207.2.4-207.2.5/АКЗ металлоконструкций (Устройство сбора конденсата)\"}, {\"example_id\": \"3378\", \"raw_work_name\": \"Бурение лидерных скважин с очисткой полости (поз.5.8)\"}, {\"example_id\": \"11317\", \"raw_work_name\": \"Сварка оголовков на сваю 325х8\"}, {\"example_id\": \"13530\", \"raw_work_name\": \"Устройство монолитных участков из бетона В30 по дну и откосам карт, h=0,14 м\"}, {\"example_id\": \"8297\", \"raw_work_name\": \"Монтаж силовых кабелей (ЭСО)\"}, {\"example_id\": \"6135\", \"raw_work_name\": \"Монтаж кабельной продукции\"}, {\"example_id\": \"7638\", \"raw_work_name\": \"Монтаж переходного мостика\"}, {\"example_id\": \"6090\", \"raw_work_name\": \"Монтаж кабелей АСУТП, КИПиА (поз.5-АТХ)\"}, {\"example_id\": \"12976\", \"raw_work_name\": \"Установка в скважины металлических свай (поз.36)\"}, {\"example_id\": \"2202\", \"raw_work_name\": \"АС/поз.2.15.1/Обратная засыпка котлована с уплотнением\"}, {\"example_id\": \"6019\", \"raw_work_name\": \"Монтаж и расключение кабеля Метролан-В-Элвнг (поз.28)\"}, {\"example_id\": \"7433\", \"raw_work_name\": \"Монтаж опор (Поз.С037-ТК1.4 ГТ00.1.1)\"}, {\"example_id\": \"4335\", \"raw_work_name\": \"Изготовление и монтаж стоек СТ1 (поз.103)\"}, {\"example_id\": \"2786\", \"raw_work_name\": \"АС/поз.4.17.3/Монтаж короба\"}, {\"example_id\": \"7238\", \"raw_work_name\": \"Монтаж оголовников свай (Поз.4)\"}]\nTool-persisted predictions are the completion criterion. A textual answer without durable saved predictions is incomplete. Keep reasoning concise, make the required persistence tool calls, and return only after every assigned ID has been persisted or a real execution failure prevents completion."
+    },
+    "fedotmas_cost_aware": {
+      "coordinator_instruction": "Delegate the user's complete request once to construction_batch_specialist in a self-contained message containing the exact run_id, supplied batch offset and assigned IDs, all mandatory retrieval/review/persistence constraints, and any harness context. Do not perform benchmark retrieval or persistence yourself. The worker owns the bounded assigned unit. If it reports successful durable completion, immediately return its compact completion report without calling any tools or workers again. If it reports a pre-persistence failure or an unresolved unit, report that status faithfully and do not invent predictions or attempt an alternate workflow.",
+      "worker_instructions": [
+        "You are the sole specialist for one assigned bounded construction-label batch. Use only sampo-benchmark and strictly execute the requested workflow. First inspect tool documentation as needed only to use advertised concrete parameters. For the supplied run_id and exact assigned IDs, prepare the candidate batch with exactly char_tfidf, construction_token_tfidf, word_tfidf, bm25_token, and char_word_fusion, each k=5, using fusion exactly rrf. Do not use exact-title, margin, staging, alternate retrievers, or altered settings. Immediately after prepare_candidate_batch, call partition_candidate_batch exactly once with the unmodified artifact_id and the complete assigned-ID list. Treat its disjoint review_ids and fallback_ids as authoritative; never reconstruct, modify, or repartition them.\n\nProcess only these assigned IDs. For every review ID, request get_candidate_evidence exactly once, selection='fused', candidate_limit=10, in requests containing no more than two review IDs. If any evidence request fails, stop this assigned unit and return a compact failure report; do not repeat that evidence request or make durable writes for an incomplete intended review. Review every disagreement ID semantically before persistence. Compare all shortlisted candidates on primary operation, physical object, and scope/detail, favoring a specific operation-object match over generic lexical overlap; fused rank is only a tie-breaker. For each reviewed item select exactly three distinct supplied artifact-local candidate_index values in final rank order.\n\nBefore durable persistence, confirm internally that the authoritative partition is disjoint and covers all assigned IDs, every review ID has exactly one successful evidence result and a concrete three-distinct-index decision, and every fallback ID has concrete valid ranked predictions from the server-side fused top-three fallback. Then use exactly one durable path per ID: save_review_decisions only for all review_ids with their exact artifact-local indices, and save_candidate_predictions only for all fallback_ids. Never include a reviewed ID in fallback saving, never overlap IDs across durable calls, never retry a rejected or completed durable write, and never write an ID twice. Complete all intended review before either durable write. Do not call stage_candidate_predictions, do not save fallback predictions for the full batch, and do not process any other IDs or finalize the run.\n\nAfter both durable write paths succeed, make absolutely no further MCP calls: no status verification, retrieval, preparation, or finalization. Return immediately with a compact completion report containing the artifact_id, counts/IDs of reviewed and fallback items, and confirmation that both complementary durable paths succeeded. If there are no IDs in one partition, use only the required durable path for the nonempty partition, provided the tool contract permits it, and state that compactly. Never expose bulky full evidence in your response."
+      ],
+      "user": "Execute exactly one assigned public batch using the saved Phase 5 configuration. Batch offset 0. Run ID: luna-terra-operational-smoke-20-20260927. Assigned IDs and names: [{\"example_id\": \"696\", \"raw_work_name\": \"АКЗ площадки КТП (Политон-УР(УФ))\"}, {\"example_id\": \"6282\", \"raw_work_name\": \"Монтаж кабеля силового (С143)\"}, {\"example_id\": \"1714\", \"raw_work_name\": \"АС/Поз.303/Погружение свай с АКЗ (СМ1) (325х8  L=9400 мм) (Площадка газосепараторов)\"}, {\"example_id\": \"14772\", \"raw_work_name\": \"поз. 4.1.6.1/ПНР. Система автоматизации и сигнализации\"}, {\"example_id\": \"2896\", \"raw_work_name\": \"АС/поз.5/Погружение свай с АКЗ (Площадка технологических аппаратов) \"}, {\"example_id\": \"2436\", \"raw_work_name\": \"АС/поз.207.2.4-207.2.5/АКЗ металлоконструкций (Устройство сбора конденсата)\"}, {\"example_id\": \"3378\", \"raw_work_name\": \"Бурение лидерных скважин с очисткой полости (поз.5.8)\"}, {\"example_id\": \"11317\", \"raw_work_name\": \"Сварка оголовков на сваю 325х8\"}, {\"example_id\": \"13530\", \"raw_work_name\": \"Устройство монолитных участков из бетона В30 по дну и откосам карт, h=0,14 м\"}, {\"example_id\": \"8297\", \"raw_work_name\": \"Монтаж силовых кабелей (ЭСО)\"}, {\"example_id\": \"6135\", \"raw_work_name\": \"Монтаж кабельной продукции\"}, {\"example_id\": \"7638\", \"raw_work_name\": \"Монтаж переходного мостика\"}, {\"example_id\": \"6090\", \"raw_work_name\": \"Монтаж кабелей АСУТП, КИПиА (поз.5-АТХ)\"}, {\"example_id\": \"12976\", \"raw_work_name\": \"Установка в скважины металлических свай (поз.36)\"}, {\"example_id\": \"2202\", \"raw_work_name\": \"АС/поз.2.15.1/Обратная засыпка котлована с уплотнением\"}, {\"example_id\": \"6019\", \"raw_work_name\": \"Монтаж и расключение кабеля Метролан-В-Элвнг (поз.28)\"}, {\"example_id\": \"7433\", \"raw_work_name\": \"Монтаж опор (Поз.С037-ТК1.4 ГТ00.1.1)\"}, {\"example_id\": \"4335\", \"raw_work_name\": \"Изготовление и монтаж стоек СТ1 (поз.103)\"}, {\"example_id\": \"2786\", \"raw_work_name\": \"АС/поз.4.17.3/Монтаж короба\"}, {\"example_id\": \"7238\", \"raw_work_name\": \"Монтаж оголовников свай (Поз.4)\"}]. Use only these IDs. Allowed labels are available from tools. Return immediately when the assigned batch is durably complete.",
+      "saved_phase5_task": "Map a bounded batch of public historical construction work names to the allowed labels. Use public artifact-backed candidate retrieval and safe prediction storage. Retrieve broadly with char_tfidf, construction_token_tfidf, word_tfidf, bm25_token, and char_word_fusion at k=5, then use fusion strategy exactly rrf. Keep the server-side fused top-three as the unreviewed fallback. Use a deterministic disagreement gate: review exactly the examples whose distinct method top-1 labels count is greater than one; use save_candidate_predictions for every other assigned example. Do not use exact-title or margin heuristics. For uncertain examples, request get_candidate_evidence with selection=\"fused\" and candidate_limit=10; this exposes a broader bounded shortlist without bulky per-method provenance. Request evidence for no more than two examples at a time to remain below the response budget. Evidence fused_candidates retain artifact-local candidate_index values; use those exact indices in save_review_decisions candidate_indices, in final rank order. Before any durable write, partition the assigned IDs into disjoint reviewed and fallback sets. Every ID must appear in exactly one durable call: reviewed IDs only in save_review_decisions, fallback IDs only in save_candidate_predictions. Never include a reviewed ID in a fallback call, even after a rejected call; never retry a durable call with overlapping IDs. Combine cheap retrieval evidence where useful and use semantic reasoning selectively for uncertain cases. Produce valid ranked predictions for every example in the supplied batch while minimizing unnecessary LLM reasoning. Once a delegated unit is durably complete, do not repeat it. Verify completion from tool-backed state, route only unresolved work, and terminate when the assigned unit is fully covered. Complete any intended review before the durable write; after a durable write, treat that unit as terminal unless an explicit correction is requested. Use only parameter values explicitly advertised by a tool catalogue or its documented compatibility aliases. Keep detailed evidence requests to small unresolved subsets; do not place full per-example evidence for an entire batch into a model message. Before issuing a durable write, ensure every required argument is concrete and schema-valid. For each completed unit, choose exactly one durable write path; never retry or combine durable write paths for an already written ID. The observable workflow must be complementary retrieval, deterministic disagreement gate, selective semantic reranking only for disagreement IDs, then durable predictions. Never save fallback predictions for all IDs after retrieval. Every disagreement ID must receive get_candidate_evidence before save_review_decisions. The manual retrieval setup is authoritative: use exactly the five retrievers char_tfidf, construction_token_tfidf, word_tfidf, bm25_token, and char_word_fusion with k=5 and fusion=rrf; review the fused top-10 shortlist with selection=fused and candidate_limit=10. Immediately after prepare_candidate_batch, call partition_candidate_batch once with the artifact_id and the complete assigned ID list. Use its disjoint review_ids and fallback_ids exactly; do not reconstruct or alter the partition. Call get_candidate_evidence only for review_ids, then save_review_decisions for review_ids and save_candidate_predictions for fallback_ids. Request evidence for each review ID exactly once. Never retry get_candidate_evidence for an ID, never alter or truncate artifact_id, and if an evidence call fails, stop the assigned unit rather than issuing a second evidence call. Do not call stage_candidate_predictions. After both durable write paths succeed, make no further MCP tool calls at all; return the compact completion report immediately. Never re-prepare, re-stage, re-save, or verify with another tool call after durable persistence. For semantic review, treat fused rank 0 as only a hypothesis: compare every shortlisted label on the primary operation, physical object, and scope/detail; prefer a specific operation-object match over a generic lexical overlap, and use candidate order only as a tie-breaker. Return exactly three distinct candidates from the supplied artifact indices.\nUse durable prediction run_id phase5_1_7518256d8ac54d3d997611ad6f7eef61. The harness will supply exactly one batch offset and IDs; do not process any other examples and do not finalize the whole pilot.\n",
+      "config_sha256": "c13b1d1522533006e57f541ae7cd32d19d34356e46335f4739f494d84b78c6f2"
+    },
+    "one_time_config_generation": {
+      "usd": 0,
+      "basis": "Reuse of frozen saved Phase 5 config; no meta-generation during this experiment"
+    }
+  },
+  "mcp_tools": {
+    "neutral": [
+      {
+        "name": "list_methods",
+        "title": "List Methods",
+        "description": "List supported retrieval methods, fusion choices, public labels and batch limits.",
+        "inputSchema": {
+          "properties": {},
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      },
+      {
+        "name": "prepare_candidates",
+        "title": "Prepare Candidates",
+        "description": "Rank assigned public names and retain full candidate evidence server-side.",
+        "inputSchema": {
+          "properties": {
+            "methods": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "k": {
+              "type": "integer"
+            },
+            "fusion": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "methods",
+            "k",
+            "fusion"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      },
+      {
+        "name": "inspect_candidates",
+        "title": "Inspect Candidates",
+        "description": "Return ranked public candidate labels and retrieval evidence for assigned IDs.",
+        "inputSchema": {
+          "properties": {
+            "artifact_id": {
+              "type": "string"
+            },
+            "example_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "candidate_limit": {
+              "default": 10,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "example_ids"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      },
+      {
+        "name": "save_default_top3",
+        "title": "Save Default Top3",
+        "description": "Persist the retrieval default top three for assigned IDs; exact repeats are idempotent.",
+        "inputSchema": {
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "artifact_id": {
+              "type": "string"
+            },
+            "example_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "run_id",
+            "artifact_id",
+            "example_ids"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      },
+      {
+        "name": "save_ranked_top3",
+        "title": "Save Ranked Top3",
+        "description": "Persist caller-ranked candidate indices for assigned IDs; exact repeats are idempotent.",
+        "inputSchema": {
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "artifact_id": {
+              "type": "string"
+            },
+            "rankings": {
+              "items": {
+                "properties": {
+                  "example_id": {
+                    "description": "ID from the currently assigned batch",
+                    "type": "string"
+                  },
+                  "candidate_indices": {
+                    "description": "Three distinct candidate indices in final rank order",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "maxItems": 3,
+                    "minItems": 3,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "example_id",
+                  "candidate_indices"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "run_id",
+            "artifact_id",
+            "rankings"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      },
+      {
+        "name": "get_prediction_status",
+        "title": "Get Prediction Status",
+        "description": "Return assigned IDs, persisted IDs and IDs not yet persisted for this batch.",
+        "inputSchema": {
+          "properties": {},
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      }
+    ],
+    "phase5_adapter_only_for_fedotmas": [
+      {
+        "name": "list_methods",
+        "title": "List Methods",
+        "description": "Return public retrieval methods, fusion choices, labels and batch limits.",
+        "inputSchema": {
+          "properties": {},
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      },
+      {
+        "name": "prepare_candidate_batch",
+        "title": "Prepare Candidate Batch",
+        "description": "Prepare candidate rankings for the currently assigned batch.",
+        "inputSchema": {
+          "properties": {
+            "offset": {
+              "type": "integer"
+            },
+            "limit": {
+              "type": "integer"
+            },
+            "methods": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "k": {
+              "type": "integer"
+            },
+            "fusion": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "offset",
+            "limit",
+            "methods",
+            "k",
+            "fusion"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      },
+      {
+        "name": "partition_candidate_batch",
+        "title": "Partition Candidate Batch",
+        "description": "Partition assigned IDs by distinct retrieval-method top-1 labels.",
+        "inputSchema": {
+          "properties": {
+            "artifact_id": {
+              "type": "string"
+            },
+            "example_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "example_ids"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      },
+      {
+        "name": "get_candidate_evidence",
+        "title": "Get Candidate Evidence",
+        "description": "Return bounded candidate labels and public retrieval evidence for assigned IDs.",
+        "inputSchema": {
+          "properties": {
+            "artifact_id": {
+              "type": "string"
+            },
+            "example_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "candidate_limit": {
+              "default": 10,
+              "type": "integer"
+            },
+            "selection": {
+              "default": "fused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "example_ids"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      },
+      {
+        "name": "save_candidate_predictions",
+        "title": "Save Candidate Predictions",
+        "description": "Persist retrieval-default top-three predictions for assigned IDs.",
+        "inputSchema": {
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "artifact_id": {
+              "type": "string"
+            },
+            "example_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "run_id",
+            "artifact_id",
+            "example_ids"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      },
+      {
+        "name": "save_review_decisions",
+        "title": "Save Review Decisions",
+        "description": "Persist caller-ranked candidate indices for assigned IDs.",
+        "inputSchema": {
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "artifact_id": {
+              "type": "string"
+            },
+            "decisions": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "run_id",
+            "artifact_id",
+            "decisions"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      },
+      {
+        "name": "get_prediction_status",
+        "title": "Get Prediction Status",
+        "description": "Return assigned and persisted prediction IDs.",
+        "inputSchema": {
+          "properties": {},
+          "type": "object",
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        }
+      }
+    ]
+  },
+  "pricing_sha256": "81b8b1e981cb70490b487dd3f5666eaf6bf903cd603171ac14f870efa376fc72",
+  "phase5_config_sha256": "c13b1d1522533006e57f541ae7cd32d19d34356e46335f4739f494d84b78c6f2",
+  "private_gt_exposed": false
+}

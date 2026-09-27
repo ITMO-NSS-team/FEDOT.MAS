@@ -19,15 +19,21 @@
     "end_to_end_top1"
   ],
   "success_criterion": {
-    "fedotmas_top1_minimum_codex_top1_minus_pp": 3.0,
-    "fedotmas_inference_cost_at_most_fraction_of_codex": 0.5
+    "fedotmas_top1_minimum_terra_top1_minus_pp": 3.0,
+    "fedotmas_inference_cost_at_most_fraction_of_terra": 0.5
   },
-  "relative_accuracy_retention": "FEDOTMAS_top1 / CODEX_top1; supplementary only; never substitutes absolute pp difference",
+  "relative_accuracy_retention": "FEDOTMAS_top1 / TERRA_top1; supplementary only; never substitutes absolute pp difference",
   "statistical_comparisons": [
-    "fedotmas_cost_aware vs codex",
-    "fedotmas_cost_aware vs cheap_single_agent",
+    "fedotmas_cost_aware vs terra_single_agent",
     "fedotmas_cost_aware vs tfidf"
   ],
   "evaluation_policy": "one-shot after all prediction files are immutable; failed/missing predictions count incorrect end-to-end",
-  "selection_policy": "fixed seed; exclude every old pilot ID; exclude normalized work-name collisions with old pilot; no GT-based selection"
+  "selection_policy": "fixed seed; exclude every old pilot ID; exclude normalized work-name collisions with old pilot; no GT-based selection",
+  "dropped_comparisons": {
+    "cheap_single_agent": {
+      "status": "dropped before final evaluation",
+      "reason": "experiment simplified before final GT evaluation; primary question is end-to-end FEDOT.MAS vs Terra cost/quality"
+    }
+  },
+  "primary_question": "Can a FEDOT.MAS cost-aware workflow using GPT-5.6 Luna achieve accuracy reasonably close to a strong GPT-5.6 Terra single agent while using substantially less inference cost?"
 }

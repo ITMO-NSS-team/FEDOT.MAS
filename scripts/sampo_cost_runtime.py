@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio, csv, json, os, re, shutil, subprocess, sys, time
 import math
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from dotenv import find_dotenv, load_dotenv
@@ -15,10 +16,12 @@ NEUTRAL_TASK = "Map each assigned historical construction work name to three dis
 NEUTRAL_SYSTEM = "You are a single agent completing a batch of SAMPO construction work name mappings. Follow the task and use only public batch data, allowed labels, and available tools. Return valid top-three predictions for every assigned ID."
 
 def required_runtime() -> tuple[str, str, str, str]:
-    cheap, strong = os.getenv("SAMPO_CHEAP_MODEL"), os.getenv("SAMPO_CODEX_MODEL")
+    cheap, strong = os.getenv("SAMPO_FEDOT_MODEL"), os.getenv("SAMPO_TERRA_MODEL")
     endpoint = os.getenv("SAMPO_BASE_URL") or os.getenv("OPENAI_BASE_URL")
     provider = os.getenv("SAMPO_PROVIDER", "openai-compatible" if endpoint else "")
-    missing = [name for name, value in (("SAMPO_CHEAP_MODEL", cheap), ("SAMPO_CODEX_MODEL", strong), ("SAMPO_PROVIDER/endpoint", provider and endpoint)) if not value]
+    missing = [name for name, value in (("SAMPO_FEDOT_MODEL", cheap), ("SAMPO_TERRA_MODEL", strong), ("SAMPO_PROVIDER/endpoint", provider and endpoint)) if not value]
+    if cheap and cheap != "openai/gpt-5.6-luna": missing.append("SAMPO_FEDOT_MODEL must be openai/gpt-5.6-luna")
+    if strong and strong != "openai/gpt-5.6-terra": missing.append("SAMPO_TERRA_MODEL must be openai/gpt-5.6-terra")
     if not (os.getenv("SAMPO_API_KEY") or os.getenv("OPENAI_API_KEY")): missing.append("SAMPO_API_KEY/OPENAI_API_KEY")
     if missing: raise RuntimeError("Missing live inference configuration: " + ", ".join(missing))
     return cheap, strong, provider, endpoint
@@ -35,7 +38,7 @@ def pricing_preflight(models: set[str]) -> dict[str, Any]:
     pricing = json.loads(path.read_text(encoding="utf-8"))
     entries = pricing.get("models", {})
     missing = models - entries.keys()
-    if missing: raise RuntimeError("Pricing entries missing for: " + ", ".join(sorted(missing)) + "; provider cost is not exposed by the configured ADK adapter, so explicit pricing is required")
+    if missing: raise RuntimeError("Pricing entries missing for: " + ", ".join(sorted(missing)) + "; explicit dated pricing is required before inference")
     for model in models:
         row = entries[model]
         for k in ("input_usd_per_1m", "output_usd_per_1m"):
@@ -69,6 +72,8 @@ async def introspect(registry: dict[str, Any], server_name: str) -> tuple[str, l
 def _jsonable(value: Any) -> Any:
     if hasattr(value, "model_dump"): return value.model_dump(mode="json", exclude_none=True)
     if hasattr(value, "model_dump_json"): return json.loads(value.model_dump_json(exclude_none=True))
+    if isinstance(value, Mapping): return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)): return [_jsonable(v) for v in value]
     return str(value)
 
 class RuntimeTrace:
@@ -85,12 +90,17 @@ class RuntimeTrace:
         self.plugin = Plugin(name="sampo_cost_demo_trace")
         self.ids, self.run_id, self.output, self.model, self.batch = ids, run_id, output, model, batch
         self.tool_names=tool_names or set(); self.calls: list[dict[str, Any]]=[]; self.tools: list[dict[str, Any]]=[]; self.worker_calls: list[dict[str, Any]]=[]; self.provider_requests: list[dict[str, Any]]=[]; self.failures=[]; self.transcript=[]; self.started=time.monotonic(); self.call_started=0.0
+        self.worker_delegations = 0
 
     def record_provider_request(self, request: dict[str, Any]) -> None:
         self.provider_requests.append(request)
         self.transcript.append({"type": "provider_request", **request})
+        if request.get("finish_reason") in {"length", "max_tokens"}:
+            self.failures.append("output_truncation")
 
     async def before_model_callback(self, *, callback_context, llm_request):
+        if "duplicate_worker_delegation" in self.failures:
+            raise RuntimeError("duplicate_worker_delegation")
         if len(self.calls) >= BUDGETS["max_model_calls"]: self.failures.append("model_call_limit"); raise RuntimeError("model_call_limit")
         payload = _jsonable(llm_request); encoded = json.dumps(payload, ensure_ascii=False)
         try:
@@ -113,21 +123,35 @@ class RuntimeTrace:
         name=tool.name or "unknown"
         is_mcp=name in self.tool_names or any(name.endswith("_"+x) for x in self.tool_names)
         if is_mcp and len(self.tools)>=BUDGETS["max_mcp_calls"]: self.failures.append("mcp_call_limit"); raise RuntimeError("mcp_call_limit")
-        args=tool_args or {}; ids=args.get("example_ids",[])
+        args=tool_args or {}; ids=args.get("example_ids",[]) if isinstance(args, Mapping) else []
         if ids and not set(ids)<=set(self.ids): self.failures.append("out_of_scope_tool_ids"); raise RuntimeError("out_of_scope_tool_ids")
+        if self.output.parent.name == "fedotmas_cost_aware" and name.endswith("construction_batch_specialist"):
+            self.worker_delegations += 1
+            if self.worker_delegations > 1:
+                self.failures.append("duplicate_worker_delegation")
+                raise RuntimeError("duplicate_worker_delegation")
         row={"name":name,"arguments":_jsonable(args)}
         (self.tools if is_mcp else self.worker_calls).append(row)
         self.transcript.append({"type":"tool_request","kind":"mcp" if is_mcp else "worker","name":name,"arguments":_jsonable(args)})
 
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result):
-        self.transcript.append({"type":"tool_response","name":tool.name,"response":_jsonable(result)})
+        response=_jsonable(result)
+        name=tool.name or "unknown"
+        arguments=_jsonable(tool_args or {})
+        rows=self.tools if name in self.tool_names or any(name.endswith("_"+x) for x in self.tool_names) else self.worker_calls
+        for row in reversed(rows):
+            if row["name"]==name and row.get("arguments")==arguments and "response" not in row:
+                row["response"]=response
+                break
+        self.transcript.append({"type":"tool_response","name":name,"response":response})
 
     async def on_tool_error_callback(self, *, tool, tool_args, tool_context, error):
         self.failures.append(f"tool_error:{tool.name}:{str(error)[:500]}")
 
     def dump(self) -> dict[str, Any]:
         known=[x for x in self.provider_requests if x["usage_known"]]
-        return {"system":self.output.name,"assigned_ids":self.ids,"completed_ids":[],"model_calls":self.calls,"provider_requests":self.provider_requests,"provider_request_count":len(self.provider_requests),"malformed_tool_retry_requests":sum(x["request_kind"] == "malformed_tool_retry" for x in self.provider_requests),"proxy_observable":True,"cost_complete":all(x["usage_known"] for x in self.provider_requests),"input_tokens":sum(x["input_tokens"] for x in known),"cached_input_tokens":sum(x["cached_input_tokens"] for x in known),"output_tokens":sum(x["output_tokens"] for x in known),"adk_input_tokens":sum(x["input_tokens"] for x in self.calls),"adk_cached_input_tokens":sum(x["cached_input_tokens"] for x in self.calls),"adk_output_tokens":sum(x["output_tokens"] for x in self.calls),"mcp_calls":self.tools,"worker_calls":self.worker_calls,"tool_calls":len(self.tools),"runtime_seconds":time.monotonic()-self.started,"failures":self.failures,"private_ground_truth_accesses":0}
+        truncations=sum(x.get("finish_reason") in {"length", "max_tokens"} for x in self.provider_requests)
+        return {"system":self.output.name,"assigned_ids":self.ids,"completed_ids":[],"model_calls":self.calls,"provider_requests":self.provider_requests,"provider_request_count":len(self.provider_requests),"malformed_tool_retry_requests":sum(x["request_kind"] == "malformed_tool_retry" for x in self.provider_requests),"proxy_observable":True,"cost_complete":all(x["usage_known"] for x in self.provider_requests),"input_tokens":sum(x["input_tokens"] for x in known),"uncached_input_tokens":sum(max(0,x["input_tokens"]-x["cached_input_tokens"]) for x in known),"cached_input_tokens":sum(x["cached_input_tokens"] for x in known),"output_tokens":sum(x["output_tokens"] for x in known),"output_truncation_count":truncations,"output_truncation_hit":truncations>0,"worker_delegations":self.worker_delegations,"adk_input_tokens":sum(x["input_tokens"] for x in self.calls),"adk_cached_input_tokens":sum(x["cached_input_tokens"] for x in self.calls),"adk_output_tokens":sum(x["output_tokens"] for x in self.calls),"mcp_calls":self.tools,"worker_calls":self.worker_calls,"tool_calls":len(self.tools),"runtime_seconds":time.monotonic()-self.started,"failures":self.failures,"private_ground_truth_accesses":0}
 
 def write_system_config(run_dir: Path, system: str, runtime_manifest: dict[str, Any], telemetry: dict[str, Any], transcripts: list[dict[str, Any]] | None = None) -> None:
     import csv

@@ -1,0 +1,54 @@
+2026-09-27 22:40:52.424 | DEBUG    | fedotmas.settings:setup_logging:64 | Loaded .env from /Users/daniel/Documents/nss_lab/FEDOT.MAS/.env
+2026-09-27 22:40:52.424 | INFO     | fedotmas.mas:build:64 | Building routing system
+2026-09-27 22:40:52.424 | DEBUG    | fedotmas.mcp.registry:create_toolset:49 | Creating MCP toolset | server=sampo-cost-demo-phase5
+2026-09-27 22:40:52.432 | DEBUG    | fedotmas.mas.builder:_build_routing_agent:81 | Built routing agent | name=construction_batch_specialist model=model='openai/gpt-5.6-luna' llm_client=_ProxyClient(base_url=URL('https://openrouter.ai/api/v1/'))
+2026-09-27 22:40:52.442 | DEBUG    | fedotmas.mas.builder:_build_routing_agent:81 | Built routing agent | name=construction_label_batch_coordinator model=model='openai/gpt-5.6-luna' llm_client=_ProxyClient(base_url=URL('https://openrouter.ai/api/v1/'))
+2026-09-27 22:40:52.443 | INFO     | fedotmas.mas.builder:build_routing_system:57 | Built routing system | coordinator=construction_label_batch_coordinator workers=['construction_batch_specialist']
+2026-09-27 22:40:52.443 | INFO     | fedotmas.mas:build:71 | Config:
+Coordinator: construction_label_batch_coordinator  model: openai/gpt-5.6-luna
+Workers:
+  construction_batch_specialist 'Executes a single bounded SAMPO artifact-backed batch for mapping public historical construction work names to allowed labels, including exact prescribed multi-retriever retrieval, server-side partitioning by top-1 disagreement, selective semantic review, and non-overlapping durable prediction writes.'
+2026-09-27 22:40:52.443 | DEBUG    | fedotmas.core.runner:run_pipeline:105 | Creating session | app=fedotmas user=user
+2026-09-27 22:40:52.448 | INFO     | fedotmas.core.runner:run_pipeline:127 | Pipeline run started | pipeline=construction_label_batch_coordinator
+2026-09-27 22:40:52.523 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-luna tools=construction_batch_specialist
+2026-09-27 22:41:03.295 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-27 22:41:04.233 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-luna tools=get_candidate_evidence,get_prediction_status,list_methods,partition_candidate_batch,prepare_candidate_batch,save_candidate_predictions,save_review_decisions
+2026-09-27 22:41:06.981 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-27 22:41:07.018 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-luna tools=get_candidate_evidence,get_prediction_status,list_methods,partition_candidate_batch,prepare_candidate_batch,save_candidate_predictions,save_review_decisions
+2026-09-27 22:41:08.823 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-27 22:41:09.008 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-luna tools=get_candidate_evidence,get_prediction_status,list_methods,partition_candidate_batch,prepare_candidate_batch,save_candidate_predictions,save_review_decisions
+2026-09-27 22:41:10.867 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-27 22:41:10.897 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-luna tools=get_candidate_evidence,get_prediction_status,list_methods,partition_candidate_batch,prepare_candidate_batch,save_candidate_predictions,save_review_decisions
+2026-09-27 22:41:13.961 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=5 content_chars=0
+2026-09-27 22:41:14.044 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-luna tools=get_candidate_evidence,get_prediction_status,list_methods,partition_candidate_batch,prepare_candidate_batch,save_candidate_predictions,save_review_decisions
+2026-09-27 22:41:22.767 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=2 content_chars=0
+2026-09-27 22:41:22.828 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-luna tools=get_candidate_evidence,get_prediction_status,list_methods,partition_candidate_batch,prepare_candidate_batch,save_candidate_predictions,save_review_decisions
+2026-09-27 22:41:25.721 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=stop tool_calls=0 content_chars=479
+2026-09-27 22:41:25.731 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-luna tools=construction_batch_specialist
+2026-09-27 22:41:37.561 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=312
+2026-09-27 22:41:37.573 | ERROR    | fedotmas.core.runner:_consume_runner_events:276 | LLM error | agent=construction_label_batch_coordinator code=RuntimeError msg=Error in plugin 'sampo_cost_demo_trace' during 'before_tool_callback' callback: duplicate_worker_delegation
+2026-09-27 22:41:37.728 | INFO     | fedotmas.core.runner:run_pipeline:157 | Pipeline complete | total_elapsed=45.3s total_prompt=112305 total_completion=3731
+2026-09-27 22:41:38.981 | DEBUG    | fedotmas.mcp.registry:create_toolset:49 | Creating MCP toolset | server=sampo-cost-demo
+2026-09-27 22:41:38.990 | DEBUG    | fedotmas.core.runner:run_pipeline:105 | Creating session | app=sampo_cost_demo_agent user=user
+2026-09-27 22:41:38.991 | INFO     | fedotmas.core.runner:run_pipeline:127 | Pipeline run started | pipeline=sampo_cost_demo_agent
+2026-09-27 22:41:39.874 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-terra tools=get_prediction_status,inspect_candidates,list_methods,prepare_candidates,save_default_top3,save_ranked_top3
+2026-09-27 22:41:44.049 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=2 content_chars=0
+2026-09-27 22:41:44.090 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-terra tools=get_prediction_status,inspect_candidates,list_methods,prepare_candidates,save_default_top3,save_ranked_top3
+2026-09-27 22:41:45.584 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-27 22:41:45.759 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-terra tools=get_prediction_status,inspect_candidates,list_methods,prepare_candidates,save_default_top3,save_ranked_top3
+2026-09-27 22:41:48.234 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-27 22:41:48.349 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-terra tools=get_prediction_status,inspect_candidates,list_methods,prepare_candidates,save_default_top3,save_ranked_top3
+2026-09-27 22:41:51.123 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=2 content_chars=0
+2026-09-27 22:41:51.199 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-terra tools=get_prediction_status,inspect_candidates,list_methods,prepare_candidates,save_default_top3,save_ranked_top3
+2026-09-27 22:41:58.897 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-27 22:41:58.970 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-terra tools=get_prediction_status,inspect_candidates,list_methods,prepare_candidates,save_default_top3,save_ranked_top3
+2026-09-27 22:42:03.471 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-27 22:42:03.548 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-terra tools=get_prediction_status,inspect_candidates,list_methods,prepare_candidates,save_default_top3,save_ranked_top3
+2026-09-27 22:42:06.268 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-27 22:42:06.340 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-terra tools=get_prediction_status,inspect_candidates,list_methods,prepare_candidates,save_default_top3,save_ranked_top3
+2026-09-27 22:42:10.452 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-27 22:42:10.518 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-terra tools=get_prediction_status,inspect_candidates,list_methods,prepare_candidates,save_default_top3,save_ranked_top3
+2026-09-27 22:42:13.395 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=tool_calls tool_calls=1 content_chars=0
+2026-09-27 22:42:13.419 | DEBUG    | fedotmas.llm:acompletion:189 | OpenAI-compatible request | model=openai/gpt-5.6-terra tools=get_prediction_status,inspect_candidates,list_methods,prepare_candidates,save_default_top3,save_ranked_top3
+2026-09-27 22:42:14.859 | DEBUG    | fedotmas.llm:acompletion:249 | OpenAI-compatible response | finish_reason=stop tool_calls=0 content_chars=138
+2026-09-27 22:42:15.022 | INFO     | fedotmas.core.runner:run_pipeline:157 | Pipeline complete | total_elapsed=36.0s total_prompt=209769 total_completion=2400

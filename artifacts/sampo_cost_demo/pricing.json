@@ -4,6 +4,13 @@
   "provenance": "Dated public OpenRouter model-page prices. Runtime requests request provider-reported usage cost; the rates below are the fallback when provider-reported cost is absent.",
   "source_date": "2026-09-27",
   "models": {
+    "openai/gpt-5.6-luna": {
+      "input_usd_per_1m": 0.20,
+      "cached_input_usd_per_1m": 0.02,
+      "output_usd_per_1m": 1.20,
+      "source_date": "2026-09-27",
+      "source": "https://openrouter.ai/openai/gpt-5.6-luna"
+    },
     "deepseek/deepseek-v4.1-flash": {
       "input_usd_per_1m": 0.035,
       "cached_input_usd_per_1m": 0.001,
