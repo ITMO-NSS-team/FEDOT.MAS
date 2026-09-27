@@ -7,7 +7,11 @@ from unittest.mock import MagicMock
 import pytest
 from fedotmas.core.runner import run_pipeline
 from fedotmas.maw import builder
-from fedotmas.maw.handoffs import parse_artifact
+from fedotmas.maw.handoffs import (
+    is_unresolved_answer,
+    parse_artifact,
+    validate_output_contract,
+)
 from fedotmas.maw.models import (
     ArtifactContract,
     ArtifactRequirement,
@@ -15,6 +19,7 @@ from fedotmas.maw.models import (
     MAWConfig,
     MAWStepConfig,
 )
+from fedotmas.plugins._code_agent_budget import CODE_AGENT_POLICY_STATE_KEY
 from fedotmas.plugins import ResearchTelemetry, WebSearchLimitPlugin
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_request import LlmRequest
@@ -268,6 +273,85 @@ async def test_incomplete_and_scalar_handoffs_are_marked_and_retained():
     assert scalar_state["_fedotmas_execution"]["handoff_issues"][0][
         "missing_fields"
     ] == ["paper_identity", "equation", "evidence"]
+
+
+def test_contract_extraction_selects_last_matching_nested_json_candidate():
+    contract = ArtifactContract(required_fields=["answer", "evidence"])
+    text = 'Earlier: {"note": "wrong schema"}. Later: {"answer": 7, "evidence": {"source": "x"}}'
+    assert validate_output_contract(text, contract) == []
+    assert (
+        validate_output_contract(
+            'A result is below: {"answer": 7, "evidence": "source"}', contract
+        )
+        == []
+    )
+    assert (
+        validate_output_contract('[{"answer": 7, "evidence": "source"}]', contract)
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "value", ['Prose {"answer": 1, broken} tail', '{"wrong": "schema"}']
+)
+def test_malformed_or_wrong_schema_json_does_not_satisfy_contract(value):
+    assert validate_output_contract(
+        value, ArtifactContract(required_fields=["answer"])
+    ) == ["answer"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "UNRESOLVED",
+        "Upstream (recovered, preserved verbatim) is explicitly unresolved",
+        '{"status":"UNRESOLVED"}',
+        '{"answer":null}',
+        '{"verified_answer":null}',
+        '{"value":null}',
+        '{"formatted_answer":null}',
+        "No exact answer was computed",
+        "No answer to verify",
+        "The exact optimum was not computed",
+    ],
+)
+def test_explicit_terminal_non_answers_are_detected(value):
+    assert is_unresolved_answer(value)
+
+
+def test_concrete_answer_with_uncertainty_explanation_is_not_abstention():
+    assert not is_unresolved_answer(
+        "The likely answer is <solution>42</solution>; evidence is limited."
+    )
+    assert not is_unresolved_answer(
+        'Earlier state was unresolved; final result: {"answer":"42"}'
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('{"answer":"42"}', "verify_candidate"),
+        ('{"status":"UNRESOLVED"}', "verifier_recovery"),
+    ],
+)
+async def test_maw_sets_verifier_policy_from_declared_upstream_artifact(
+    source, expected
+):
+    cfg = MAWAgentConfig(
+        name="verifier",
+        instruction="Verify the candidate.",
+        output_key="verification",
+        tools=["code-agent"],
+        input_requirements=[
+            ArtifactRequirement(source_key="solution", required_fields=["answer"])
+        ],
+    )
+    agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
+    state = {"solution": source}
+    await agent.before_agent_callback(_context(state))
+    assert state[CODE_AGENT_POLICY_STATE_KEY]["verifier"]["mode"] == expected
 
 
 @pytest.mark.asyncio
@@ -1007,38 +1091,49 @@ async def test_contract_repair_keeps_missing_semantics_incomplete(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_large_contract_artifact_skips_llm_repair_and_stays_incomplete(
-    monkeypatch,
-):
-    llm = _ScriptedLlm(model="openai/test", responses=[])
+async def test_large_narrative_contract_artifact_uses_compact_repair(monkeypatch):
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part.from_text(
+                        text='{"data":{"regions":[1,2],"global_limits":"g","borders":"b"}}'
+                    )
+                ],
+            )
+        ],
+    )
     monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
-
-    async def unexpected_repair(*_args, **_kwargs):
-        raise AssertionError("large output must not be replayed through an LLM")
-
-    monkeypatch.setattr(builder, "_repair_contract_once", unexpected_repair)
     cfg = MAWAgentConfig(
         name="file_reader",
         instruction="Read the source file.",
         output_key="problem_spec",
         output_contract=ArtifactContract(
-            required_fields=["regions", "global_limits", "borders"]
+            required_fields=["data.regions", "data.global_limits", "data.borders"]
         ),
     )
     agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
-    original = "verbatim input " * 2_000
+    original = (
+        "verbatim input " * 2_000
+        + '\n{"regions": [1, 2], "global_limits":"g", "borders":"b"}'
+    )
     state = {"problem_spec": original}
 
     await agent.after_agent_callback(_context(state))
 
-    assert state["problem_spec"] == original
-    assert not llm.requests
+    assert json.loads(state["problem_spec"]) == {
+        "data": {"regions": [1, 2], "global_limits": "g", "borders": "b"}
+    }
+    assert len(llm.requests) == 1
+    prompt = llm.requests[0].contents[0].parts[0].text
+    assert len(prompt) < 5_000
+    assert "Do not use tools" in prompt and "structure/schema only" in prompt
+    assert not llm.requests[0].config.tools
     repairs = state["_fedotmas_execution"]["contract_repairs"]["file_reader"]
-    assert repairs[1]["status"] == "repair_skipped_output_too_large"
-    assert repairs[-1]["status"] == "repair_missing_semantic_fields"
-    assert state["_fedotmas_execution"]["handoff_issues"][0]["kind"] == (
-        "incomplete_artifact"
-    )
+    assert repairs[-1]["status"] == "format_repair_succeeded"
+    assert not state["_fedotmas_execution"].get("handoff_issues")
 
 
 @pytest.mark.asyncio
@@ -2207,7 +2302,7 @@ async def test_nested_repeated_identity_contract_preserves_each_orcid():
 
 
 @pytest.mark.asyncio
-async def test_contract_repair_rejects_identity_copied_from_unrelated_field(
+async def test_conflicting_emitted_identity_is_preserved_and_reported(
     monkeypatch,
 ):
     llm = _ScriptedLlm(
@@ -2232,7 +2327,7 @@ async def test_contract_repair_rejects_identity_copied_from_unrelated_field(
         ),
     )
     agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
-    original = '{"claim":"supported","note":"paper-A"}'
+    original = '{"claim":"supported","paper_id":"paper-B"}'
     state = {
         "artifact": original,
         "upstream": '{"paper_id":"paper-A"}',
@@ -2240,16 +2335,41 @@ async def test_contract_repair_rejects_identity_copied_from_unrelated_field(
 
     await agent.after_agent_callback(_context(state))
 
-    assert state["artifact"] == original
-    assert state["_fedotmas_execution"]["handoff_issues"][0]["kind"] == (
-        "incomplete_artifact"
+    assert json.loads(state["artifact"]) == {
+        "claim": "supported",
+        "paper_id": "paper-B",
+    }
+    issue = state["_fedotmas_execution"]["handoff_issues"][0]
+    assert issue["kind"] == "entity_continuity_mismatch"
+    assert issue["fields"] == ["paper_id"]
+
+
+@pytest.mark.asyncio
+async def test_omitted_identity_field_is_inherited_from_declared_source():
+    cfg = MAWAgentConfig(
+        name="answerer",
+        instruction="Return the answer.",
+        output_key="result",
+        input_requirements=[
+            ArtifactRequirement(
+                source_key="task_spec", identity_fields=["task_statement"]
+            )
+        ],
+        output_contract=ArtifactContract(
+            required_fields=["answer"], identity_fields=["task_statement"]
+        ),
     )
-    assert (
-        "paper_id"
-        in state["_fedotmas_execution"]["contract_repairs"]["producer"][-1][
-            "missing_fields"
-        ]
-    )
+    agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
+    state = {
+        "result": '{"answer":"42"}',
+        "task_spec": '{"task_statement":"compute the requested value"}',
+    }
+    await agent.after_agent_callback(_context(state))
+    assert json.loads(state["result"]) == {
+        "answer": "42",
+        "task_statement": "compute the requested value",
+    }
+    assert not state.get("_fedotmas_execution", {}).get("handoff_issues")
 
 
 @pytest.mark.asyncio

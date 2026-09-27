@@ -362,9 +362,7 @@ def _supported_action(action: dict) -> bool:
     kind = action.get("action")
     return isinstance(kind, str) and (
         kind in {"finish", "document"}
-        or (
-            kind == "execute" and isinstance(action.get("code"), str)
-        )
+        or (kind == "execute" and isinstance(action.get("code"), str))
     )
 
 
@@ -458,8 +456,10 @@ async def _solve(
         return _result(
             status="blocked",
             errors=[
-                "task contains too much inline data; pass local input through the "
-                "files parameter and keep task to concise computation instructions"
+                (
+                    "task contains too much inline data; pass local input through the "
+                    "files parameter and keep task to concise computation instructions"
+                )
             ],
             error_code="CODE_AGENT_TASK_TOO_LARGE",
             started=started,
@@ -469,8 +469,10 @@ async def _solve(
         return _result(
             status="blocked",
             errors=[
-                "context contains too much inline data; pass local input through "
-                "files and keep context to concise instructions"
+                (
+                    "context contains too much inline data; pass local input through "
+                    "files and keep context to concise instructions"
+                )
             ],
             error_code="CODE_AGENT_CONTEXT_TOO_LARGE",
             started=started,
@@ -618,7 +620,9 @@ async def _solve(
                             secrets=secrets,
                         )
                     if not _supported_action(candidate):
-                        invalid_action_error = "Model response was not a supported action"
+                        invalid_action_error = (
+                            "Model response was not a supported action"
+                        )
                         continue
                     action = candidate
                     break
@@ -627,7 +631,9 @@ async def _solve(
                         status="failed",
                         files_used=file_names,
                         steps_taken=steps,
-                        errors=[_bounded(invalid_action_error, MAX_ERROR_CHARS, secrets)],
+                        errors=[
+                            _bounded(invalid_action_error, MAX_ERROR_CHARS, secrets)
+                        ],
                         error_code="CODE_AGENT_MODEL_ERROR",
                         usage=usage,
                         started=started,
@@ -856,10 +862,14 @@ async def solve_with_code(
     files: Annotated[list[str], Field(max_length=MAX_FILES)] | None = None,
     context: str = "",
     max_steps: Annotated[int, Field(ge=1, le=MAX_STEPS)] = DEFAULT_MAX_STEPS,
-    max_execution_seconds: Annotated[float, Field(ge=0.1)] = DEFAULT_MAX_EXECUTION_SECONDS,
+    max_execution_seconds: Annotated[
+        float, Field(ge=0.1)
+    ] = DEFAULT_MAX_EXECUTION_SECONDS,
     max_output_chars: Annotated[int, Field(ge=256, le=MAX_OUTPUT_CHARS)] = (
         DEFAULT_MAX_OUTPUT_CHARS
     ),
+    call_intent: Literal["inspect", "compute", "targeted_recovery"] = "compute",
+    recovery_target: str | None = None,
 ) -> dict:
     """Solve bounded computations with iterative Python in a fresh, independent
     E2B sandbox. For a computation over a local file, pass its host path via
@@ -869,6 +879,7 @@ async def solve_with_code(
     calls. Prefer one complete bounded call; if another call is required, pass
     every required file again. Use document for reading/retrieval, not computation.
     """
+    del call_intent, recovery_target  # Consumed by the MAW execution controller.
     result = await _solve(
         task=task,
         files=files or [],

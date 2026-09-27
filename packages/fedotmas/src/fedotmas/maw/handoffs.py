@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from fedotmas.maw.models import ArtifactContract, ArtifactRequirement
@@ -22,24 +23,69 @@ def is_explicit_abstention(value: Any) -> bool:
     return False
 
 
-def parse_artifact(value: Any) -> dict[str, Any] | None:
-    """Parse strict JSON or one unambiguous JSON object embedded in prose."""
+_UNRESOLVED_TEXT = re.compile(
+    r"\b(?:unresolved|no exact answer|no answer to verify|exact optimum was not computed)\b|"
+    r"upstream.{0,100}explicitly unresolved|\b(?:there is|we have|i have|the system has) "
+    r"no (?:concrete |exact )?answer\b",
+    re.IGNORECASE,
+)
+_ANSWER_NULL_KEYS = {"answer", "verified_answer", "value", "formatted_answer"}
+
+
+def is_unresolved_answer(value: Any) -> bool:
+    """Detect explicit terminal non-answers; structured null state takes priority."""
+    parsed_candidates = parse_artifact_candidates(value)
+    if parsed_candidates:
+
+        def visit(item: Any) -> bool:
+            if isinstance(item, dict):
+                if str(item.get("status", "")).casefold() == "unresolved":
+                    return True
+                if any(
+                    key.casefold() in _ANSWER_NULL_KEYS and val is None
+                    for key, val in item.items()
+                ):
+                    return True
+                return any(visit(val) for val in item.values())
+            if isinstance(item, list):
+                return any(visit(val) for val in item)
+            return False
+
+        if any(visit(parsed) for parsed in parsed_candidates):
+            return True
+        if any(
+            _field_is_present(parsed, key)
+            for parsed in parsed_candidates
+            for key in _ANSWER_NULL_KEYS
+        ):
+            return False
+    if isinstance(value, str):
+        return bool(_UNRESOLVED_TEXT.search(value))
+    return False
+
+
+def parse_artifact_candidates(value: Any) -> list[dict[str, Any]]:
+    """Return top-level JSON object candidates in source order."""
     if isinstance(value, dict):
-        return value
+        return [value]
     if not isinstance(value, str):
-        return None
+        return []
     try:
         parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return [parsed]
     except (json.JSONDecodeError, TypeError):
-        parsed = None
-    if isinstance(parsed, dict):
-        return parsed
-
-    # Scan prose and fenced blocks alike. raw_decode handles nested braces and
-    # arrays; requiring one object candidate prevents accidental contract
-    # selection when the prose contains multiple artifacts.
+        pass
     decoder = json.JSONDecoder()
-    candidates: list[dict[str, Any]] = []
+    candidates = []
+
+    def add_array_items(item: Any) -> None:
+        if isinstance(item, dict):
+            candidates.append(item)
+        elif isinstance(item, list):
+            for child in item:
+                add_array_items(child)
+
     index = 0
     while index < len(value):
         if value[index] not in "{[":
@@ -52,10 +98,39 @@ def parse_artifact(value: Any) -> dict[str, Any] | None:
             continue
         if isinstance(candidate, dict):
             candidates.append(candidate)
-            index += end
-        else:
-            index += end
+        elif isinstance(candidate, list):
+            add_array_items(candidate)
+        index += max(end, 1)
+    return candidates
+
+
+def parse_artifact(
+    value: Any, contract: ArtifactContract | None = None
+) -> dict[str, Any] | None:
+    """Parse strict JSON or one unambiguous JSON object embedded in prose."""
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    candidates = parse_artifact_candidates(value)
+    if contract is not None:
+        fields = list(
+            dict.fromkeys([*contract.required_fields, *contract.identity_fields])
+        )
+        matching = [
+            candidate
+            for candidate in candidates
+            if not _missing_fields_in_artifact(candidate, fields)
+        ]
+        if matching:
+            return matching[-1]
     return candidates[0] if len(candidates) == 1 else None
+
+
+def _missing_fields_in_artifact(
+    artifact: dict[str, Any], fields: list[str]
+) -> list[str]:
+    return [field for field in fields if not _field_is_present(artifact, field)]
 
 
 def missing_contract_fields(
@@ -126,7 +201,16 @@ def describe_requirement(
     fields = list(
         dict.fromkeys([*requirement.required_fields, *requirement.identity_fields])
     )
-    artifact, missing = missing_contract_fields(value, fields)
+    candidates = parse_artifact_candidates(value)
+    complete = [
+        item for item in candidates if not _missing_fields_in_artifact(item, fields)
+    ]
+    artifact = complete[-1] if complete else parse_artifact(value)
+    missing = (
+        _missing_fields_in_artifact(artifact, fields)
+        if artifact is not None
+        else (fields or ["structured artifact"])
+    )
     identity = (
         {
             key: field_value(artifact, key)
@@ -142,7 +226,10 @@ def describe_requirement(
 def validate_output_contract(value: Any, contract: ArtifactContract) -> list[str]:
     """Describe absent fields without modifying or discarding the artifact."""
     fields = list(dict.fromkeys([*contract.required_fields, *contract.identity_fields]))
-    _artifact, missing = missing_contract_fields(value, fields)
+    artifact = parse_artifact(value, contract)
+    if artifact is None:
+        return fields or ["structured artifact"]
+    missing = _missing_fields_in_artifact(artifact, fields)
     return missing
 
 

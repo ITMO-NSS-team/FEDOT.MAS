@@ -22,6 +22,7 @@ from fedotmas.maw._validators import _find_terminal_node
 from fedotmas.maw.handoffs import (
     ABSTENTION_STATE_KEY,
     is_explicit_abstention,
+    is_unresolved_answer,
     unresolved_execution_issues,
 )
 from fedotmas.maw.models import MAWConfig
@@ -207,6 +208,69 @@ def normalize_answer(answer: str) -> str:
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
         text = text[1:-1].strip()
     return text
+
+
+def _has_unresolved_answer_lineage(issues: list[dict[str, Any]], terminal: Any) -> bool:
+    """Only block diagnostics that directly name a declared answer dependency."""
+    answer_fields = {
+        "answer",
+        "verified_answer",
+        "candidate",
+        "solution",
+        "result",
+        "value",
+    }
+    requirements = getattr(terminal, "input_requirements", []) or []
+    for requirement in requirements:
+        if not answer_fields.intersection(
+            requirement.required_fields + requirement.identity_fields
+        ):
+            continue
+        for issue in issues:
+            if issue.get("resolved") is True:
+                continue
+            if (
+                issue.get("source_key") == requirement.source_key
+                or issue.get("output_key") == requirement.source_key
+            ) and issue.get("kind") in {
+                "incomplete_handoff",
+                "incomplete_artifact",
+                "entity_continuity_mismatch",
+            }:
+                return True
+    return False
+
+
+def _matches_declared_answer_format(answer: str, task: Any) -> bool:
+    metadata = getattr(task, "metadata", None) or {}
+    specification = (
+        metadata.get("answer_format") if isinstance(metadata, dict) else None
+    )
+    if specification is None:
+        return True
+    if isinstance(specification, dict):
+        if isinstance(specification.get("pattern"), str):
+            return re.fullmatch(specification["pattern"], answer) is not None
+        if isinstance(specification.get("enum"), list):
+            return answer in {str(value) for value in specification["enum"]}
+        kind = str(specification.get("type", "")).casefold()
+    else:
+        kind = str(specification).casefold().strip()
+    if kind in {"integer", "int", "digits"}:
+        return re.fullmatch(r"[+-]?\d+", answer) is not None
+    if kind in {"number", "numeric", "float"}:
+        return re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", answer) is not None
+    if kind in {"json", "json object", "json array"}:
+        try:
+            parsed = json.loads(answer)
+        except json.JSONDecodeError:
+            return False
+        return (
+            kind == "json"
+            or (kind == "json object" and isinstance(parsed, dict))
+            or (kind == "json array" and isinstance(parsed, list))
+        )
+    return bool(answer.strip())
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -1153,6 +1217,7 @@ async def _process_task_attempt(
         terminal_abstained = is_explicit_abstention(terminal_value) or (
             isinstance(completion, dict) and completion.get("status") == "abstained"
         )
+        terminal_unresolved = is_unresolved_answer(terminal_value)
         answer = normalize_answer(extract_terminal_answer(state, terminal.output_key))
         execution_issues = unresolved_execution_issues(state)
         pipeline_diagnostics = _pipeline_diagnostics(state)
@@ -1164,9 +1229,35 @@ async def _process_task_attempt(
         if terminal_abstained:
             answer = ""
             raise RuntimeError("Configured terminal agent explicitly abstained")
+        if terminal_unresolved:
+            answer = ""
+            raise RuntimeError(
+                "Configured terminal agent returned an explicit unresolved/non-answer result"
+            )
         if not answer:
             raise ValueError(
                 f"Configured terminal output '{terminal.output_key}' is missing"
+            )
+        if (
+            pipeline_status == "incomplete"
+            and not extract_solution(str(terminal_value)).strip()
+        ):
+            raise RuntimeError(
+                "Incomplete pipeline has no extractable concrete terminal answer"
+            )
+        if pipeline_status == "incomplete" and _has_unresolved_answer_lineage(
+            execution_issues, terminal
+        ):
+            answer = ""
+            raise RuntimeError(
+                "Incomplete pipeline has unresolved semantic answer lineage"
+            )
+        if pipeline_status == "incomplete" and not _matches_declared_answer_format(
+            answer, task
+        ):
+            answer = ""
+            raise RuntimeError(
+                "Incomplete pipeline terminal answer does not satisfy the declared answer_format"
             )
         if pipeline_status != "completed":
             _log.warning(

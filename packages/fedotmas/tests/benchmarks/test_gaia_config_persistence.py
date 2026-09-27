@@ -9,7 +9,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fedotmas import ModelConfig
 from fedotmas.core.runner import PipelineExecutionError, PipelineResult
-from fedotmas.maw.models import MAWConfig
+from fedotmas.maw.models import ArtifactRequirement, MAWConfig
+from fedotmas.maw import builder as maw_builder
+from fedotmas.plugins._code_agent_budget import CODE_AGENT_POLICY_STATE_KEY
 from fedotmas.plugins import ResearchTelemetry
 
 from benchmarks.gaia.run_gaia import (
@@ -26,6 +28,7 @@ from benchmarks.gaia.run_gaia import (
     compute_token_summary,
     extract_answer_from_state,
     extract_terminal_answer,
+    _matches_declared_answer_format,
     print_score_by_level,
     process_task,
     root_cause_summary,
@@ -585,6 +588,162 @@ async def test_explicit_terminal_abstention_remains_incomplete(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal",
+    [
+        "Upstream (recovered, preserved verbatim) is explicitly unresolved",
+        '{"status":"UNRESOLVED","answer":null}',
+        '{"verified_answer":null}',
+    ],
+)
+async def test_explicit_terminal_non_answer_is_rejected(tmp_path: Path, terminal: str):
+    class UnresolvedMAW(_FakeMAW):
+        async def run(
+            self,
+            _query: str,
+            *,
+            timeout: int,
+            final_answer_contract: str | None = None,
+            initial_state: dict | None = None,
+        ) -> dict[str, str]:
+            self.last_result = PipelineResult(
+                state={"final_answer": terminal}, status="incomplete"
+            )
+            return self.last_result.state
+
+    task = SimpleNamespace(
+        task_id="task-unresolved-terminal",
+        question="Question?",
+        ground_truth="65",
+        file_path=None,
+        file_name=None,
+        difficulty="1",
+        metadata={},
+    )
+    with (
+        patch("benchmarks.gaia.run_gaia.MAW", UnresolvedMAW),
+        patch.dict("os.environ", {"FEDOTMAS_GAIA_TASK_ATTEMPTS": "1"}),
+        pytest.raises(RuntimeError, match="unresolved/non-answer"),
+    ):
+        await process_task(
+            task,
+            SimpleNamespace(is_correct_answer=lambda answer, truth: answer == truth),
+            tmp_path,
+            enable_langfuse=False,
+        )
+    attempt = json.loads((tmp_path / "attempts" / "attempt_01.json").read_text())
+    assert attempt["attempt_status"] == "incomplete"
+    assert attempt["response"] == ""
+
+
+@pytest.mark.asyncio
+async def test_incomplete_answer_lineage_is_not_accepted(tmp_path: Path):
+    class BrokenLineageMAW(_FakeMAW):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.generated_config.agents[1].input_requirements = [
+                ArtifactRequirement(source_key="solution", required_fields=["answer"])
+            ]
+
+        async def run(
+            self,
+            _query: str,
+            *,
+            timeout: int,
+            final_answer_contract: str | None = None,
+            initial_state: dict | None = None,
+        ) -> dict[str, str]:
+            self.last_result = PipelineResult(
+                state={
+                    "solution": '{"answer":null}',
+                    "final_answer": "<solution>65</solution>",
+                    "_fedotmas_execution": {
+                        "handoff_issues": [
+                            {
+                                "kind": "incomplete_handoff",
+                                "source_key": "solution",
+                                "resolved": False,
+                            }
+                        ]
+                    },
+                },
+                status="incomplete",
+            )
+            return self.last_result.state
+
+    task = SimpleNamespace(
+        task_id="task-broken-lineage",
+        question="Question?",
+        ground_truth="65",
+        file_path=None,
+        file_name=None,
+        difficulty="1",
+        metadata={},
+    )
+    with (
+        patch("benchmarks.gaia.run_gaia.MAW", BrokenLineageMAW),
+        patch.dict("os.environ", {"FEDOTMAS_GAIA_TASK_ATTEMPTS": "1"}),
+        pytest.raises(RuntimeError, match="unresolved semantic answer lineage"),
+    ):
+        await process_task(
+            task,
+            SimpleNamespace(is_correct_answer=lambda answer, truth: answer == truth),
+            tmp_path,
+            enable_langfuse=False,
+        )
+    attempt = json.loads((tmp_path / "attempts" / "attempt_01.json").read_text())
+    assert attempt["attempt_status"] == "incomplete"
+    assert attempt["response"] == ""
+
+
+@pytest.mark.asyncio
+async def test_generated_and_frozen_configs_share_verifier_execution_policy(
+    tmp_path: Path,
+):
+    payload = {
+        "agents": [
+            {
+                "name": "solver",
+                "instruction": "Solve.",
+                "output_key": "solution",
+                "tools": ["code-agent"],
+                "model": "openai/gpt-4o",
+            },
+            {
+                "name": "verifier",
+                "instruction": "Verify the candidate.",
+                "output_key": "verification",
+                "tools": ["code-agent"],
+                "model": "openai/gpt-4o",
+                "input_requirements": [
+                    {"source_key": "solution", "required_fields": ["answer"]}
+                ],
+            },
+        ],
+        "pipeline": {
+            "type": "sequential",
+            "children": [
+                {"type": "agent", "agent_name": "solver"},
+                {"type": "agent", "agent_name": "verifier"},
+            ],
+        },
+    }
+    generated = MAWConfig.model_validate(payload)
+    frozen_path = tmp_path / "frozen.json"
+    frozen_path.write_text(
+        json.dumps({"maw_config": generated.model_dump(mode="json")})
+    )
+    frozen, _digest = _load_frozen_config(frozen_path)
+    for config in (generated, frozen):
+        tree = maw_builder.build(config, autonomous=False)
+        state = {"solution": '{"answer":"candidate"}'}
+        await tree.sub_agents[1].before_agent_callback(SimpleNamespace(state=state))
+        assert (
+            state[CODE_AGENT_POLICY_STATE_KEY]["verifier"]["mode"] == "verify_candidate"
+        )
+
+
+@pytest.mark.asyncio
 async def test_terminal_agent_is_inferred_when_config_omits_optional_field(
     tmp_path: Path,
 ):
@@ -652,6 +811,12 @@ def test_empty_scored_summary_reports_na(capsys):
     output = capsys.readouterr().out
     assert "Overall:   N/A (no scored tasks)" in output
     assert "0.00%  (0/0)" not in output
+
+
+def test_declared_answer_format_is_checked_for_incomplete_results():
+    numeric_task = SimpleNamespace(metadata={"answer_format": "integer"})
+    assert _matches_declared_answer_format("42", numeric_task)
+    assert not _matches_declared_answer_format("forty two", numeric_task)
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import difflib
-import hashlib
 import re
 import time
 from typing import Any
@@ -19,43 +17,6 @@ from fedotmas.plugins._research_telemetry import ResearchTelemetry
 CODE_AGENT_BUDGET_STATE_KEY = "_fedotmas_code_agent_budget"
 TASK_DEADLINE_STATE_KEY = "_fedotmas_task_deadline_monotonic"
 GAIA_TASK_FILE_PATH_STATE_KEY = "_fedotmas_gaia_task_file_path"
-_VOLATILE_WORDS = re.compile(r"\b(?:run\s+once|retry|verbatim)\b", re.IGNORECASE)
-_LIMITS = re.compile(
-    r"(max_execution_seconds|max_output_tokens|timeout(?:_seconds)?)\s*[:=]\s*\d+",
-    re.IGNORECASE,
-)
-_CODE_BLOCK = re.compile(r"```(?:[\w+-]+)?\s*\n?(.*?)```", re.DOTALL)
-
-
-def _normalized_request(args: dict[str, Any]) -> str:
-    def clean(value: Any) -> str:
-        raw = str(value or "")
-
-        def code_hash(match: re.Match[str]) -> str:
-            body = re.sub(r"\s+", " ", match.group(1)).strip().casefold()
-            return " code=" + hashlib.sha256(body.encode()).hexdigest()
-
-        raw = _CODE_BLOCK.sub(code_hash, raw)
-        raw = _LIMITS.sub(lambda m: m.group(1).casefold() + "=<limit>", raw)
-        raw = _VOLATILE_WORDS.sub(" ", raw)
-        return re.sub(r"\s+", " ", raw).strip().casefold()
-
-    parts = [clean(args.get("task")), clean(args.get("context"))]
-    files = args.get("files") or []
-    parts.extend(
-        sorted(clean(item) for item in files)
-        if isinstance(files, list)
-        else [clean(files)]
-    )
-    for key in sorted(k for k in args if k not in {"task", "context", "files"}):
-        value = (
-            "<limit>"
-            if re.search(r"(?:seconds|timeout|tokens|limit)", key, re.IGNORECASE)
-            and isinstance(args[key], int | float)
-            else clean(args[key])
-        )
-        parts.append(f"{key.casefold()}={value}")
-    return "\n".join(parts)
 
 
 def _outcome(payload: Any) -> tuple[str, str]:
@@ -68,33 +29,46 @@ def _outcome(payload: Any) -> tuple[str, str]:
         if isinstance(errors, list)
         else str(errors)[:500]
     )
+    useful = bool(data.get("answer")) or bool(data.get("evidence"))
+    if code == "CODE_AGENT_BUDGET_EXHAUSTED":
+        return "budget_exhausted", message
+    if status == "blocked" or code == "CODE_AGENT_DOCUMENT_READING_RECOMMENDED":
+        return "blocked", message
     if "TIMEOUT" in code or status == "timed_out":
-        category = "timeout"
-    elif any(
+        return "timeout", message
+    if any(
         x in code for x in ("PARSE", "INVALID_INPUT", "FILE_NOT_FOUND", "FILE_ACCESS")
     ):
-        category = "parser/data validation failure"
-    elif any(
-        x in code
-        for x in (
-            "RUNTIME_UNAVAILABLE",
-            "MODEL_UNAVAILABLE",
-            "DEPENDENCY",
-            "ENVIRONMENT",
-        )
-    ):
-        category = "dependency/environment failure"
-    elif status in {"completed"} and (data.get("answer") or data.get("evidence")):
-        category = "computation returned candidate answer"
-    elif status in {"completed", "incomplete"}:
-        category = "computation completed without answer"
-    else:
-        category = (
-            "dependency/environment failure"
-            if code
-            else "computation completed without answer"
-        )
-    return category, message
+        return "parse_or_validation_error", message
+    if status == "completed":
+        return ("success_with_result" if useful else "success_without_result"), message
+    if status in {"failed", "incomplete"} or code:
+        return "execution_error", message
+    return "success_without_result", message
+
+
+CODE_AGENT_POLICY_STATE_KEY = "_fedotmas_code_agent_policy"
+CODE_AGENT_PHASE_STATE_KEY = "_fedotmas_code_agent_phase"
+
+
+def _disable_code_tool(llm_request: LlmRequest) -> None:
+    disabled = {
+        name
+        for name in llm_request.tools_dict
+        if strip_tool_name_prefix(name).lower() == "solve_with_code"
+    }
+    retained = []
+    for group in llm_request.config.tools or []:
+        declarations = group.function_declarations
+        if declarations is None:
+            retained.append(group)
+            continue
+        group.function_declarations = [
+            item for item in declarations if item.name not in disabled
+        ]
+        if group.function_declarations:
+            retained.append(group)
+    llm_request.config.tools = retained
 
 
 _DOCUMENT_READING_ACTIONS = re.compile(
@@ -197,50 +171,57 @@ class CodeAgentBudgetPlugin(BasePlugin):
         agent_name = callback_context._invocation_context.agent.name
         root = callback_context.state.get(CODE_AGENT_BUDGET_STATE_KEY, {})
         current = root.get(agent_name, {}) if isinstance(root, dict) else {}
-        if isinstance(current, dict) and current.get("status") == "exhausted":
-            disabled = {
-                name
-                for name, tool in llm_request.tools_dict.items()
-                if strip_tool_name_prefix(name).lower() == "solve_with_code"
-            }
-            retained = []
-            for group in llm_request.config.tools or []:
-                declarations = group.function_declarations
-                if declarations is None:
-                    retained.append(group)
-                    continue
-                group.function_declarations = [
-                    item for item in declarations if item.name not in disabled
-                ]
-                if group.function_declarations:
-                    retained.append(group)
-            llm_request.config.tools = retained
+        phase_state = callback_context.state.get(CODE_AGENT_PHASE_STATE_KEY, {})
+        control_phase = (
+            current.get("phase", "primary_available")
+            if isinstance(current, dict)
+            else "primary_available"
+        )
+        phase = (
+            phase_state.get(agent_name, control_phase)
+            if isinstance(phase_state, dict) and isinstance(current, dict)
+            else control_phase
+        )
+        if control_phase in {"complete", "budget_exhausted"}:
+            _disable_code_tool(llm_request)
             llm_request.append_instructions(
                 [
-                    (
-                        "Nested code-agent budget is exhausted and solve_with_code is "
-                        "unavailable for this agent. Summarize the best supported state "
-                        "now; do not retry the nested computation."
-                    )
+                    "The code-agent phase is complete and solve_with_code is unavailable. Finalize from the available evidence."
                 ]
             )
             return
 
         llm_request.append_instructions(
             [
-                "For exact computational tasks: inspect and parse the input; validate the parse with compact structural invariants; perform the exact computation; if it fails, identify ONE concrete defect; make at most one materially targeted correction for that defect; do not repeatedly redesign the solver from scratch."
+                "For exact computational tasks: use call_intent=inspect only for lightweight input/parse inspection, which does not start or reset computation. Use call_intent=compute for the primary computation. After an observed failure, a recovery requires call_intent=targeted_recovery and recovery_target equal to the reported failure code/category. Validate parsing with compact structural invariants; make only that targeted correction; do not redesign the solver."
             ]
         )
-        history = (
-            current.get("computation_history", []) if isinstance(current, dict) else []
-        )
-        if (
-            history
-            and history[-1].get("outcome") == "computation returned candidate answer"
+        outcome = current.get("last_outcome") if isinstance(current, dict) else None
+        if phase == "inspection":
+            llm_request.append_instructions(
+                [
+                    "Code-agent phase: inspection. No computation budget has been consumed; proceed to one primary computation only after inspection is complete."
+                ]
+            )
+        if control_phase == "recovery_available":
+            llm_request.append_instructions(
+                [
+                    f"One targeted recovery is available for failure target {current.get('failure_code', 'execution_error') if isinstance(current, dict) else 'execution_error'}. Set call_intent=targeted_recovery and recovery_target to that exact value. Correct that observed failure only; do not redesign the entire solver."
+                ]
+            )
+        elif outcome == "success_with_result" and (
+            not isinstance(current, dict)
+            or current.get("last_call_phase") != "inspection"
         ):
             llm_request.append_instructions(
                 [
-                    "The previous computation completed successfully. Prefer synthesizing/finalizing from this result. Call the code agent again only if you can name a specific unresolved correctness issue."
+                    "The primary computation completed. Synthesize/finalize from the available result. Do not launch a new implementation of the same solve."
+                ]
+            )
+        elif outcome:
+            llm_request.append_instructions(
+                [
+                    f"Previous computation outcome: {outcome}. Concrete failure: {current.get('failure_reason', '')[:300] if isinstance(current, dict) else ''}. Phase: {phase}."
                 ]
             )
 
@@ -268,7 +249,14 @@ class CodeAgentBudgetPlugin(BasePlugin):
     ) -> dict | None:
         if strip_tool_name_prefix(tool.name).lower() != "solve_with_code":
             return None
-        if _is_document_reading_call(tool_args):
+        if (
+            _is_document_reading_call(tool_args)
+            and tool_args.get("call_intent") != "inspect"
+        ):
+            invocation = tool_context._invocation_context
+            phase_root = tool_context.state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+            if isinstance(phase_root, dict) and invocation.agent.name not in phase_root:
+                phase_root[invocation.agent.name] = "inspection"
             return {
                 "status": "blocked",
                 "error_code": "CODE_AGENT_DOCUMENT_READING_RECOMMENDED",
@@ -301,36 +289,141 @@ class CodeAgentBudgetPlugin(BasePlugin):
             root = {}
             state[CODE_AGENT_BUDGET_STATE_KEY] = root
         budget = root.setdefault(
-            agent_name, {"calls": 0, "seconds": 0.0, "reserved_seconds": 0.0}
+            agent_name,
+            {
+                "calls": 0,
+                "seconds": 0.0,
+                "reserved_seconds": 0.0,
+                "phase": "primary_available",
+            },
         )
         if not isinstance(budget, dict):
             budget = {"calls": 0, "seconds": 0.0, "reserved_seconds": 0.0}
             root[agent_name] = budget
 
-        history = budget.setdefault("computation_history", [])
-        fingerprint = _normalized_request(tool_args)
-        normalized_task = (
-            re.sub(r"\s+", " ", str(tool_args.get("task", ""))).strip().casefold()
+        policies = state.get(CODE_AGENT_POLICY_STATE_KEY, {})
+        policy = policies.get(agent_name, {}) if isinstance(policies, dict) else {}
+        role_policy = (
+            policy.get("mode", "solver") if isinstance(policy, dict) else "solver"
         )
-        for prior in history:
-            old = prior.get("fingerprint", "") if isinstance(prior, dict) else ""
-            if old and (
-                fingerprint == old
-                or (
-                    len(normalized_task) >= 24
-                    and len(old) >= 48
-                    and difflib.SequenceMatcher(None, fingerprint, old).ratio() >= 0.88
+        phase = budget.get("phase", "primary_available")
+        if int(budget.get("calls", 0)) >= self.max_calls_per_agent:
+            budget["phase"] = "budget_exhausted"
+            phase_root = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+            if isinstance(phase_root, dict):
+                phase_root[agent_name] = "budget_exhausted"
+            if self.telemetry is not None:
+                self.telemetry.budget_blocked(agent_name)
+                self.telemetry.record_blocked(
+                    agent_name,
+                    tool.name,
+                    tool_args,
+                    category="code_agent_budget_exhausted",
+                    call_id=getattr(tool_context, "function_call_id", None),
+                    budget={
+                        "kind": "code_agent",
+                        "limit_calls": self.max_calls_per_agent,
+                        "used_calls": int(budget.get("calls", 0)),
+                        "status": "exhausted",
+                    },
                 )
+            return {
+                "status": "blocked",
+                "error_code": "CODE_AGENT_BUDGET_EXHAUSTED",
+                "errors": [
+                    "Nested code-agent budget exhausted. Finalize from existing evidence."
+                ],
+                "converge_now": True,
+                "session_persistent": False,
+            }
+        if (
+            self.total_seconds_per_agent
+            - float(budget.get("seconds", 0.0))
+            - float(budget.get("reserved_seconds", 0.0))
+            < 1
+        ):
+            budget["phase"] = "budget_exhausted"
+            phase_root = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+            if isinstance(phase_root, dict):
+                phase_root[agent_name] = "budget_exhausted"
+            if self.telemetry is not None:
+                self.telemetry.budget_blocked(agent_name)
+                self.telemetry.record_blocked(
+                    agent_name,
+                    tool.name,
+                    tool_args,
+                    category="code_agent_budget_exhausted",
+                    call_id=getattr(tool_context, "function_call_id", None),
+                    budget={
+                        "kind": "code_agent",
+                        "limit_calls": self.max_calls_per_agent,
+                        "used_calls": int(budget.get("calls", 0)),
+                        "limit_seconds": self.total_seconds_per_agent,
+                        "used_seconds": float(budget.get("seconds", 0.0)),
+                        "status": "exhausted",
+                    },
+                )
+            return {
+                "status": "blocked",
+                "error_code": "CODE_AGENT_BUDGET_EXHAUSTED",
+                "errors": [
+                    "Nested code-agent runtime budget exhausted. Finalize from existing evidence."
+                ],
+                "converge_now": True,
+                "session_persistent": False,
+            }
+        if phase in {"complete", "budget_exhausted"}:
+            return {
+                "status": "blocked",
+                "error_code": "CODE_AGENT_PHASE_COMPLETE",
+                "errors": [
+                    "The code-agent execution phase is complete. Finalize from existing evidence."
+                ],
+                "converge_now": True,
+                "session_persistent": False,
+            }
+        requested_inspection = tool_args.get("call_intent") == "inspect"
+        if requested_inspection:
+            call_phase = "inspection"
+        elif phase == "recovery_available":
+            expected_target = str(
+                budget.get("failure_code")
+                or budget.get("last_outcome")
+                or "execution_error"
+            )
+            if (
+                tool_args.get("call_intent") != "targeted_recovery"
+                or tool_args.get("recovery_target") != expected_target
             ):
                 return {
                     "status": "blocked",
-                    "error_code": "CODE_AGENT_REDUNDANT_RETRY",
+                    "error_code": "CODE_AGENT_TARGETED_RECOVERY_REQUIRED",
                     "errors": [
-                        "Do not rewrite or rerun the same computation. Use existing evidence, fix one identified defect only, or finalize."
+                        f"One recovery remains. Use call_intent=targeted_recovery and recovery_target={expected_target!r} to fix the observed failure only."
                     ],
                     "converge_now": False,
                     "session_persistent": False,
                 }
+            budget["phase"] = "targeted_recovery_running"
+            call_phase = "targeted_recovery"
+        elif phase == "primary_available":
+            budget["phase"] = "primary_running"
+            call_phase = "primary_computation"
+        else:
+            return {
+                "status": "blocked",
+                "error_code": "CODE_AGENT_PHASE_COMPLETE",
+                "errors": [
+                    "A substantive computation is already in progress or the recovery allowance is spent."
+                ],
+                "converge_now": True,
+                "session_persistent": False,
+            }
+        phase_root = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+        if isinstance(phase_root, dict):
+            phase_root[agent_name] = (
+                "inspection" if requested_inspection else budget["phase"]
+            )
 
         exhausted = str(budget.get("status", "")) == "exhausted"
         used_calls = int(budget.get("calls", 0))
@@ -385,7 +478,8 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 call_id = getattr(tool_context, "function_call_id", None)
                 key = (session_id, agent_name, str(call_id or used_calls + 1))
                 self._reservations[key] = (time.monotonic(), allowed)
-                self._requests[key] = fingerprint
+                self._requests[key] = call_phase
+        budget["policy_mode"] = role_policy
 
         budget.update(
             {
@@ -398,6 +492,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
             return None
 
         budget["status"] = "exhausted"
+        budget["phase"] = "budget_exhausted"
         if self.telemetry is not None:
             self.telemetry.budget_blocked(agent_name)
             self.telemetry.record_blocked(
@@ -455,7 +550,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         if reservation is None:
             return
         started, reserved = reservation
-        fingerprint = self._requests.pop(key, "")
+        call_phase = self._requests.pop(key, "primary_computation")
         elapsed = max(0.0, time.monotonic() - started)
         if isinstance(budget, dict):
             budget["reserved_seconds"] = max(
@@ -485,10 +580,43 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 budget["seconds"] = max(
                     0.0, float(budget.get("seconds", 0.0)) - result_seconds
                 )
+                budget["phase"] = "primary_available"
+                phases = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+                if isinstance(phases, dict):
+                    phases[agent_name] = "inspection"
             else:
                 category, message = _outcome(payload)
-                history = budget.setdefault("computation_history", [])
-                history.append({"fingerprint": fingerprint, "outcome": category})
+                budget["last_outcome"] = category
+                budget["failure_reason"] = message
+                budget["failure_code"] = (
+                    str(payload.get("error_code") or category)
+                    if isinstance(payload, dict)
+                    else category
+                )
+                budget["last_call_phase"] = call_phase
+                mode = budget.get("policy_mode", "solver")
+                if category == "budget_exhausted":
+                    budget["phase"] = "budget_exhausted"
+                elif call_phase == "inspection":
+                    pass
+                elif call_phase == "targeted_recovery" or mode == "verify_candidate":
+                    budget["phase"] = "complete"
+                elif category in {
+                    "timeout",
+                    "execution_error",
+                    "parse_or_validation_error",
+                }:
+                    budget["phase"] = "recovery_available"
+                else:
+                    budget["phase"] = "complete"
+                phase_root = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+                if isinstance(phase_root, dict):
+                    phase_root[agent_name] = (
+                        "inspection"
+                        if call_phase == "inspection"
+                        and budget["phase"] == "primary_available"
+                        else budget["phase"]
+                    )
                 # Keep only a concise structured summary in the model context.
                 answer = (
                     str(payload.get("answer") or "")[:3000]
@@ -504,7 +632,9 @@ class CodeAgentBudgetPlugin(BasePlugin):
                     else "failed",
                     "outcome": category,
                     "answer": answer,
-                    "evidence": evidence[:8] if isinstance(evidence, list) else [],
+                    "evidence": [str(item)[:500] for item in evidence[:8]]
+                    if isinstance(evidence, list)
+                    else [],
                     "error_code": payload.get("error_code")
                     if isinstance(payload, dict)
                     else None,
