@@ -157,10 +157,11 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 "error_code": "CODE_AGENT_DOCUMENT_READING_RECOMMENDED",
                 "errors": [
                     (
-                        "Use document tools to read or retrieve file contents. Reserve "
-                        "code-agent for a complete computation; for local-file "
-                        "computation, parse the supplied file and solve the task "
-                        "in one call."
+                        "If document tools are available, use them to read file "
+                        "contents. Otherwise, do not retry file inspection. For an "
+                        "actual computational task, make one self-contained "
+                        "solve_with_code(files=[...]) call that parses the supplied "
+                        "file internally and performs the computation."
                     )
                 ],
                 "converge_now": False,

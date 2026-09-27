@@ -73,7 +73,10 @@ async def test_file_dump_recommendation_does_not_consume_code_agent_budget():
     )
 
     assert recommendation["error_code"] == "CODE_AGENT_DOCUMENT_READING_RECOMMENDED"
-    assert "document tools" in recommendation["errors"][0]
+    guidance = recommendation["errors"][0]
+    assert "If document tools are available" in guidance
+    assert "Otherwise, do not retry file inspection" in guidance
+    assert "solve_with_code(files=[...])" in guidance
     assert ctx.state.get(CODE_AGENT_BUDGET_STATE_KEY, {}) == {}
 
     ctx.function_call_id = "compute"

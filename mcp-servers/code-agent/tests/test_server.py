@@ -39,6 +39,31 @@ def execution(*, stdout=(), error=None):
     )
 
 
+class FakeModelClient:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.requests = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def post(self, _url, *, headers, json):
+        self.requests.append(
+            {"messages": [dict(message) for message in json["messages"]]}
+        )
+        content = self.responses.pop(0)
+        return SimpleNamespace(
+            is_error=False,
+            json=lambda: {
+                "choices": [{"message": {"content": content}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+
+
 def configure(monkeypatch, sandbox=None):
     monkeypatch.setenv("CODE_AGENT_API_KEY", "code-agent-test-secret")
     monkeypatch.setenv("CODE_AGENT_BASE_URL", "https://model.test/v1")
@@ -121,6 +146,48 @@ async def test_simple_arithmetic_and_token_usage(monkeypatch):
     assert sandbox.codes[0][0] == "print(6 * 7)"
     assert sandbox.killed
     assert configure.sandbox_options["allow_internet_access"] is False
+
+
+@pytest.mark.asyncio
+async def test_malformed_nested_action_is_retried_once_in_same_solve(monkeypatch):
+    sandbox = FakeSandbox([execution(stdout=["42"])])
+    configure(monkeypatch, sandbox)
+    client = FakeModelClient(
+        [
+            "not JSON",
+            '{"action":"execute","code":"print(6 * 7)"}',
+            '{"action":"finish","status":"completed","answer":"42"}',
+        ]
+    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda **_kwargs: client)
+
+    result = await server._solve("Calculate 6 times 7", [], "", 3, 30, 1_000)
+
+    assert result.status == "completed"
+    assert result.answer == "42"
+    assert result.steps_taken == 1
+    assert result.usage.llm_invocations == 3
+    assert len(client.requests) == 3
+    retry_messages = client.requests[1]["messages"]
+    assert any(
+        "exactly one valid JSON action object" in message["content"]
+        for message in retry_messages
+    )
+    assert len(sandbox.codes) == 1
+
+
+@pytest.mark.asyncio
+async def test_second_invalid_nested_action_returns_model_error(monkeypatch):
+    configure(monkeypatch)
+    client = FakeModelClient(["not JSON", '{"action":"unknown"}'])
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda **_kwargs: client)
+
+    result = await server._solve("Calculate 6 times 7", [], "", 3, 30, 1_000)
+
+    assert result.status == "failed"
+    assert result.error_code == "CODE_AGENT_MODEL_ERROR"
+    assert result.usage.llm_invocations == 2
+    assert len(client.requests) == 2
 
 
 @pytest.mark.asyncio

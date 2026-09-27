@@ -28,6 +28,10 @@ MAX_STEPS = 8
 CODE_AGENT_CLEANUP_HEADROOM_SECONDS = 30
 
 
+class _InvalidActionJSON(ValueError):
+    """Nested model content is not one supported code-agent action object."""
+
+
 def _e2b_lifetime_seconds(max_execution_seconds: float) -> int:
     """Keep the sandbox alive through execution and cleanup, within MCP timeout."""
     return min(
@@ -344,11 +348,24 @@ async def _request_model(
     except json.JSONDecodeError:
         start, end = content.find("{"), content.rfind("}")
         if start < 0 or end <= start:
-            raise ValueError("Model response was not valid JSON") from None
-        action = json.loads(content[start : end + 1])
+            raise _InvalidActionJSON("Model response was not valid JSON") from None
+        try:
+            action = json.loads(content[start : end + 1])
+        except json.JSONDecodeError:
+            raise _InvalidActionJSON("Model response was not valid JSON") from None
     if not isinstance(action, dict):
-        raise TypeError("Model response was not a JSON object")
+        raise _InvalidActionJSON("Model response was not a JSON object")
     return action
+
+
+def _supported_action(action: dict) -> bool:
+    kind = action.get("action")
+    return isinstance(kind, str) and (
+        kind in {"finish", "document"}
+        or (
+            kind == "execute" and isinstance(action.get("code"), str)
+        )
+    )
 
 
 def _parse_final(
@@ -559,22 +576,58 @@ async def _solve(
         nonlocal sandbox, steps, execution_failures
         async with httpx.AsyncClient(timeout=20) as client:
             for turn in range(max_steps + 1):
-                try:
-                    action = await _request_model(client, settings, messages, usage)
-                except TimeoutError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 - expose only a safe error.
+                action = None
+                invalid_action_error = ""
+                for action_attempt in range(2):
+                    if action_attempt:
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "The previous response was not a supported action. "
+                                    "Return exactly one valid JSON action object and "
+                                    "nothing else."
+                                ),
+                            }
+                        )
+                    try:
+                        candidate = await _request_model(
+                            client, settings, messages, usage
+                        )
+                    except _InvalidActionJSON as exc:
+                        invalid_action_error = str(exc)
+                        continue
+                    except TimeoutError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - expose only a safe error.
+                        return _result(
+                            status="failed",
+                            files_used=file_names,
+                            steps_taken=steps,
+                            errors=[
+                                _bounded(
+                                    f"Model request failed: {type(exc).__name__}: {exc}",
+                                    MAX_ERROR_CHARS,
+                                    secrets,
+                                )
+                            ],
+                            error_code="CODE_AGENT_MODEL_ERROR",
+                            usage=usage,
+                            started=started,
+                            execution_failures=execution_failures,
+                            secrets=secrets,
+                        )
+                    if not _supported_action(candidate):
+                        invalid_action_error = "Model response was not a supported action"
+                        continue
+                    action = candidate
+                    break
+                if action is None:
                     return _result(
                         status="failed",
                         files_used=file_names,
                         steps_taken=steps,
-                        errors=[
-                            _bounded(
-                                f"Model request failed: {type(exc).__name__}: {exc}",
-                                MAX_ERROR_CHARS,
-                                secrets,
-                            )
-                        ],
+                        errors=[_bounded(invalid_action_error, MAX_ERROR_CHARS, secrets)],
                         error_code="CODE_AGENT_MODEL_ERROR",
                         usage=usage,
                         started=started,
@@ -606,19 +659,6 @@ async def _solve(
                         error_code=(
                             "CODE_AGENT_FAILED" if status == "failed" else None
                         ),
-                        usage=usage,
-                        started=started,
-                        execution_failures=execution_failures,
-                        secrets=secrets,
-                    )
-                if kind != "execute" or not isinstance(action.get("code"), str):
-                    return _result(
-                        status="failed",
-                        answer="",
-                        files_used=file_names,
-                        steps_taken=steps,
-                        errors=["Model returned an unsupported action"],
-                        error_code="CODE_AGENT_MODEL_ERROR",
                         usage=usage,
                         started=started,
                         execution_failures=execution_failures,
