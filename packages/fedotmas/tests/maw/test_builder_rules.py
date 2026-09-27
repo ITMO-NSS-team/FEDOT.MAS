@@ -214,15 +214,15 @@ class TestInjectExitLoop:
         _inject_exit_loop([seq])
         assert seq.tools == original_tools
 
-    def test_injects_into_last_llm(self):
-        """exit_loop goes into the *last* LlmAgent only."""
+    def test_injects_into_all_llm_children(self):
+        """Every LlmAgent child gets exit_loop so limits can stop the loop."""
         from google.adk.tools.exit_loop_tool import exit_loop
 
         a1 = self._make_mock_llm_agent("first", tools=[])
         a2 = self._make_mock_llm_agent("second", tools=[])
         _inject_exit_loop([a1, a2])
+        assert exit_loop in a1.tools
         assert exit_loop in a2.tools
-        assert exit_loop not in a1.tools
 
     def test_none_tools_becomes_list(self):
         """Agent with tools=None gets [exit_loop]."""
