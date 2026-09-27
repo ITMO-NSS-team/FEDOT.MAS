@@ -224,6 +224,22 @@ def sanitize_config(config, kind: str, extra_tools: list[str] | None = None,
     return config
 
 
+def cap_run_tokens(config, ceiling: int) -> None:
+    """Give saved/generated agents a finite completion budget before building them.
+
+    Without it, some OpenRouter backends reserve the whole context window for
+    the response (131072 tokens) and reject even a short nonempty prompt.
+    Respect explicit smaller budgets; clamp missing, invalid or larger ones.
+    """
+    agents = getattr(config, "agents", None)
+    if agents is None:
+        agents = [config.coordinator, *config.workers]
+    for agent in agents:
+        current = agent.max_output_tokens
+        if current is None or current <= 0 or current > ceiling:
+            agent.max_output_tokens = ceiling
+
+
 _URL_RE = re.compile(r"https?://\S+")
 _DATA_HINT_RE = re.compile(
     # Намеренно широко: лишний инструмент безвреден, а пропуск приводит к тому,

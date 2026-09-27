@@ -11,7 +11,8 @@ from pathlib import Path
 from fedotmas import MASConfig, MAWConfig
 
 from .agent_names import latinize_mas
-from .normalize import _builtin_names, _valid_name, sanitize_config
+from .config import AGENT_MAX_OUTPUT_TOKENS
+from .normalize import _builtin_names, _valid_name, cap_run_tokens, sanitize_config
 from .schemas import CodeExportIn
 
 
@@ -161,6 +162,7 @@ def build_code_archive(body: CodeExportIn, *, tools: list[str], default_model: s
     # Export the runnable form, with original prompts/topology and active model.
     config = sanitize_config(config, body.kind, custom,
                              available_tools=set(tools) | set(custom))
+    cap_run_tokens(config, AGENT_MAX_OUTPUT_TOKENS)
     if body.kind == "mas":
         latinize_mas(config)
     if body.model:
