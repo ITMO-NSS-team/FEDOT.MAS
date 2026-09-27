@@ -14,6 +14,7 @@ from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
+from fedotmas.common.llm import llm_request_deadline
 from fedotmas.common.logging import get_logger
 from fedotmas.maw.handoffs import ABSTENTION_STATE_KEY, unresolved_execution_issues
 
@@ -141,15 +142,19 @@ async def run_pipeline(
             memory_service=memory_service,
         ) as runner:
             try:
-                await _consume_with_timeout(
-                    runner=runner,
-                    user_id=user_id,
-                    session_id=session.id,
-                    message=message,
-                    usage=usage,
-                    truncated_agents=truncated_agents,
-                    timeout=timeout,
-                )
+                deadline = state.get("_fedotmas_task_deadline_monotonic")
+                if not isinstance(deadline, int | float):
+                    deadline = time.monotonic() + timeout if timeout and timeout > 0 else None
+                with llm_request_deadline(deadline):
+                    await _consume_with_timeout(
+                        runner=runner,
+                        user_id=user_id,
+                        session_id=session.id,
+                        message=message,
+                        usage=usage,
+                        truncated_agents=truncated_agents,
+                        timeout=timeout,
+                    )
             except TimeoutError:
                 timed_out = True
                 _log.warning(

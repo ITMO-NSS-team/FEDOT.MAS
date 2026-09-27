@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import json
+import math
+import os
+import time
 from collections.abc import Mapping
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 from google.adk.models.lite_llm import LiteLlm
 from litellm import ModelResponse, ModelResponseStream
-from openai import AsyncOpenAI
+from openai import APITimeoutError, AsyncOpenAI
 from pydantic import BaseModel
 
 from fedotmas.common.logging import get_logger
@@ -21,10 +27,63 @@ __all__ = ["make_llm"]
 _log = get_logger("fedotmas.llm")
 _ERROR_PAYLOAD_LEN = 2000
 _MAX_TOOL_ARGUMENT_RETRIES = 2
+_DEFAULT_REQUEST_TIMEOUT_S = 120.0
+_TIMEOUT_RETRY_BACKOFF_S = 0.25
+_REQUEST_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "fedotmas_llm_request_deadline", default=None
+)
 _INVALID_TOOL_ARGUMENTS_RETRY = (
     "The previous tool-call arguments were invalid JSON. Return valid, concise "
     "JSON tool arguments."
 )
+
+
+@contextmanager
+def llm_request_deadline(deadline: float | None):
+    """Expose the current task's monotonic deadline to provider clients."""
+    token = _REQUEST_DEADLINE.set(deadline)
+    try:
+        yield
+    finally:
+        _REQUEST_DEADLINE.reset(token)
+
+
+def _request_timeout_from_env() -> float:
+    value = os.getenv("FEDOTMAS_LLM_REQUEST_TIMEOUT_S")
+    if value is None:
+        return _DEFAULT_REQUEST_TIMEOUT_S
+    try:
+        timeout = float(value)
+    except ValueError:
+        timeout = 0.0
+    if timeout <= 0 or not math.isfinite(timeout):
+        _log.warning(
+            "Invalid FEDOTMAS_LLM_REQUEST_TIMEOUT_S={!r}; using {}s",
+            value,
+            _DEFAULT_REQUEST_TIMEOUT_S,
+        )
+        return _DEFAULT_REQUEST_TIMEOUT_S
+    return timeout
+
+
+def _task_safe_window(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    return max(0.0, remaining - min(1.0, max(0.001, remaining * 0.01)))
+
+
+class LLMRequestTimeout(RuntimeError):
+    """A provider request exceeded its bounded wall-clock window."""
+
+    code = "LLM_REQUEST_TIMEOUT"
+
+    def __init__(self, model: str, timeout: float, elapsed: float):
+        super().__init__(
+            f"LLM_REQUEST_TIMEOUT: model={model} timeout={timeout:.3f}s "
+            f"elapsed={elapsed:.3f}s"
+        )
+        self.model = model
+        self.timeout_seconds = timeout
+        self.elapsed_seconds = elapsed
 
 
 def _json_value(value: Any) -> Any:
@@ -149,14 +208,38 @@ def _attach_usage(error: Exception, prompt_tokens: int, completion_tokens: int) 
 class _StreamAdapter:
     """Wraps AsyncOpenAI async stream to yield ``ModelResponseStream`` objects."""
 
-    def __init__(self, stream):
+    def __init__(self, stream, *, model: str, timeout: float, deadline: float):
         self._stream = stream
+        self._model = model
+        self._timeout = timeout
+        self._deadline = deadline
+        self._started = time.monotonic()
+        self._prompt_tokens = 0
+        self._completion_tokens = 0
 
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> ModelResponseStream:
-        chunk = await self._stream.__anext__()
+        remaining = self._deadline - asyncio.get_running_loop().time()
+        try:
+            if remaining <= 0:
+                raise TimeoutError
+            chunk = await asyncio.wait_for(self._stream.__anext__(), timeout=remaining)
+        except (TimeoutError, APITimeoutError) as exc:
+            elapsed = time.monotonic() - self._started
+            _log.error(
+                "OpenAI-compatible request timed out | model={} timeout={}s elapsed={}s",
+                self._model,
+                self._timeout,
+                round(elapsed, 3),
+            )
+            error = LLMRequestTimeout(self._model, self._timeout, elapsed)
+            _attach_usage(error, self._prompt_tokens, self._completion_tokens)
+            raise error from exc
+        prompt, completion = _response_usage(chunk)
+        self._prompt_tokens += prompt
+        self._completion_tokens += completion
         if _finish_reason_is_error(chunk):
             payload = _error_payload(chunk)
             _log.error(
@@ -177,7 +260,13 @@ class _ProxyClient:
     """
 
     def __init__(self, base_url: str, api_key: str, extra_body: dict[str, Any] | None):
-        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        self._request_timeout = _request_timeout_from_env()
+        self._client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=self._request_timeout,
+            max_retries=0,
+        )
         self._extra_body = dict(extra_body or {})
 
     def __repr__(self) -> str:
@@ -195,14 +284,79 @@ class _ProxyClient:
                 **kw.get("extra_body", {}),
             }
         stream = kw.get("stream", False)
-        _log.debug(
-            "OpenAI-compatible request | model={} tools={}",
-            model,
-            _tool_names_for_log(tools),
-        )
-        resp = await self._client.chat.completions.create(**kw)
+        task_deadline = _REQUEST_DEADLINE.get()
+        started = time.monotonic()
+        loop = asyncio.get_running_loop()
+        total_timeout = 2 * self._request_timeout + _TIMEOUT_RETRY_BACKOFF_S
+        total_deadline = loop.time() + total_timeout
+        if task_deadline is not None:
+            total_deadline = min(
+                total_deadline,
+                loop.time() + _task_safe_window(task_deadline),
+            )
+        request_number = 0
+        timeout_retried = False
+
+        async def request(request_kw: dict[str, Any]):
+            nonlocal request_number
+            request_number += 1
+            remaining = total_deadline - loop.time()
+            if task_deadline is not None:
+                remaining = min(remaining, _task_safe_window(task_deadline))
+            timeout = min(self._request_timeout, remaining)
+            if timeout <= 0:
+                raise LLMRequestTimeout(model, self._request_timeout, time.monotonic() - started)
+            request_kw["timeout"] = timeout
+            _log.debug(
+                "OpenAI-compatible request | model={} request_timeout={}s attempt={} tools={}",
+                model,
+                round(timeout, 3),
+                request_number,
+                _tool_names_for_log(tools),
+            )
+            request_started = time.monotonic()
+            try:
+                return await asyncio.wait_for(
+                    self._client.chat.completions.create(**request_kw), timeout=timeout
+                ), timeout
+            except (TimeoutError, APITimeoutError) as exc:
+                elapsed = time.monotonic() - request_started
+                _log.error(
+                    "OpenAI-compatible request timed out | model={} timeout={}s elapsed={}s",
+                    model,
+                    round(timeout, 3),
+                    round(elapsed, 3),
+                )
+                raise LLMRequestTimeout(model, timeout, elapsed) from exc
+
+        async def request_with_timeout_retry(request_kw: dict[str, Any]):
+            nonlocal timeout_retried
+            try:
+                return await request(dict(request_kw))
+            except LLMRequestTimeout:
+                remaining = total_deadline - loop.time()
+                if task_deadline is not None:
+                    remaining = min(remaining, _task_safe_window(task_deadline))
+                if (
+                    stream
+                    or timeout_retried
+                    or remaining
+                    <= _TIMEOUT_RETRY_BACKOFF_S
+                    + min(self._request_timeout, 0.001)
+                ):
+                    raise
+                timeout_retried = True
+                await asyncio.sleep(_TIMEOUT_RETRY_BACKOFF_S)
+                return await request(dict(request_kw))
+
+        resp, active_timeout = await request_with_timeout_retry(kw)
         if stream:
-            return _StreamAdapter(resp)
+            return _StreamAdapter(
+                resp,
+                model=model,
+                timeout=active_timeout,
+                deadline=total_deadline,
+            )
         total_prompt_tokens, total_completion_tokens = _response_usage(resp)
         for attempt in range(_MAX_TOOL_ARGUMENT_RETRIES + 1):
             finish_reason, tool_call_count, content_length = _response_shape(resp)
@@ -240,7 +394,7 @@ class _ProxyClient:
                 {"role": "user", "content": _INVALID_TOOL_ARGUMENTS_RETRY},
             ]
             try:
-                resp = await self._client.chat.completions.create(**retry_kw)
+                resp, active_timeout = await request_with_timeout_retry(retry_kw)
             except Exception as error:
                 _attach_usage(error, total_prompt_tokens, total_completion_tokens)
                 raise
