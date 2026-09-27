@@ -396,6 +396,30 @@ class TestMaxOutputTokensIsPassedThrough:
         assert self._built(None).generate_content_config is None
 
 
+def test_code_agent_worker_guidance_reserves_calls_for_computation(monkeypatch):
+    monkeypatch.setattr(
+        "fedotmas.maw.builder.create_toolset",
+        lambda *_args, **_kwargs: (lambda: None),
+    )
+    agent = _build_llm_agent(
+        MAWAgentConfig(
+            name="solver",
+            instruction="Compute from the local file.",
+            output_key="result",
+            tools=["code-agent"],
+        ),
+        None,
+        None,
+        autonomous=False,
+    )
+
+    assert "self-contained solve_with_code(files=[...]) call" in agent.instruction
+    assert "Do not use code-agent merely to inspect or print file contents" in (
+        agent.instruction
+    )
+    assert "use document tools for reading" in agent.instruction
+
+
 def _readonly_context(state: dict):
     """Minimal stand-in: both attributes ADK's interpolation reads."""
     ctx = MagicMock()

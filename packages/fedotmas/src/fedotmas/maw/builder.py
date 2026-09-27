@@ -686,8 +686,10 @@ def _build_llm_agent(
             "not data transport. Files are staged automatically. Each solve_with_code "
             "call uses a fresh independent sandbox: filesystem, packages, Python state, "
             "scripts, and solver progress do not persist between calls. Prefer one "
-            "complete bounded call; if another call is needed, pass every required "
-            "file again."
+            "self-contained solve_with_code(files=[...]) call that parses the file "
+            "and performs the requested computation. Do not use code-agent merely "
+            "to inspect or print file contents; use document tools for reading. If "
+            "another computation call is needed, pass every required file again."
         )
     terminal_boundary = (
         final_answer_contract is not None and cfg.name == final_answer_agent

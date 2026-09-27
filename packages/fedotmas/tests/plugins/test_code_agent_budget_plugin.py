@@ -53,6 +53,45 @@ async def test_call_count_limit_blocks_further_nested_jobs():
 
 
 @pytest.mark.asyncio
+async def test_file_dump_recommendation_does_not_consume_code_agent_budget():
+    plugin = CodeAgentBudgetPlugin(
+        max_calls_per_agent=2,
+        total_seconds_per_agent=120,
+        max_seconds_per_call=60,
+        task_timeout_seconds=300,
+        deadline_reserve_seconds=30,
+    )
+    ctx = _context(deadline=time.monotonic() + 200, call_id="read")
+    read_args = {
+        "task": "Read and print the full contents of the provided CSV file.",
+        "files": ["/host/data.csv"],
+        "max_execution_seconds": 60,
+    }
+
+    recommendation = await plugin.before_tool_callback(
+        tool=_tool(), tool_args=read_args, tool_context=ctx
+    )
+
+    assert recommendation["error_code"] == "CODE_AGENT_DOCUMENT_READING_RECOMMENDED"
+    assert "document tools" in recommendation["errors"][0]
+    assert ctx.state.get(CODE_AGENT_BUDGET_STATE_KEY, {}) == {}
+
+    ctx.function_call_id = "compute"
+    compute_args = {
+        "task": "Parse the CSV and calculate the mean value in the amount column.",
+        "files": ["/host/data.csv"],
+        "max_execution_seconds": 60,
+    }
+    assert await plugin.before_tool_callback(
+        tool=_tool(), tool_args=compute_args, tool_context=ctx
+    ) is None
+    budget = ctx.state[CODE_AGENT_BUDGET_STATE_KEY]["optimizer"]
+    assert compute_args["max_execution_seconds"] == 60
+    assert budget["calls"] == 1
+    assert budget["reserved_seconds"] == 60
+
+
+@pytest.mark.asyncio
 async def test_cumulative_nested_wall_time_is_reserved_and_enforced():
     plugin = CodeAgentBudgetPlugin(
         max_calls_per_agent=5,

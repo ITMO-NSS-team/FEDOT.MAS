@@ -467,11 +467,114 @@ async def test_valid_terminal_answer_survives_incomplete_intermediate_handoff(
         )
 
     attempt = json.loads((tmp_path / "attempts" / "attempt_01.json").read_text())
+    saved_result = json.loads((tmp_path / "result.json").read_text())
     assert result["response"] == "65"
     assert result["pipeline_status"] == "incomplete"
     assert result["unresolved_execution_issues"][0]["kind"] == "incomplete_artifact"
     assert attempt["response"] == "65"
     assert attempt["pipeline_status"] == "incomplete"
+    assert saved_result["response"] == "65"
+    assert saved_result["pipeline_status"] == "incomplete"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pipeline_status", "diagnostic_key", "diagnostic_value"),
+    [
+        (
+            "incomplete",
+            "_fedotmas_execution",
+            {"contract_repairs": {"solver": [{"status": "repair_failed"}]}},
+        ),
+        (
+            "limited",
+            "_fedotmas_code_agent_budget",
+            {"solver": {"status": "exhausted", "calls": 4}},
+        ),
+    ],
+)
+async def test_valid_terminal_answer_survives_intermediate_diagnostics(
+    tmp_path: Path,
+    pipeline_status: str,
+    diagnostic_key: str,
+    diagnostic_value: dict,
+):
+    class DiagnosticMAW(_FakeMAW):
+        async def run(
+            self,
+            _query: str,
+            *,
+            timeout: int,
+            final_answer_contract: str | None = None,
+            initial_state: dict | None = None,
+        ) -> dict[str, str]:
+            self.last_result = PipelineResult(
+                state={"final_answer": "<solution>65</solution>", diagnostic_key: diagnostic_value},
+                status=pipeline_status,
+            )
+            return self.last_result.state
+
+    task = SimpleNamespace(
+        task_id=f"task-terminal-with-{diagnostic_key}",
+        question="Question?",
+        ground_truth="65",
+        file_path=None,
+        file_name=None,
+        difficulty="1",
+    )
+    with patch("benchmarks.gaia.run_gaia.MAW", DiagnosticMAW):
+        result = await process_task(
+            task,
+            SimpleNamespace(is_correct_answer=lambda answer, truth: answer == truth),
+            tmp_path,
+            enable_langfuse=False,
+        )
+
+    assert result["response"] == "65"
+    assert result["pipeline_status"] == pipeline_status
+    assert result["pipeline_diagnostics"][diagnostic_key] == diagnostic_value
+
+
+@pytest.mark.asyncio
+async def test_explicit_terminal_abstention_remains_incomplete(tmp_path: Path):
+    class AbstainingMAW(_FakeMAW):
+        async def run(
+            self,
+            _query: str,
+            *,
+            timeout: int,
+            final_answer_contract: str | None = None,
+            initial_state: dict | None = None,
+        ) -> dict[str, str]:
+            self.last_result = PipelineResult(
+                state={"final_answer": "<abstain>Unable to solve</abstain>"},
+                status="incomplete",
+            )
+            return self.last_result.state
+
+    task = SimpleNamespace(
+        task_id="task-explicit-terminal-abstention",
+        question="Question?",
+        ground_truth="65",
+        file_path=None,
+        file_name=None,
+        difficulty="1",
+    )
+    with (
+        patch("benchmarks.gaia.run_gaia.MAW", AbstainingMAW),
+        patch.dict("os.environ", {"FEDOTMAS_GAIA_TASK_ATTEMPTS": "1"}),
+        pytest.raises(RuntimeError, match="explicitly abstained"),
+    ):
+        await process_task(
+            task,
+            SimpleNamespace(is_correct_answer=lambda answer, truth: answer == truth),
+            tmp_path,
+            enable_langfuse=False,
+        )
+
+    attempt = json.loads((tmp_path / "attempts" / "attempt_01.json").read_text())
+    assert attempt["attempt_status"] == "incomplete"
+    assert attempt["response"] == ""
 
 
 @pytest.mark.asyncio

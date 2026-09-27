@@ -1138,35 +1138,28 @@ async def _process_task_attempt(
         )
         answer = normalize_answer(extract_terminal_answer(state, terminal.output_key))
         execution_issues = unresolved_execution_issues(state)
-        if pipeline_status != "completed":
-            handoff_only_incomplete = (
-                pipeline_status == "incomplete"
-                and not terminal_abstained
-                and bool(answer)
-                and bool(execution_issues)
-                and all(
-                    issue.get("kind") in {"incomplete_handoff", "incomplete_artifact"}
-                    and issue.get("agent") != final_agent
-                    for issue in execution_issues
-                )
-            )
-            if not handoff_only_incomplete:
-                raise RuntimeError(
-                    f"MAW execution ended with status '{pipeline_status}'; "
-                    "partial state is retained for diagnostics"
-                )
-            _log.warning(
-                "Accepting valid terminal answer with incomplete pipeline | "
-                "task_id={} status={} unresolved_execution_issues={!r}",
-                task.task_id,
-                pipeline_status,
-                execution_issues,
+        pipeline_diagnostics = _pipeline_diagnostics(state)
+        if pipeline_status in {"failed", "timed_out"}:
+            raise RuntimeError(
+                f"MAW execution ended with status '{pipeline_status}'; "
+                "partial state is retained for diagnostics"
             )
         if terminal_abstained:
+            answer = ""
             raise RuntimeError("Configured terminal agent explicitly abstained")
         if not answer:
             raise ValueError(
                 f"Configured terminal output '{terminal.output_key}' is missing"
+            )
+        if pipeline_status != "completed":
+            _log.warning(
+                "Accepting terminal answer despite non-completed pipeline status | "
+                "task_id={} status={} unresolved_execution_issues={!r} "
+                "execution_diagnostics={!r}",
+                task.task_id,
+                pipeline_status,
+                execution_issues,
+                pipeline_diagnostics,
             )
         terminal_output_ready = True
         is_correct = (
@@ -1191,6 +1184,7 @@ async def _process_task_attempt(
             "elapsed": maw.elapsed,
             "research_telemetry": telemetry.snapshot() if telemetry else {},
             "unresolved_execution_issues": execution_issues,
+            "pipeline_diagnostics": pipeline_diagnostics,
         }
         await _write_attempt(task_log_dir, attempt_number, result)
         return result
@@ -1234,6 +1228,7 @@ async def _process_task_attempt(
             "elapsed": getattr(maw, "elapsed", 0.0) if maw is not None else 0.0,
             "research_telemetry": telemetry.snapshot() if telemetry else {},
             "unresolved_execution_issues": unresolved_execution_issues(state),
+            "pipeline_diagnostics": _pipeline_diagnostics(state),
         }
         if pipeline_status == "incomplete":
             _log.warning(
@@ -1278,6 +1273,14 @@ def _token_usage(maw: MAW | None, pipeline_result: Any) -> dict[str, int]:
         "pipeline_completion": pipeline_completion,
         "total_prompt": meta_prompt + pipeline_prompt,
         "total_completion": meta_completion + pipeline_completion,
+    }
+
+
+def _pipeline_diagnostics(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in state.items()
+        if key.startswith(("_fedotmas_", "__fedotmas_"))
     }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from fedotmas.maw.models import ArtifactContract, ArtifactRequirement
@@ -23,7 +24,7 @@ def is_explicit_abstention(value: Any) -> bool:
 
 
 def parse_artifact(value: Any) -> dict[str, Any] | None:
-    """Return a structured artifact mapping; scalar answer strings are rejected."""
+    """Parse strict JSON or one unambiguous fenced JSON object with prose."""
     if isinstance(value, dict):
         return value
     if not isinstance(value, str):
@@ -31,8 +32,38 @@ def parse_artifact(value: Any) -> dict[str, Any] | None:
     try:
         parsed = json.loads(value)
     except (json.JSONDecodeError, TypeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+
+    fences = list(
+        re.finditer(r"```([A-Za-z0-9_-]*)[ \t]*\n?(.*?)```", value, re.DOTALL)
+    )
+    if len(fences) != 1 or fences[0].group(1).casefold() != "json":
         return None
-    return parsed if isinstance(parsed, dict) else None
+
+    fence = fences[0]
+    try:
+        parsed = json.loads(fence.group(2).strip())
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    # Surrounding prose may explain the artifact, but cannot contain another
+    # JSON object that would make the intended handoff ambiguous.
+    surrounding = value[: fence.start()] + value[fence.end() :]
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(surrounding):
+        if char != "{":
+            continue
+        try:
+            candidate, _end = decoder.raw_decode(surrounding[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            return None
+    return parsed
 
 
 def missing_contract_fields(

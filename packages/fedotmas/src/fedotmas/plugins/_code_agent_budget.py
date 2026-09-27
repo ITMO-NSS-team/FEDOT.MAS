@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -16,6 +17,37 @@ from fedotmas.plugins._research_telemetry import ResearchTelemetry
 CODE_AGENT_BUDGET_STATE_KEY = "_fedotmas_code_agent_budget"
 TASK_DEADLINE_STATE_KEY = "_fedotmas_task_deadline_monotonic"
 GAIA_TASK_FILE_PATH_STATE_KEY = "_fedotmas_gaia_task_file_path"
+
+_DOCUMENT_READING_ACTIONS = re.compile(
+    r"\b(?:read|print|dump|show|display|view|inspect)\b", re.IGNORECASE
+)
+_DOCUMENT_CONTENT_TARGETS = re.compile(
+    r"\b(?:file|contents?|rows?|columns?|spreadsheet|csv|json|pdf|document|table)\b",
+    re.IGNORECASE,
+)
+_MATERIAL_COMPUTATION = re.compile(
+    r"\b(?:calculat\w*|comput\w*|solv\w*|analy[sz]\w*|count\w*|sum|average|mean|median|"
+    r"max(?:imum)?|min(?:imum)?|highest|lowest|where|matching|satisf\w*|"
+    r"filter\w*|aggregat\w*|group\w*|join\w*|rank\w*|compar\w*|optimi[sz]\w*|"
+    r"convert\w*|transform\w*|derive\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_document_reading_call(tool_args: dict[str, Any]) -> bool:
+    task = tool_args.get("task", "")
+    context = tool_args.get("context", "")
+    instruction = " ".join(
+        value for value in (task, context) if isinstance(value, str)
+    )
+    if not isinstance(task, str) or not task.strip():
+        return False
+    if _MATERIAL_COMPUTATION.search(instruction):
+        return False
+    has_file = bool(tool_args.get("files")) or bool(
+        _DOCUMENT_CONTENT_TARGETS.search(instruction)
+    )
+    return has_file and bool(_DOCUMENT_READING_ACTIONS.search(instruction))
 
 
 class CodeAgentBudgetPlugin(BasePlugin):
@@ -119,6 +151,21 @@ class CodeAgentBudgetPlugin(BasePlugin):
     ) -> dict | None:
         if strip_tool_name_prefix(tool.name).lower() != "solve_with_code":
             return None
+        if _is_document_reading_call(tool_args):
+            return {
+                "status": "blocked",
+                "error_code": "CODE_AGENT_DOCUMENT_READING_RECOMMENDED",
+                "errors": [
+                    (
+                        "Use document tools to read or retrieve file contents. Reserve "
+                        "code-agent for a complete computation; for local-file "
+                        "computation, parse the supplied file and solve the task "
+                        "in one call."
+                    )
+                ],
+                "converge_now": False,
+                "session_persistent": False,
+            }
         task, context = tool_args.get("task", ""), tool_args.get("context", "")
         # Let the tool return its actionable argument correction. Rejected data
         # transport does not consume a nested execution slot or time budget.

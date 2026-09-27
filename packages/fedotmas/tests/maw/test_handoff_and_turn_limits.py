@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from fedotmas.core.runner import run_pipeline
 from fedotmas.maw import builder
+from fedotmas.maw.handoffs import parse_artifact
 from fedotmas.maw.models import (
     ArtifactContract,
     ArtifactRequirement,
@@ -30,6 +31,23 @@ def _context(state: dict) -> MagicMock:
     context._invocation_context.session.state = state
     context._invocation_context.artifact_service = None
     return context
+
+
+def test_parse_artifact_accepts_prose_wrapped_fenced_json():
+    assert parse_artifact(
+        'Here is the requested handoff:\n```json\n{"answer": 42}\n```\nDone.'
+    ) == {"answer": 42}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        '```json\n{"answer": 1}\n```\n```json\n{"answer": 2}\n```',
+        'First {"answer": 1}; second {"answer": 2}.\n```json\n{"answer": 3}\n```',
+    ],
+)
+def test_parse_artifact_rejects_ambiguous_multiple_objects(value):
+    assert parse_artifact(value) is None
 
 
 def _contract_config() -> MAWConfig:
@@ -903,7 +921,10 @@ async def test_contract_repair_rejects_invented_required_values(monkeypatch):
         output_contract=ArtifactContract(required_fields=["claim", "evidence"]),
     )
     agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
-    original = '{"claim":"x","citation":"a citation"}'
+    original = (
+        'Source data follows:\n'
+        '```json\n{"claim":"x","citation":"a citation"}\n```'
+    )
     state = {"artifact": original}
 
     await agent.after_agent_callback(_context(state))
@@ -937,7 +958,7 @@ async def test_contract_repair_accepts_semantic_key_remapping(monkeypatch):
         output_contract=ArtifactContract(required_fields=["solutions"]),
     )
     agent = builder._build_llm_agent(cfg, None, None, autonomous=False)
-    state = {"artifact": '{"valid_pairs":[[7,9]]}'}
+    state = {"artifact": 'Computed values:\n```json\n{"valid_pairs":[[7,9]]}\n```'}
 
     await agent.after_agent_callback(_context(state))
 
@@ -1871,7 +1892,12 @@ async def test_repaired_artifact_is_validated_and_consumed_downstream(monkeypatc
         responses=[
             types.Content(
                 role="model",
-                parts=[types.Part.from_text(text='{"valid_pairs":[[7,9]]}')],
+                parts=[
+                    types.Part.from_text(
+                        text='Calculated candidate pairs:\n'
+                        '```json\n{"valid_pairs":[[7,9]]}\n```'
+                    )
+                ],
             ),
             types.Content(
                 role="model",
