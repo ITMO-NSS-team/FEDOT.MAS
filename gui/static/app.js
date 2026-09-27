@@ -820,13 +820,16 @@ function rubberQualityHtml(preset) {
   const current = preset.rubberValidation;
   const currentValue = current?.mape_pct;
   const baseline = quality?.baseline_example;
+  const heldOut = current?.reference_used_in_training === false;
   const currentText = Number.isFinite(currentValue) && currentValue >= 0
-    ? `${currentValue.toFixed(2).replace(".", ",")} % — среднее по четырём характеристикам. Сравнение с точной рецептурой из обучающего набора, не независимая проверка.`
+    ? heldOut
+      ? `${currentValue.toFixed(2).replace(".", ",")} % — среднее по четырём характеристикам для рецептуры этого запуска. Контрольная точка исключена из обучения; прогноз построен по ${esc(current.training_rows)} другим рецептурам. Это проверка по оцифрованным данным статьи, не лабораторное испытание и не оценка ответа агентов МАС.`
+      : `${currentValue.toFixed(2).replace(".", ",")} % — среднее по четырём характеристикам. Сравнение с точной рецептурой из обучающего набора, не независимая проверка.`
     : current?.reason === "no_exact_reference"
       ? `Нет контрольных измерений для этой рецептуры.${baseline ? " Ниже приведён отдельный пример с опубликованными значениями." : ""}`
       : "Нет данных проверки текущего расчёта. Выполните новый запуск с обновлённым предиктором.";
   const propertyText = value => Number.isFinite(value) ? value.toFixed(3).replace(".", ",") : "—";
-  const baselineBlock = baseline ? `<h4>Базовый пример: протекторная смесь NR/SBR 50/50, N220 60 phr</h4>
+  const baselineBlock = baseline && !Number.isFinite(currentValue) ? `<h4>Базовый пример: протекторная смесь NR/SBR 50/50, N220 60 phr</h4>
     <div class="ans-text">Одну опубликованную точку исключили из обучения: прогноз рассчитан по остальным
     ${esc(baseline.training_rows)} рецептурам и сопоставлен со значениями этой точки.</div>
     <table class="ans-table"><thead><tr><th>Характеристика</th><th>Прогноз</th><th>Из статьи</th><th>APE</th></tr></thead><tbody>
@@ -848,7 +851,10 @@ function rubberQualityHtml(preset) {
     Это оценка расчётной модели на наборе данных, не ошибка конкретной рецептуры и не оценка ответа МАС.
     Требуется независимая лабораторная проверка.</div>
     <h4>MAPE текущего расчёта</h4><div class="ans-text">${currentText}</div>
-    ${Number.isFinite(currentValue) ? `<table class="ans-table"><thead><tr><th>Характеристика</th><th>Ошибка, %</th></tr></thead><tbody>${Object.entries(labels).map(([key, label]) => {
+    ${Number.isFinite(currentValue) && heldOut ? `<table class="ans-table"><thead><tr><th>Характеристика</th><th>Прогноз</th><th>Из статьи</th><th>APE</th></tr></thead><tbody>${Object.entries(labels).map(([key, label]) => {
+      const value = current.ape_pct?.[key];
+      return `<tr><td>${label}</td><td>${propertyText(current.predicted?.[key])}</td><td>${propertyText(current.reference?.[key])}</td><td>${Number.isFinite(value) ? value.toFixed(2).replace(".", ",") + " %" : "нет данных"}</td></tr>`;
+    }).join("")}</tbody></table>` : Number.isFinite(currentValue) ? `<table class="ans-table"><thead><tr><th>Характеристика</th><th>Ошибка, %</th></tr></thead><tbody>${Object.entries(labels).map(([key, label]) => {
       const value = current.ape_pct?.[key];
       return `<tr><td>${label}</td><td>${Number.isFinite(value) ? value.toFixed(2).replace(".", ",") : "нет данных"}</td></tr>`;
     }).join("")}</tbody></table>` : ""}
@@ -1081,7 +1087,9 @@ async function runJudge() {
 function normalizedSynthetic(entry) {
   if (typeof entry === "string") return { query: entry, model: "" };
   if (!entry || typeof entry !== "object") return null;
-  return { query: String(entry.query || ""), model: String(entry.model || "") };
+  const normalized = { query: String(entry.query || ""), model: String(entry.model || "") };
+  if (entry.source === "published") normalized.source = "published";
+  return normalized;
 }
 
 function saveSyntheticExamples() {
@@ -1101,7 +1109,7 @@ function renderSyntheticExamples() {
     <div class="synthetic-item">
       <div class="synthetic-text">${esc(item.query)}</div>
       <div class="synthetic-meta">
-        <span>Новый тестовый запрос</span>
+        <span>${item.source === "published" ? "Проверка по опубликованной рецептуре" : "Новый тестовый запрос"}</span>
         <span class="synthetic-controls">
           <button type="button" data-action="use" data-i="${i}">Подставить</button>
           <button type="button" data-action="remove" data-i="${i}">Удалить</button>
@@ -1121,6 +1129,7 @@ function renderSyntheticExamples() {
       const query = S.syntheticExamples[i].query;
       $("query").value = query;
       S.query = query;
+      S.preset.rubberValidation = null;
       S.answer = null; S.baseline = null; S.judge = null; S.review = null;
       $("synthetic-note").textContent = "Вариант подставлен. Запустите систему для нового теста.";
       renderAnswer();
@@ -2446,6 +2455,13 @@ function initPresets() {
       saved.manualNote = preset.manualNote;
       saved.breakdown = JSON.parse(JSON.stringify(preset.breakdown));
       saved.effortRevision = preset.effortRevision;
+      queryUpdated = true;
+    }
+    if (saved && (saved.syntheticRevision || 0) < (preset.syntheticRevision || 0)) {
+      const existing = Array.isArray(saved.syntheticExamples) ? saved.syntheticExamples : [];
+      saved.syntheticExamples = existing.concat((preset.syntheticExamples || [])
+        .filter((example) => !existing.some((item) => (item?.query || item) === example.query)));
+      saved.syntheticRevision = preset.syntheticRevision;
       queryUpdated = true;
     }
   }

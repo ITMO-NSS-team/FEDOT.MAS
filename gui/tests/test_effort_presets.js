@@ -48,9 +48,15 @@ for (const saved of context.S.custom) {
   assert.equal(saved.effortRevision, 1);
   assert.equal(saved.breakdown.subtasks.length, 6);
 }
+const tire = context.S.custom.find(p => p.syntheticRevision === 1);
+assert.equal(tire.syntheticExamples.length, 1);
+assert.equal(tire.syntheticExamples[0].source, "published");
+assert.match(tire.syntheticExamples[0].query, /NR SMR-20 — 50 phr; SBR-1502 — 50 phr; технический углерод N220 — 60 phr/);
+assert.match(tire.syntheticExamples[0].query, /MAPE этого запуска/);
 // Re-running initialization must not overwrite later user changes.
 context.S.custom[0].manual = "user estimate";
 vm.runInContext(`{ ${migration} }`, context);
 assert.equal(stores, 1);
 assert.equal(context.S.custom[0].manual, "user estimate");
+assert.equal(tire.syntheticExamples.length, 1);
 console.log("Effort totals, assumptions and saved-scenario migration: OK");

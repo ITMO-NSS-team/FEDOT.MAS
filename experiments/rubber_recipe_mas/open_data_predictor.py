@@ -210,14 +210,23 @@ def predict_properties(
             f"N220 {min(cb_values):g}-{max(cb_values):g} phr"
         )
 
-    models = {target: fit_surface(rows, target) for target in TARGETS}
+    held_out = next(
+        (index for index, row in enumerate(rows)
+         if math.isclose(row["nr_phr"], nr_phr, abs_tol=1e-9, rel_tol=0)
+         and math.isclose(row["carbon_black_n220_phr"], carbon_black_phr,
+                          abs_tol=1e-9, rel_tol=0)),
+        None,
+    )
+    # A published measurement must never be used to train its own prediction.
+    training = rows if held_out is None else rows[:held_out] + rows[held_out + 1 :]
+    models = {target: fit_surface(training, target) for target in TARGETS}
     metrics = {target: loocv_metrics(rows, target) for target in TARGETS}
     predictions = {
         target: model.predict(nr_phr, carbon_black_phr)
         for target, model in models.items()
     }
     nearest = min(
-        rows,
+        training,
         key=lambda row: (
             ((nr_phr - row["nr_phr"]) / 25.0) ** 2
             + ((carbon_black_phr - row["carbon_black_n220_phr"]) / 20.0) ** 2
@@ -256,7 +265,7 @@ def predict_properties(
                 "sbr_phr": nearest["sbr_phr"],
                 "carbon_black_n220_phr": nearest["carbon_black_n220_phr"],
             },
-            "training_rows": len(rows),
+            "training_rows": len(training),
         },
         "provenance": {
             "doi": "10.5281/zenodo.3838695",
@@ -282,8 +291,10 @@ def recipe_validation(recipe: dict, predictions: dict, rows: list[dict]) -> dict
     errors = {t: 100 * abs(predictions[t] - matched[t]) / abs(matched[t])
               if matched[t] else None for t in TARGETS}
     return {"mape_pct": sum(errors.values()) / len(errors) if all(v is not None for v in errors.values()) else None,
-            "ape_pct": errors, "reference": {t: matched[t] for t in TARGETS},
-            "reference_used_in_training": True, "recipe": recipe}
+            "ape_pct": errors, "predicted": predictions,
+            "reference": {t: matched[t] for t in TARGETS},
+            "reference_used_in_training": False, "training_rows": len(rows) - 1,
+            "method": "leave_one_out", "recipe": recipe}
 
 
 def main() -> None:

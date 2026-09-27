@@ -53,12 +53,35 @@ def test_recipe_error_requires_exact_reference():
     assert result["recipe_validation"]["mape_pct"] is None
     assert result["recipe_validation"]["reason"] == "no_exact_reference"
     request.update(nr_smr20_phr=50, sbr1502_phr=50, carbon_black_n220_phr=60)
-    result = predict_properties(request, load_rows())
+    rows = load_rows()
+    result = predict_properties(request, rows)
     validation = result["recipe_validation"]
-    assert validation["reference_used_in_training"] is True
+    assert validation["reference_used_in_training"] is False
+    assert validation["method"] == "leave_one_out"
+    assert validation["training_rows"] == 19
+    assert result["domain"]["training_rows"] == 19
+    assert validation["mape_pct"] == pytest.approx(3.2122669312)
     assert validation["mape_pct"] == pytest.approx(sum(validation["ape_pct"].values()) / 4)
+    example = heldout_tire_example(rows)
     for key in TARGETS:
         assert result["predicted_properties"][key]["loocv_mape_pct"] > 0
+        assert result["predicted_properties"][key]["value"] == pytest.approx(
+            validation["predicted"][key], abs=0.00001
+        )
+        assert validation["predicted"][key] == pytest.approx(example["predicted"][key])
+
+
+def test_exact_reference_cannot_train_its_own_prediction():
+    request = json.loads((HERE / "prototype_request.json").read_text(encoding="utf-8"))
+    request.update(nr_smr20_phr=50, sbr1502_phr=50, carbon_black_n220_phr=60)
+    rows = load_rows()
+    original = predict_properties(request, rows)["recipe_validation"]
+    reference = next(row for row in rows if row["nr_phr"] == 50
+                     and row["carbon_black_n220_phr"] == 60)
+    reference[TARGETS[0]] *= 2
+    changed = predict_properties(request, rows)["recipe_validation"]
+    assert changed["predicted"] == pytest.approx(original["predicted"])
+    assert changed["mape_pct"] != original["mape_pct"]
 
 
 def test_mape_with_zero_reference_is_unavailable():

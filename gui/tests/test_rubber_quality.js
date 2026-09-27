@@ -35,6 +35,17 @@ preset.rubberValidation = {mape_pct: 0, ape_pct: {specific_gravity: 0}};
 html = context.rubberQualityHtml(preset);
 assert.match(html, /0,00 % — среднее/);
 assert.match(html, /не независимая проверка/);
+preset.rubberValidation = {
+  mape_pct: 3.2122669312, reference_used_in_training: false, training_rows: 19,
+  predicted: preset.rubberQuality.baseline_example.predicted,
+  reference: preset.rubberQuality.baseline_example.measured,
+  ape_pct: preset.rubberQuality.baseline_example.ape_pct,
+};
+html = context.rubberQualityHtml(preset);
+assert.match(html, /MAPE текущего расчёта[\s\S]*3,21 %/);
+assert.match(html, /по 19 другим рецептурам/);
+assert.match(html, /0,487[\s\S]*0,460[\s\S]*5,82 %/);
+assert.doesNotMatch(html, /Базовый пример:/);
 assert.match(context.rubberQualityHtml({tools: preset.tools}), /нет данных/);
 assert.equal(context.rubberQualityHtml(JSON.parse(JSON.stringify(preset))), html);
 console.log('Rubber MAPE rendering, missing references, zero and persistence: OK');
