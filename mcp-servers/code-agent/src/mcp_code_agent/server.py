@@ -28,6 +28,14 @@ MAX_STEPS = 8
 CODE_AGENT_CLEANUP_HEADROOM_SECONDS = 30
 
 
+def _e2b_lifetime_seconds(max_execution_seconds: float) -> int:
+    """Keep the sandbox alive through execution and cleanup, within MCP timeout."""
+    return min(
+        int(max_execution_seconds) + CODE_AGENT_CLEANUP_HEADROOM_SECONDS,
+        MCP_TIMEOUT_SECONDS - 1,
+    )
+
+
 def _positive_int_env(name: str, default: int) -> int:
     try:
         value = int(os.getenv(name, str(default)))
@@ -406,10 +414,10 @@ def _execution_output(result: object, limit: int, secrets: Sequence[str]) -> str
 
 def _system_prompt(max_output_chars: int) -> str:
     return f"""You are a code agent for bounded computation and structured file analysis.
-Each solve_with_code call is independent and uses a fresh sandbox. Filesystem, packages, Python state, scripts, and solver progress do NOT persist between calls. Prefer one well-scoped call with a complete bounded job; if another call is required, pass every required host file again.
+Each solve_with_code call is independent and uses a fresh sandbox. Filesystem, packages, Python state, scripts, and solver progress do NOT persist between calls. Prefer one well-scoped call with a complete bounded job; for local-file computation, parse the supplied file and solve the task in that same call. If another call is required, pass every required host file again.
 Files passed with `files=` are automatically staged under /tmp/code_agent with exact paths listed in the input. Use only those staged paths for input data. Do not put file contents in task or context; those fields are instructions, not data transport. Use Python to inspect and compute; installed packages may include pandas and openpyxl, and the standard library can parse CSV, JSON, and ZIP files. Use pypdf for PDF text only if already installed. Do not use the network. Do not print large tables: print only relevant rows, columns, and concise intermediate values. Execution output is limited to {max_output_chars} characters.
 
-If the request is mainly document reading/retrieval, return action=document. Otherwise respond with exactly one JSON object per turn:
+Use document tools for reading and retrieval; reserve code-agent for computation or structured analysis where Python materially helps. If the request is mainly document reading/retrieval, return action=document. Otherwise respond with exactly one JSON object per turn:
 {{"action":"execute","code":"Python source"}}
 or
 {{"action":"finish","status":"completed|incomplete|blocked|failed","answer":"compact result","evidence":["concise row, sheet, filename, calculation, or other evidence"]}}
@@ -647,7 +655,7 @@ async def _solve(
 
                         sandbox = await AsyncSandbox.create(
                             api_key=e2b_key,
-                            timeout=min(300, int(max_execution_seconds) + 30),
+                            timeout=_e2b_lifetime_seconds(max_execution_seconds),
                             allow_internet_access=False,
                         )
                         for _, sandbox_name, data in staged_files:
@@ -839,6 +847,6 @@ def main() -> None:
         MAX_EXECUTION_SECONDS,
         DEFAULT_MAX_EXECUTION_SECONDS,
         MCP_TIMEOUT_SECONDS,
-        min(300, MAX_EXECUTION_SECONDS + CODE_AGENT_CLEANUP_HEADROOM_SECONDS),
+        _e2b_lifetime_seconds(MAX_EXECUTION_SECONDS),
     )
     mcp.run(show_banner=False)

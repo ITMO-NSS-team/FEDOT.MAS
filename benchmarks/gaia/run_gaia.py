@@ -688,6 +688,10 @@ def _code_agent_max_execution_seconds(mcp_timeout: int) -> int:
     return min(configured, safe_max)
 
 
+def _code_agent_e2b_lifetime_seconds(max_execution: int, mcp_timeout: int) -> int:
+    return min(max_execution + 30, mcp_timeout - 1)
+
+
 def compute_metrics_by_level(results: list) -> dict:
     difficulty_stats: dict[int, dict] = {}
 
@@ -1061,7 +1065,7 @@ async def _process_task_attempt(
             code_agent_max,
             code_agent_default,
             code_agent_mcp_timeout,
-            min(300, code_agent_max + 30),
+            _code_agent_e2b_lifetime_seconds(code_agent_max, code_agent_mcp_timeout),
             code_agent_reserve,
             _env_int("FEDOTMAS_SANDBOX_TIMEOUT_SECONDS", 1800),
         )
@@ -1200,6 +1204,12 @@ async def _process_task_attempt(
             "research_telemetry": telemetry.snapshot() if telemetry else {},
             "unresolved_execution_issues": unresolved_execution_issues(state),
         }
+        if pipeline_status == "incomplete":
+            _log.warning(
+                "GAIA pipeline incomplete | task_id={} unresolved_execution_issues={!r}",
+                task.task_id,
+                artifact["unresolved_execution_issues"],
+            )
         if terminal_output_ready:
             artifact["attempt_status"] = "postprocessing_failed"
             try:

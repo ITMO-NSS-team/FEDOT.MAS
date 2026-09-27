@@ -85,6 +85,15 @@ def test_mcp_exposes_only_solve_with_code():
     assert "do not persist" in description
 
 
+def test_e2b_lifetime_exceeds_execution_without_reaching_mcp_timeout(monkeypatch):
+    monkeypatch.setattr(server, "MCP_TIMEOUT_SECONDS", 360)
+
+    lifetime = server._e2b_lifetime_seconds(330)
+
+    assert lifetime > 330
+    assert lifetime < server.MCP_TIMEOUT_SECONDS
+
+
 @pytest.mark.asyncio
 async def test_simple_arithmetic_and_token_usage(monkeypatch):
     sandbox = FakeSandbox([execution(stdout=["42"])])

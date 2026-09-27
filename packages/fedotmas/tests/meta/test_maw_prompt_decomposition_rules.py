@@ -100,6 +100,10 @@ def test_maw_prompts_route_material_computation_to_code_agent():
     assert "do not add `code-agent` to every research role by default" in (
         META_AGENT_SYSTEM_PROMPT.template.casefold()
     )
+    prompt = META_AGENT_SYSTEM_PROMPT.template
+    assert "Use document tools for reading and retrieval" in prompt
+    assert "one self-contained `solve_with_code` call" in prompt
+    assert "avoid calls spent dumping or relaying file contents" in prompt
 
 
 def test_maw_prompts_use_current_browser_and_search_routing():
