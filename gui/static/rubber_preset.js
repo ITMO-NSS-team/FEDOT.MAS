@@ -105,5 +105,38 @@
     real: false, custom: true, runId: "rubber_maw_5_agents_20260916", topologyGenerated: true
   };
 
-  window.STARTUP_PRESETS = [preset].concat(window.STARTUP_PRESETS || []);
+  // Отдельная штатная запись реального запуска: прежнюю рецептуру 55/45/55
+  // не переписываем, чтобы не выдавать ей измерения контрольной точки 50/50/60.
+  const reference = window.RUBBER_REFERENCE_RUN;
+  if (reference?.rubberValidation?.reference_used_in_training === false
+      && Number.isFinite(reference.rubberValidation.mape_pct) && reference.answer) {
+    const referenceConfig = JSON.parse(JSON.stringify(config));
+    for (const agent of referenceConfig.agents) {
+      agent.model = reference.model;
+      agent.max_output_tokens = 12000;
+    }
+    const recorded = {
+      ...preset,
+      id: "rubber_heldout_reference_run_20260927",
+      title: "Шины · контрольная рецептура с MAPE",
+      query: heldoutQuery,
+      syntheticExamples: [{query, model: "", source: "alternative"}],
+      config: referenceConfig,
+      model: reference.model,
+      trace: reference.trace,
+      answer: reference.answer,
+      answerMeta: `Реальный пятиагентный MAW · ${reference.model} · контрольная точка исключена из обучения · Условия лабораторных испытаний в ответе предложены моделью, а не подтверждены исходной статьёй`,
+      review: reference.review || null,
+      rubberValidation: reference.rubberValidation,
+      runStats: reference.runStats,
+      auto: `${Math.round(reference.runStats.elapsed)} с · ${(reference.runStats.tokens / 1000).toFixed(1).replace(".", ",")}к токенов`,
+      summary: "Реальный запуск пяти агентов и расчётного MCP для опубликованной контрольной рецептуры. MAPE вычислена по четырём отложенным измерениям; журнал и ответ сохранены без повторного вызова модели.",
+      real: true,
+      runId: "rubber_heldout_reference_20260927",
+      installOnExisting: true,
+    };
+    window.STARTUP_PRESETS = [recorded, preset].concat(window.STARTUP_PRESETS || []);
+  } else {
+    window.STARTUP_PRESETS = [preset].concat(window.STARTUP_PRESETS || []);
+  }
 })();
