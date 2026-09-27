@@ -1,7 +1,22 @@
 {
-  "version": "manual-entry-before-run-v1",
+  "version": "openrouter-published-prices-2026-09-27",
   "currency": "USD",
-  "provenance": "Must be filled from provider's published pricing or an explicitly dated manual quote before inference; no prices are embedded in Python.",
-  "source_date": null,
-  "models": {}
+  "provenance": "Dated public OpenRouter model-page prices. Runtime requests request provider-reported usage cost; the rates below are the fallback when provider-reported cost is absent.",
+  "source_date": "2026-09-27",
+  "models": {
+    "deepseek/deepseek-v4.1-flash": {
+      "input_usd_per_1m": 0.035,
+      "cached_input_usd_per_1m": 0.001,
+      "output_usd_per_1m": 0.29,
+      "source_date": "2026-09-27",
+      "source": "https://openrouter.ai/deepseek/deepseek-v4.1-flash"
+    },
+    "openai/gpt-5.6-terra": {
+      "input_usd_per_1m": 2.0,
+      "cached_input_usd_per_1m": 0.20,
+      "output_usd_per_1m": 12.0,
+      "source_date": "2026-09-27",
+      "source": "https://openrouter.ai/openai/gpt-5.6-terra"
+    }
+  }
 }

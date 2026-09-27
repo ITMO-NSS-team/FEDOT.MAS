@@ -18,7 +18,7 @@ def prepare_candidate_batch(offset: int, limit: int, methods: list[str], k: int,
     if offset != expected_offset: raise ValueError("offset must match the currently assigned batch")
     rows, _, ids, _, _ = public._scope()
     if limit != len(ids): raise ValueError("limit must equal the assigned batch size")
-    artifact=public.prepare_candidates(methods, k, fusion)
+    artifact=public._prepare_candidates_artifact(methods, k, fusion)
     compact=[]
     for e in artifact["examples"]:
         method_tops={}

@@ -53,9 +53,8 @@ def list_methods() -> dict[str, Any]:
     _, labels, _, _, _ = _scope()
     return {"methods": sorted(METHODS), "fusion_choices": sorted(FUSIONS), "allowed_target_labels": labels, "max_batch_size": 20, "max_candidates": len(labels)}
 
-@mcp.tool
-def prepare_candidates(methods: list[str], k: int, fusion: str) -> dict[str, Any]:
-    """Rank the assigned public work names against allowed labels using selected methods and fusion."""
+def _prepare_candidates_artifact(methods: list[str], k: int, fusion: str) -> dict[str, Any]:
+    """Build and persist complete rankings; return the server-side artifact."""
     rows, labels, ids, run_id, out = _scope()
     methods = list(dict.fromkeys(methods))
     if not methods or any(m not in METHODS for m in methods): raise ValueError("Unsupported retrieval method")
@@ -63,7 +62,7 @@ def prepare_candidates(methods: list[str], k: int, fusion: str) -> dict[str, Any
     params = {"ids": ids, "methods": sorted(methods), "k": k, "fusion": fusion}
     artifact_id = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
     path = _artifact_dir() / f"{artifact_id}.json"
-    if path.exists(): return {"artifact_id": artifact_id, "parameters": params, "examples": json.loads(path.read_text())["examples"]}
+    if path.exists(): return json.loads(path.read_text(encoding="utf-8"))
     raw = [r["raw_work_name"] for r in rows]
     got = {m: METHODS[m](raw, labels, k) for m in methods}
     examples = []
@@ -82,13 +81,54 @@ def prepare_candidates(methods: list[str], k: int, fusion: str) -> dict[str, Any
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return data
 
+def _compact_prepare_response(data: dict[str, Any]) -> dict[str, Any]:
+    methods = data["parameters"]["methods"]
+    summaries=[]
+    for example in data["examples"]:
+        method_tops={}
+        for label, entries in example["method_candidates"].items():
+            for entry in entries:
+                if entry["rank"] == 1:
+                    method_tops[entry["method"]]=label
+        candidates=example["fused_candidates"]
+        summaries.append({
+            "example_id":example["example_id"],
+            "fused_top_3":[candidate["label"] for candidate in candidates[:3]],
+            "method_count":len(methods),
+            "distinct_top1_labels":len(set(method_tops.values())),
+            "top_1_vote_count":max((list(method_tops.values()).count(label) for label in set(method_tops.values())),default=0),
+            "top1_top2_margin":(candidates[0]["fusion_score"]-(candidates[1]["fusion_score"] if len(candidates)>1 else 0)) if candidates else 0,
+        })
+    return {"artifact_id":data["artifact_id"],"parameters":data["parameters"],"examples":summaries}
+
+@mcp.tool
+def prepare_candidates(methods: list[str], k: int, fusion: str) -> dict[str, Any]:
+    """Rank assigned public names and retain full candidate evidence server-side."""
+    return _compact_prepare_response(_prepare_candidates_artifact(methods,k,fusion))
+
 @mcp.tool
 def inspect_candidates(artifact_id: str, example_ids: list[str], candidate_limit: int = 10) -> dict[str, Any]:
     """Return ranked public candidate labels and retrieval evidence for assigned IDs."""
     data = _artifact(artifact_id); _, _, ids, _, _ = _scope()
     if not 1 <= len(example_ids) <= 10 or not set(example_ids) <= set(ids): raise ValueError("IDs must be from this assigned batch")
     if not 1 <= candidate_limit <= 30: raise ValueError("candidate_limit must be 1-30")
-    return {"artifact_id": artifact_id, "examples": [{**e, "fused_candidates": e["fused_candidates"][:candidate_limit]} for e in data["examples"] if e["example_id"] in example_ids]}
+    examples=[]
+    for example in data["examples"]:
+        if example["example_id"] not in example_ids: continue
+        evidence=[]
+        for fused_rank,candidate in enumerate(example["fused_candidates"][:candidate_limit],1):
+            supporting=example["method_candidates"].get(candidate["label"],[])
+            evidence.append({
+                "candidate_index":candidate["candidate_index"],
+                "label":candidate["label"],
+                "fused_rank":fused_rank,
+                "fusion_score":candidate["fusion_score"],
+                "support_count":len({item["method"] for item in supporting}),
+                "best_rank":min((item["rank"] for item in supporting),default=None),
+                "methods":sorted({item["method"] for item in supporting}),
+            })
+        examples.append({"example_id":example["example_id"],"fused_candidates":evidence})
+    return {"artifact_id":artifact_id,"examples":examples}
 
 def _save(rows: list[dict[str, str]]) -> dict[str, Any]:
     public_rows, labels, ids, run_id, out = _scope()

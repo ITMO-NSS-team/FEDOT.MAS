@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+import uuid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -176,6 +178,11 @@ class _ProxyClient:
                 **self._extra_body,
                 **kw.get("extra_body", {}),
             }
+        if "openrouter.ai" in str(getattr(self._client, "base_url", "")):
+            kw["extra_body"] = {
+                **kw.get("extra_body", {}),
+                "usage": {"include": True},
+            }
         stream = kw.get("stream", False)
         if not stream:
             kw.setdefault("max_tokens", _DEFAULT_MAX_OUTPUT_TOKENS)
@@ -184,13 +191,57 @@ class _ProxyClient:
             model,
             _tool_names_for_log(tools),
         )
-        async def create(request_kind):
+        async def create(request_kind, request_kwargs):
+            request_id = uuid.uuid4().hex
+            started = time.monotonic()
+            try:
+                response = await self._client.chat.completions.create(**request_kwargs)
+            except Exception as exc:
+                observer = type(self).request_observer
+                if observer is not None:
+                    observer({
+                        "request_id": request_id, "model": model,
+                        "request_kind": request_kind, "success": False,
+                        "failure": f"{type(exc).__name__}: {exc}",
+                        "input_tokens": None, "cached_input_tokens": None,
+                        "output_tokens": None, "finish_reason": None,
+                        "elapsed_seconds": time.monotonic() - started,
+                        "usage_known": False,
+                    })
+                raise
+            usage = getattr(response, "usage", None)
+            if usage is None and isinstance(response, Mapping):
+                usage = response.get("usage")
+            choices = getattr(response, "choices", None) or []
+            if not choices and isinstance(response, Mapping): choices=response.get("choices",[])
+            finish_reason = (choices[0].get("finish_reason") if isinstance(choices[0], Mapping) else getattr(choices[0], "finish_reason", None)) if choices else None
+            def field(value, name, default=None):
+                return value.get(name,default) if isinstance(value,Mapping) else getattr(value,name,default)
+            prompt_tokens = field(usage,"prompt_tokens")
+            output_tokens = field(usage,"completion_tokens")
+            details = field(usage,"prompt_tokens_details")
+            cached_tokens = field(details,"cached_tokens",0) if details else 0
+            provider_cost = field(usage, "cost")
+            if provider_cost is None:
+                provider_cost = field(usage, "cost_usd")
+            usage_known = isinstance(prompt_tokens, int) and isinstance(output_tokens, int)
             observer = type(self).request_observer
             if observer is not None:
-                observer(model=model, request_kind=request_kind)
-            return await self._client.chat.completions.create(**kw)
+                observer({
+                    "request_id": request_id, "model": model,
+                    "request_kind": request_kind, "success": True,
+                    "failure": None,
+                    "input_tokens": prompt_tokens if usage_known else None,
+                    "cached_input_tokens": int(cached_tokens or 0) if usage_known else None,
+                    "output_tokens": output_tokens if usage_known else None,
+                    "provider_cost_usd": float(provider_cost) if isinstance(provider_cost, (int, float)) else None,
+                    "finish_reason": finish_reason,
+                    "elapsed_seconds": time.monotonic() - started,
+                    "usage_known": usage_known,
+                })
+            return response
 
-        resp = await create("initial")
+        resp = await create("initial", kw)
         if stream:
             return _StreamAdapter(resp)
         for attempt in range(_MAX_TOOL_ARGUMENT_RETRIES + 1):
@@ -218,10 +269,7 @@ class _ProxyClient:
                 *messages,
                 {"role": "user", "content": _INVALID_TOOL_ARGUMENTS_RETRY},
             ]
-            observer = type(self).request_observer
-            if observer is not None:
-                observer(model=model, request_kind="malformed_tool_retry")
-            resp = await self._client.chat.completions.create(**retry_kw)
+            resp = await create("malformed_tool_retry", retry_kw)
         if _finish_reason_is_error(resp):
             payload = _error_payload(resp)
             _log.error("OpenAI-compatible response finished with error: {}", payload)

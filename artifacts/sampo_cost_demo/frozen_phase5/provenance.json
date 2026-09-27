@@ -1,0 +1,14 @@
+{
+  "original_source_path": "artifacts/sampo_phase_5/structural_review/batch_e3ab204385f84c2085b7b9ae3a86abd3/config_01",
+  "config_sha256": "c13b1d1522533006e57f541ae7cd32d19d34356e46335f4739f494d84b78c6f2",
+  "task_sha256": "2d468d6f56a4d55db805038f139ddb91d0f13a9fba55b3407dbd9fc6f54a9bda",
+  "selection_source": "artifacts/sampo_phase_5/behavioral_qualification/batch_e3ab204385f84c2085b7b9ae3a86abd3/attempt_20260923T234726_76a4f29f/report.json",
+  "selection_source_sha256": "3485393a1bd8b32ed1675a036b494dc2f46edd39c4ae996845e42e5f6fea271c",
+  "decision_report_source": "artifacts/sampo_phase_5/decision_report.md",
+  "decision_report_sha256": "e32076b13192d8f35b91081c650c4d6f2cdbf8657e23cd8f8e2223ca6ee7c45d",
+  "selected_config": "artifacts/sampo_phase_5/structural_review/batch_e3ab204385f84c2085b7b9ae3a86abd3/config_01",
+  "behavioral_pass": true,
+  "selection_basis": "Behavioral qualification only; no private ground truth or accuracy.",
+  "selection_used_new_cost_demo_ground_truth": false,
+  "frozen_at_utc": "2026-09-27T18:55:09.908093+00:00"
+}

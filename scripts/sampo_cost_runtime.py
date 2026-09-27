@@ -4,7 +4,11 @@ import asyncio, csv, json, os, re, shutil, subprocess, sys, time
 import math
 from pathlib import Path
 from typing import Any
+from dotenv import find_dotenv, load_dotenv
 from sampo_cost_demo import OUT, ROOT, read_csv, call_cost
+
+_DOTENV_PATH=find_dotenv(usecwd=True)
+if _DOTENV_PATH: load_dotenv(_DOTENV_PATH,override=False)
 
 BUDGETS = {"batch_size": 20, "max_model_calls": 30, "max_mcp_calls": 60, "max_prompt_tokens_per_call": 64000, "max_batch_seconds": 300, "max_output_tokens_per_call": 8192}
 NEUTRAL_TASK = "Map each assigned historical construction work name to three distinct allowed labels using only the supplied public data and tools. Produce valid top-3 predictions for all assigned IDs."
@@ -15,8 +19,16 @@ def required_runtime() -> tuple[str, str, str, str]:
     endpoint = os.getenv("SAMPO_BASE_URL") or os.getenv("OPENAI_BASE_URL")
     provider = os.getenv("SAMPO_PROVIDER", "openai-compatible" if endpoint else "")
     missing = [name for name, value in (("SAMPO_CHEAP_MODEL", cheap), ("SAMPO_CODEX_MODEL", strong), ("SAMPO_PROVIDER/endpoint", provider and endpoint)) if not value]
+    if not (os.getenv("SAMPO_API_KEY") or os.getenv("OPENAI_API_KEY")): missing.append("SAMPO_API_KEY/OPENAI_API_KEY")
     if missing: raise RuntimeError("Missing live inference configuration: " + ", ".join(missing))
     return cheap, strong, provider, endpoint
+
+def model_config_for(model: str, endpoint: str):
+    """Build an explicit OpenAI-compatible model config; never use LiteLLM fallback."""
+    from fedotmas._settings import ModelConfig
+    api_key=os.getenv("SAMPO_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key: raise RuntimeError("Missing SAMPO_API_KEY or OPENAI_API_KEY")
+    return ModelConfig(model=model,api_base=endpoint,api_key=api_key)
 
 def pricing_preflight(models: set[str]) -> dict[str, Any]:
     path = OUT / "pricing.json"
@@ -74,9 +86,9 @@ class RuntimeTrace:
         self.ids, self.run_id, self.output, self.model, self.batch = ids, run_id, output, model, batch
         self.tool_names=tool_names or set(); self.calls: list[dict[str, Any]]=[]; self.tools: list[dict[str, Any]]=[]; self.worker_calls: list[dict[str, Any]]=[]; self.provider_requests: list[dict[str, Any]]=[]; self.failures=[]; self.transcript=[]; self.started=time.monotonic(); self.call_started=0.0
 
-    def record_provider_request(self, *, model: str, request_kind: str) -> None:
-        self.provider_requests.append({"model": model, "request_kind": request_kind})
-        self.transcript.append({"type": "provider_request", "model": model, "request_kind": request_kind})
+    def record_provider_request(self, request: dict[str, Any]) -> None:
+        self.provider_requests.append(request)
+        self.transcript.append({"type": "provider_request", **request})
 
     async def before_model_callback(self, *, callback_context, llm_request):
         if len(self.calls) >= BUDGETS["max_model_calls"]: self.failures.append("model_call_limit"); raise RuntimeError("model_call_limit")
@@ -114,7 +126,8 @@ class RuntimeTrace:
         self.failures.append(f"tool_error:{tool.name}:{str(error)[:500]}")
 
     def dump(self) -> dict[str, Any]:
-        return {"system":self.output.name,"assigned_ids":self.ids,"completed_ids":[],"model_calls":self.calls,"provider_requests":self.provider_requests,"provider_request_count":len(self.provider_requests),"malformed_tool_retry_requests":sum(x["request_kind"] == "malformed_tool_retry" for x in self.provider_requests),"mcp_calls":self.tools,"worker_calls":self.worker_calls,"tool_calls":len(self.tools),"runtime_seconds":time.monotonic()-self.started,"failures":self.failures,"private_ground_truth_accesses":0}
+        known=[x for x in self.provider_requests if x["usage_known"]]
+        return {"system":self.output.name,"assigned_ids":self.ids,"completed_ids":[],"model_calls":self.calls,"provider_requests":self.provider_requests,"provider_request_count":len(self.provider_requests),"malformed_tool_retry_requests":sum(x["request_kind"] == "malformed_tool_retry" for x in self.provider_requests),"proxy_observable":True,"cost_complete":all(x["usage_known"] for x in self.provider_requests),"input_tokens":sum(x["input_tokens"] for x in known),"cached_input_tokens":sum(x["cached_input_tokens"] for x in known),"output_tokens":sum(x["output_tokens"] for x in known),"adk_input_tokens":sum(x["input_tokens"] for x in self.calls),"adk_cached_input_tokens":sum(x["cached_input_tokens"] for x in self.calls),"adk_output_tokens":sum(x["output_tokens"] for x in self.calls),"mcp_calls":self.tools,"worker_calls":self.worker_calls,"tool_calls":len(self.tools),"runtime_seconds":time.monotonic()-self.started,"failures":self.failures,"private_ground_truth_accesses":0}
 
 def write_system_config(run_dir: Path, system: str, runtime_manifest: dict[str, Any], telemetry: dict[str, Any], transcripts: list[dict[str, Any]] | None = None) -> None:
     import csv
@@ -124,5 +137,14 @@ def write_system_config(run_dir: Path, system: str, runtime_manifest: dict[str, 
         with (run_dir/"transcript.jsonl").open("x",encoding="utf-8") as f:
             for item in transcripts or []: f.write(json.dumps(item,ensure_ascii=False)+"\n")
 
-def model_costs(telemetry: dict[str, Any], pricing: dict[str, Any]) -> float:
-    return sum(call_cost(call, pricing) for call in telemetry.get("model_calls", []))
+def model_costs(telemetry: dict[str, Any], pricing: dict[str, Any]) -> float | None:
+    """Cost only observed provider requests; ADK callbacks are telemetry, not billing."""
+    requests_present="provider_requests" in telemetry
+    requests=telemetry.get("provider_requests",[])
+    if not requests_present and not telemetry.get("model_calls") and not telemetry.get("model_calls_count"):
+        return 0.0
+    if not telemetry.get("proxy_observable", "provider_requests" in telemetry):
+        return None
+    if any(not request.get("usage_known") for request in requests): return None
+    if not requests and telemetry.get("model_calls_count",len(telemetry.get("model_calls",[]))): return None
+    return sum(call_cost(request,pricing) for request in requests)
