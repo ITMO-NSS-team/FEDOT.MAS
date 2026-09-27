@@ -1,0 +1,334 @@
+{
+  "run_id": "sampo-operational-200-20260927T215944Z",
+  "system": "terra_single_agent",
+  "harness": "standalone_openai_tool_loop",
+  "fedotmas_dependency": false,
+  "model": "openai/gpt-5.6-terra",
+  "batch_size": 20,
+  "budgets": {
+    "batch_size": 20,
+    "max_model_calls": 30,
+    "max_mcp_calls": 60,
+    "max_prompt_tokens_per_call": 64000,
+    "max_batch_seconds": 300,
+    "max_output_tokens_per_call": 8192
+  },
+  "fresh_session_per_batch": true,
+  "batches": [
+    {
+      "run_id": "sampo-operational-200-20260927T215944Z",
+      "system": "terra_single_agent",
+      "harness": "standalone_openai_tool_loop",
+      "fedotmas_dependency": false,
+      "model": "openai/gpt-5.6-terra",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "batch_size": 20,
+      "budgets": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 8192
+      },
+      "mcp_server_script": "/Users/daniel/Documents/nss_lab/FEDOT.MAS/mcp-servers/sampo-cost-demo/src/mcp_sampo_cost_demo/server.py",
+      "fresh_mcp_process": true,
+      "fresh_model_conversation": true,
+      "tools": [
+        "list_methods",
+        "prepare_candidates",
+        "inspect_candidates",
+        "save_default_top3",
+        "save_ranked_top3",
+        "get_prediction_status"
+      ],
+      "private_gt_path_provided": false,
+      "phase5_config_exposed": false,
+      "git_commit": "42e87f53465ea139bf2c2fe2abccfc570c8efc36"
+    },
+    {
+      "run_id": "sampo-operational-200-20260927T215944Z",
+      "system": "terra_single_agent",
+      "harness": "standalone_openai_tool_loop",
+      "fedotmas_dependency": false,
+      "model": "openai/gpt-5.6-terra",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "batch_size": 20,
+      "budgets": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 8192
+      },
+      "mcp_server_script": "/Users/daniel/Documents/nss_lab/FEDOT.MAS/mcp-servers/sampo-cost-demo/src/mcp_sampo_cost_demo/server.py",
+      "fresh_mcp_process": true,
+      "fresh_model_conversation": true,
+      "tools": [
+        "list_methods",
+        "prepare_candidates",
+        "inspect_candidates",
+        "save_default_top3",
+        "save_ranked_top3",
+        "get_prediction_status"
+      ],
+      "private_gt_path_provided": false,
+      "phase5_config_exposed": false,
+      "git_commit": "42e87f53465ea139bf2c2fe2abccfc570c8efc36"
+    },
+    {
+      "run_id": "sampo-operational-200-20260927T215944Z",
+      "system": "terra_single_agent",
+      "harness": "standalone_openai_tool_loop",
+      "fedotmas_dependency": false,
+      "model": "openai/gpt-5.6-terra",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "batch_size": 20,
+      "budgets": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 8192
+      },
+      "mcp_server_script": "/Users/daniel/Documents/nss_lab/FEDOT.MAS/mcp-servers/sampo-cost-demo/src/mcp_sampo_cost_demo/server.py",
+      "fresh_mcp_process": true,
+      "fresh_model_conversation": true,
+      "tools": [
+        "list_methods",
+        "prepare_candidates",
+        "inspect_candidates",
+        "save_default_top3",
+        "save_ranked_top3",
+        "get_prediction_status"
+      ],
+      "private_gt_path_provided": false,
+      "phase5_config_exposed": false,
+      "git_commit": "42e87f53465ea139bf2c2fe2abccfc570c8efc36"
+    },
+    {
+      "run_id": "sampo-operational-200-20260927T215944Z",
+      "system": "terra_single_agent",
+      "harness": "standalone_openai_tool_loop",
+      "fedotmas_dependency": false,
+      "model": "openai/gpt-5.6-terra",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "batch_size": 20,
+      "budgets": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 8192
+      },
+      "mcp_server_script": "/Users/daniel/Documents/nss_lab/FEDOT.MAS/mcp-servers/sampo-cost-demo/src/mcp_sampo_cost_demo/server.py",
+      "fresh_mcp_process": true,
+      "fresh_model_conversation": true,
+      "tools": [
+        "list_methods",
+        "prepare_candidates",
+        "inspect_candidates",
+        "save_default_top3",
+        "save_ranked_top3",
+        "get_prediction_status"
+      ],
+      "private_gt_path_provided": false,
+      "phase5_config_exposed": false,
+      "git_commit": "42e87f53465ea139bf2c2fe2abccfc570c8efc36"
+    },
+    {
+      "run_id": "sampo-operational-200-20260927T215944Z",
+      "system": "terra_single_agent",
+      "harness": "standalone_openai_tool_loop",
+      "fedotmas_dependency": false,
+      "model": "openai/gpt-5.6-terra",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "batch_size": 20,
+      "budgets": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 8192
+      },
+      "mcp_server_script": "/Users/daniel/Documents/nss_lab/FEDOT.MAS/mcp-servers/sampo-cost-demo/src/mcp_sampo_cost_demo/server.py",
+      "fresh_mcp_process": true,
+      "fresh_model_conversation": true,
+      "tools": [
+        "list_methods",
+        "prepare_candidates",
+        "inspect_candidates",
+        "save_default_top3",
+        "save_ranked_top3",
+        "get_prediction_status"
+      ],
+      "private_gt_path_provided": false,
+      "phase5_config_exposed": false,
+      "git_commit": "42e87f53465ea139bf2c2fe2abccfc570c8efc36"
+    },
+    {
+      "run_id": "sampo-operational-200-20260927T215944Z",
+      "system": "terra_single_agent",
+      "harness": "standalone_openai_tool_loop",
+      "fedotmas_dependency": false,
+      "model": "openai/gpt-5.6-terra",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "batch_size": 20,
+      "budgets": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 8192
+      },
+      "mcp_server_script": "/Users/daniel/Documents/nss_lab/FEDOT.MAS/mcp-servers/sampo-cost-demo/src/mcp_sampo_cost_demo/server.py",
+      "fresh_mcp_process": true,
+      "fresh_model_conversation": true,
+      "tools": [
+        "list_methods",
+        "prepare_candidates",
+        "inspect_candidates",
+        "save_default_top3",
+        "save_ranked_top3",
+        "get_prediction_status"
+      ],
+      "private_gt_path_provided": false,
+      "phase5_config_exposed": false,
+      "git_commit": "42e87f53465ea139bf2c2fe2abccfc570c8efc36"
+    },
+    {
+      "run_id": "sampo-operational-200-20260927T215944Z",
+      "system": "terra_single_agent",
+      "harness": "standalone_openai_tool_loop",
+      "fedotmas_dependency": false,
+      "model": "openai/gpt-5.6-terra",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "batch_size": 20,
+      "budgets": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 8192
+      },
+      "mcp_server_script": "/Users/daniel/Documents/nss_lab/FEDOT.MAS/mcp-servers/sampo-cost-demo/src/mcp_sampo_cost_demo/server.py",
+      "fresh_mcp_process": true,
+      "fresh_model_conversation": true,
+      "tools": [
+        "list_methods",
+        "prepare_candidates",
+        "inspect_candidates",
+        "save_default_top3",
+        "save_ranked_top3",
+        "get_prediction_status"
+      ],
+      "private_gt_path_provided": false,
+      "phase5_config_exposed": false,
+      "git_commit": "42e87f53465ea139bf2c2fe2abccfc570c8efc36"
+    },
+    {
+      "run_id": "sampo-operational-200-20260927T215944Z",
+      "system": "terra_single_agent",
+      "harness": "standalone_openai_tool_loop",
+      "fedotmas_dependency": false,
+      "model": "openai/gpt-5.6-terra",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "batch_size": 20,
+      "budgets": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 8192
+      },
+      "mcp_server_script": "/Users/daniel/Documents/nss_lab/FEDOT.MAS/mcp-servers/sampo-cost-demo/src/mcp_sampo_cost_demo/server.py",
+      "fresh_mcp_process": true,
+      "fresh_model_conversation": true,
+      "tools": [
+        "list_methods",
+        "prepare_candidates",
+        "inspect_candidates",
+        "save_default_top3",
+        "save_ranked_top3",
+        "get_prediction_status"
+      ],
+      "private_gt_path_provided": false,
+      "phase5_config_exposed": false,
+      "git_commit": "42e87f53465ea139bf2c2fe2abccfc570c8efc36"
+    },
+    {
+      "run_id": "sampo-operational-200-20260927T215944Z",
+      "system": "terra_single_agent",
+      "harness": "standalone_openai_tool_loop",
+      "fedotmas_dependency": false,
+      "model": "openai/gpt-5.6-terra",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "batch_size": 20,
+      "budgets": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 8192
+      },
+      "mcp_server_script": "/Users/daniel/Documents/nss_lab/FEDOT.MAS/mcp-servers/sampo-cost-demo/src/mcp_sampo_cost_demo/server.py",
+      "fresh_mcp_process": true,
+      "fresh_model_conversation": true,
+      "tools": [
+        "list_methods",
+        "prepare_candidates",
+        "inspect_candidates",
+        "save_default_top3",
+        "save_ranked_top3",
+        "get_prediction_status"
+      ],
+      "private_gt_path_provided": false,
+      "phase5_config_exposed": false,
+      "git_commit": "42e87f53465ea139bf2c2fe2abccfc570c8efc36"
+    },
+    {
+      "run_id": "sampo-operational-200-20260927T215944Z",
+      "system": "terra_single_agent",
+      "harness": "standalone_openai_tool_loop",
+      "fedotmas_dependency": false,
+      "model": "openai/gpt-5.6-terra",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "batch_size": 20,
+      "budgets": {
+        "batch_size": 20,
+        "max_model_calls": 30,
+        "max_mcp_calls": 60,
+        "max_prompt_tokens_per_call": 64000,
+        "max_batch_seconds": 300,
+        "max_output_tokens_per_call": 8192
+      },
+      "mcp_server_script": "/Users/daniel/Documents/nss_lab/FEDOT.MAS/mcp-servers/sampo-cost-demo/src/mcp_sampo_cost_demo/server.py",
+      "fresh_mcp_process": true,
+      "fresh_model_conversation": true,
+      "tools": [
+        "list_methods",
+        "prepare_candidates",
+        "inspect_candidates",
+        "save_default_top3",
+        "save_ranked_top3",
+        "get_prediction_status"
+      ],
+      "private_gt_path_provided": false,
+      "phase5_config_exposed": false,
+      "git_commit": "42e87f53465ea139bf2c2fe2abccfc570c8efc36"
+    }
+  ],
+  "phase5_frozen_config_sha256": null,
+  "git_commit": "42e87f53465ea139bf2c2fe2abccfc570c8efc36",
+  "private_ground_truth_path_provided": false,
+  "fedotmas_predictions_exposed_to_terra": false,
+  "phase5_config_exposed_to_terra": false
+}

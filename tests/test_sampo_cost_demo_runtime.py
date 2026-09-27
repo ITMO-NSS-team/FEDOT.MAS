@@ -203,7 +203,50 @@ def test_live_telemetry_counts_provider_retries_separately_and_model_usage(monke
 def test_jsonable_keeps_nested_mapping_arguments_structured():
     from sampo_cost_runtime import _jsonable
     from collections import UserDict
+    assert _jsonable(3)==3
+    assert _jsonable(False) is False
+    assert _jsonable(None) is None
+    assert _jsonable("x")=="x"
     assert _jsonable(UserDict({"artifact_id":"a","example_ids":["1","2"]}))=={"artifact_id":"a","example_ids":["1","2"]}
+
+
+@pytest.mark.asyncio
+async def test_real_fedot_trace_artifacts_are_recognized_and_skipped_on_resume(tmp_path):
+    from types import SimpleNamespace
+    from sampo_cost_runtime import RuntimeTrace
+    from run_sampo_cost_demo import batch_complete, batch_should_run
+
+    run_id="resume-fedot-test"
+    ids=[str(i) for i in range(20)]
+    labels={"A","B","C"}
+    batch_dir=tmp_path/"fedotmas_cost_aware"/"batch_0000"
+    batch_dir.mkdir(parents=True)
+    trace=RuntimeTrace(ids,run_id,batch_dir,"deepseek/deepseek-v4.1-flash",
+                       {"save_review_decisions","save_candidate_predictions"},allowed_labels=labels)
+    rows=[{"example_id":eid,"top_1":"A","top_2":"B","top_3":"C"} for eid in ids]
+    with (batch_dir/".predictions.jsonl").open("w",encoding="utf-8") as stream:
+        for row in rows: stream.write(json.dumps(row)+"\n")
+    context=SimpleNamespace(_invocation_context=SimpleNamespace(end_invocation=False),
+                            actions=SimpleNamespace(end_of_agent=False))
+    await trace.after_tool_callback(tool=SimpleNamespace(name="save_review_decisions"),
+                                    tool_args={},tool_context=context,result={"isError":False})
+    telemetry=trace.dump()
+    assert telemetry["system"]=="fedotmas_cost_aware"
+    telemetry.update({"run_id":run_id,"completed_ids":ids,"failed_ids":[],"completed_examples":20,
+                      "cost_complete":True,"safety_ceiling_hit":False})
+    (batch_dir/"telemetry.json").write_text(json.dumps(telemetry),encoding="utf-8")
+    (batch_dir/"runtime_manifest.json").write_text(json.dumps({"run_id":run_id,"system":"fedotmas_cost_aware"}),encoding="utf-8")
+    with (batch_dir/"predictions.csv").open("w",encoding="utf-8",newline="") as stream:
+        writer=csv.DictWriter(stream,fieldnames=["example_id","top_1","top_2","top_3"])
+        writer.writeheader(); writer.writerows(rows)
+    assert batch_complete(batch_dir,ids,run_id,"fedotmas_cost_aware") is True
+    assert batch_should_run(batch_dir,ids,run_id,"fedotmas_cost_aware") is False
+
+
+def test_terra_trace_keeps_its_real_system_name(tmp_path):
+    from sampo_cost_runtime import RuntimeTrace
+    trace=RuntimeTrace(["x"],"run",tmp_path/"terra_single_agent"/"batch_0000","openai/gpt-5.6-terra")
+    assert trace.dump()["system"]=="terra_single_agent"
 
 @pytest.mark.asyncio
 async def test_phase5_blocks_second_worker_delegation_and_records_truncation(tmp_path):
@@ -228,11 +271,16 @@ async def test_phase5_blocks_second_worker_delegation_and_records_truncation(tmp
 async def test_phase5_provider_request_config_uses_16384_output_budget(tmp_path):
     from types import SimpleNamespace
     from sampo_cost_runtime import BUDGETS, FEDOT_BUDGETS, RuntimeTrace
+    from run_sampo_cost_demo import config_signature
     trace=RuntimeTrace(["1"],"run",tmp_path/"fedotmas_cost_aware"/"batch_0000","m")
     request=SimpleNamespace(model="m",config=None)
     await trace.before_model_callback(callback_context=SimpleNamespace(agent_name="worker"),llm_request=request)
     assert FEDOT_BUDGETS["max_output_tokens_per_call"]==16384
     assert BUDGETS["max_output_tokens_per_call"]==8192
+    signature=config_signature("smoke",demo.OUT/"operational_inputs.csv",
+                               "deepseek/deepseek-v4.1-flash","openai/gpt-5.6-terra","https://example.invalid")
+    assert signature["budgets"]["fedotmas_cost_aware"]["max_output_tokens_per_call"]==16384
+    assert signature["budgets"]["terra_single_agent"]["max_output_tokens_per_call"]==8192
     assert request.config.max_output_tokens==16384
     trace.record_provider_request({"request_id":"r","model":"m","finish_reason":"stop","output_tokens":37,"usage_known":True})
     assert trace.provider_requests[0]["max_output_tokens"]==16384

@@ -291,6 +291,11 @@ def batch_complete(path: Path, ids: list[str], run_id: str, system: str) -> bool
         return False
 
 
+def batch_should_run(path: Path, ids: list[str], run_id: str, system: str) -> bool:
+    """Resume gate shared by each system's batch loop."""
+    return not batch_complete(path, ids, run_id, system)
+
+
 async def execute(run_id: str, stage: str, resume: bool = False) -> int:
     if stage == "operational" and not (OUT/"operational_200_inputs.csv").exists():
         from sampo_cost_demo import construct_operational_200
@@ -326,7 +331,7 @@ async def execute(run_id: str, stage: str, resume: bool = False) -> int:
         for idx, chunk in enumerate(batches):
             bdir=run_root/system/f"batch_{idx:04d}"
             if system=="tfidf":
-                if batch_complete(bdir,[r["example_id"] for r in chunk],run_id,system): continue
+                if not batch_should_run(bdir,[r["example_id"] for r in chunk],run_id,system): continue
                 bdir.mkdir(parents=True,exist_ok=True)
                 pr=tfidf_batch(chunk,labels); t={"run_id":run_id,"run_stage":stage,"system":system,"model":model,"assigned_ids":[r["example_id"] for r in chunk],"completed_ids":[r["example_id"] for r in pr],"failed_ids":[],"completed_examples":len(pr),"cost_usd":0.0,"cost_complete":True,"provider_request_count":0,"model_calls_count":0,"mcp_calls_count":0,"input_tokens":0,"uncached_input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"provider_reported_cost_usd":0.0,"fallback_calculated_cost_usd":0.0,"runtime_seconds":0,"failures":[]}
                 with (bdir/"predictions.csv").open("w",encoding="utf-8",newline="") as f:
@@ -335,7 +340,7 @@ async def execute(run_id: str, stage: str, resume: bool = False) -> int:
                 (bdir/"runtime_manifest.json").write_text(json.dumps({"run_id":run_id,"system":system,"model":model,"batch_size":len(chunk)})+"\n")
                 (bdir/"transcript.jsonl").write_text("")
                 continue
-            if batch_complete(bdir,[r["example_id"] for r in chunk],run_id,system): continue
+            if not batch_should_run(bdir,[r["example_id"] for r in chunk],run_id,system): continue
             try:
                 (run_root/system).mkdir(parents=True,exist_ok=True)
                 if bdir.exists():
