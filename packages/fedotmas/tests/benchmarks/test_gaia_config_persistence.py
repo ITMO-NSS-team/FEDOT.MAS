@@ -419,6 +419,62 @@ async def test_successful_gaia_result_persists_serializable_generated_config(
 
 
 @pytest.mark.asyncio
+async def test_valid_terminal_answer_survives_incomplete_intermediate_handoff(
+    tmp_path: Path,
+):
+    class IncompleteIntermediateMAW(_FakeMAW):
+        async def run(
+            self,
+            _query: str,
+            *,
+            timeout: int,
+            final_answer_contract: str | None = None,
+            initial_state: dict | None = None,
+        ) -> dict[str, str]:
+            self.last_result = PipelineResult(
+                state={
+                    "final_answer": "<solution>65</solution>",
+                    "_fedotmas_execution": {
+                        "handoff_issues": [
+                            {
+                                "kind": "incomplete_artifact",
+                                "agent": "researcher",
+                                "source_key": "findings",
+                                "resolved": False,
+                            }
+                        ]
+                    },
+                },
+                status="incomplete",
+            )
+            return self.last_result.state
+
+    task = SimpleNamespace(
+        task_id="task-valid-terminal-incomplete-handoff",
+        question="Question?",
+        ground_truth="65",
+        file_path=None,
+        file_name=None,
+        difficulty="1",
+    )
+
+    with patch("benchmarks.gaia.run_gaia.MAW", IncompleteIntermediateMAW):
+        result = await process_task(
+            task,
+            SimpleNamespace(is_correct_answer=lambda answer, truth: answer == truth),
+            tmp_path,
+            enable_langfuse=False,
+        )
+
+    attempt = json.loads((tmp_path / "attempts" / "attempt_01.json").read_text())
+    assert result["response"] == "65"
+    assert result["pipeline_status"] == "incomplete"
+    assert result["unresolved_execution_issues"][0]["kind"] == "incomplete_artifact"
+    assert attempt["response"] == "65"
+    assert attempt["pipeline_status"] == "incomplete"
+
+
+@pytest.mark.asyncio
 async def test_terminal_agent_is_inferred_when_config_omits_optional_field(
     tmp_path: Path,
 ):

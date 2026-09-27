@@ -18,7 +18,11 @@ from fedotmas import MAW, ModelConfig
 from fedotmas._settings import get_meta_model
 from fedotmas.common.logging import get_logger
 from fedotmas.maw._validators import _find_terminal_node
-from fedotmas.maw.handoffs import unresolved_execution_issues
+from fedotmas.maw.handoffs import (
+    ABSTENTION_STATE_KEY,
+    is_explicit_abstention,
+    unresolved_execution_issues,
+)
 from fedotmas.mcp import MCPServerConfig, StdioMCPServer, resolve_mcp_registry
 from fedotmas.plugins import (
     BrowserFallbackPolicyPlugin,
@@ -1108,14 +1112,9 @@ async def _process_task_attempt(
         )
         pipeline_result = maw.last_result
         pipeline_status = getattr(pipeline_result, "status", "completed")
-        if pipeline_status != "completed":
-            raise RuntimeError(
-                f"MAW execution ended with status '{pipeline_status}'; "
-                "partial state is retained for diagnostics"
-            )
         config = getattr(maw, "generated_config", None)
         if config is None:
-            raise ValueError("Completed MAW has no generated configuration")
+            raise ValueError("MAW has no generated configuration")
         final_agent = getattr(config, "final_answer_agent", None)
         if final_agent is None:
             terminal_node = _find_terminal_node(config.pipeline)
@@ -1132,7 +1131,39 @@ async def _process_task_attempt(
             raise ValueError(
                 f"Configured terminal agent '{final_agent}' is missing from config"
             )
+        terminal_value = state.get(terminal.output_key)
+        completion = state.get(ABSTENTION_STATE_KEY)
+        terminal_abstained = is_explicit_abstention(terminal_value) or (
+            isinstance(completion, dict) and completion.get("status") == "abstained"
+        )
         answer = normalize_answer(extract_terminal_answer(state, terminal.output_key))
+        execution_issues = unresolved_execution_issues(state)
+        if pipeline_status != "completed":
+            handoff_only_incomplete = (
+                pipeline_status == "incomplete"
+                and not terminal_abstained
+                and bool(answer)
+                and bool(execution_issues)
+                and all(
+                    issue.get("kind") in {"incomplete_handoff", "incomplete_artifact"}
+                    and issue.get("agent") != final_agent
+                    for issue in execution_issues
+                )
+            )
+            if not handoff_only_incomplete:
+                raise RuntimeError(
+                    f"MAW execution ended with status '{pipeline_status}'; "
+                    "partial state is retained for diagnostics"
+                )
+            _log.warning(
+                "Accepting valid terminal answer with incomplete pipeline | "
+                "task_id={} status={} unresolved_execution_issues={!r}",
+                task.task_id,
+                pipeline_status,
+                execution_issues,
+            )
+        if terminal_abstained:
+            raise RuntimeError("Configured terminal agent explicitly abstained")
         if not answer:
             raise ValueError(
                 f"Configured terminal output '{terminal.output_key}' is missing"
@@ -1159,7 +1190,7 @@ async def _process_task_attempt(
             "tokens": _token_usage(maw, pipeline_result),
             "elapsed": maw.elapsed,
             "research_telemetry": telemetry.snapshot() if telemetry else {},
-            "unresolved_execution_issues": unresolved_execution_issues(state),
+            "unresolved_execution_issues": execution_issues,
         }
         await _write_attempt(task_log_dir, attempt_number, result)
         return result
