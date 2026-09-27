@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fedotmas._settings import ModelConfig, resolve_model_config
 from fedotmas.common.codex_cli import CodexCliLlm
-from fedotmas.common.llm import _ERROR_PAYLOAD_LEN, _ProxyClient, make_llm
+from fedotmas.common.llm import (
+    _ERROR_PAYLOAD_LEN,
+    _invalid_tool_argument_names,
+    _ProxyClient,
+    make_llm,
+)
 from fedotmas.mas.builder import build_routing_system
 from fedotmas.mas.models import MASConfig
 from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
@@ -47,6 +52,21 @@ def _response(finish_reason: str = "stop"):
                 "index": 0,
                 "message": {"role": "assistant", "content": "done"},
                 "finish_reason": finish_reason,
+            }
+        ],
+    }
+    return response
+
+
+def _tool_response(arguments: str):
+    response = _response("tool_calls")
+    response.model_dump.return_value["choices"][0]["message"] = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "example_tool", "arguments": arguments},
             }
         ],
     }
@@ -304,3 +324,144 @@ class TestProxyClientErrors:
             + _ERROR_PAYLOAD_LEN
             + len("... (truncated)")
         )
+
+
+class TestProxyClientToolArgumentValidation:
+    def test_text_completion_with_no_tool_calls_is_valid(self):
+        assert (
+            _invalid_tool_argument_names(
+                {"choices": [{"message": {"role": "assistant", "tool_calls": None}}]}
+            )
+            == []
+        )
+
+    def test_empty_tool_calls_are_valid(self):
+        assert (
+            _invalid_tool_argument_names(
+                {"choices": [{"message": {"role": "assistant", "tool_calls": []}}]}
+            )
+            == []
+        )
+
+    def test_missing_or_empty_choices_are_valid(self):
+        assert _invalid_tool_argument_names({"choices": None}) == []
+        assert _invalid_tool_argument_names({"choices": []}) == []
+        assert _invalid_tool_argument_names({}) == []
+
+    def test_valid_and_invalid_tool_arguments_are_distinguished(self):
+        assert _invalid_tool_argument_names(_tool_response('{"value": 1}')) == []
+        assert _invalid_tool_argument_names(_tool_response("{")) == ["example_tool"]
+
+    async def test_retries_malformed_tool_arguments_then_returns_valid_response(self):
+        client = _client_with_response(_tool_response('{"broken":'))
+        valid = _tool_response('{"value": 1}')
+        client._client.chat.completions.create.side_effect = [
+            _tool_response('{"broken":'),
+            valid,
+        ]
+
+        result = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert (
+            result.choices[0].message.tool_calls[0].function.arguments == '{"value": 1}'
+        )
+        assert client._client.chat.completions.create.await_count == 2
+        retry = client._client.chat.completions.create.await_args_list[1].kwargs
+        assert retry["messages"][-1]["content"].startswith("The previous tool-call")
+        assert "max_tokens" not in retry
+
+    async def test_explicit_output_limit_is_preserved(self):
+        client = _client_with_response(_response())
+        await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], [], max_tokens=1234
+        )
+        assert (
+            client._client.chat.completions.create.await_args.kwargs["max_tokens"]
+            == 1234
+        )
+
+    async def test_usage_from_malformed_argument_retry_is_aggregated(self):
+        malformed = _tool_response("{")
+        malformed.model_dump.return_value["usage"] = {
+            "prompt_tokens": 11,
+            "completion_tokens": 5,
+            "total_tokens": 16,
+        }
+        valid = _tool_response('{"ok": true}')
+        valid.model_dump.return_value["usage"] = {
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
+            "total_tokens": 10,
+        }
+        client = _client_with_response(malformed)
+        client._client.chat.completions.create.side_effect = [malformed, valid]
+
+        response = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert response.usage.prompt_tokens == 18
+        assert response.usage.completion_tokens == 8
+        assert response.usage.total_tokens == 26
+
+    async def test_usage_survives_transport_error_during_retry(self):
+        malformed = _tool_response("{")
+        malformed.model_dump.return_value["usage"] = {
+            "prompt_tokens": 11,
+            "completion_tokens": 5,
+            "total_tokens": 16,
+        }
+        transport_error = RuntimeError("transport retry failed")
+        client = _client_with_response(malformed)
+        client._client.chat.completions.create.side_effect = [
+            malformed,
+            transport_error,
+        ]
+
+        with pytest.raises(RuntimeError, match="transport retry failed") as raised:
+            await client.acompletion(
+                "openai/test", [{"role": "user", "content": "x"}], []
+            )
+
+        assert raised.value.prompt_tokens == 11
+        assert raised.value.completion_tokens == 5
+
+    async def test_repeated_malformed_tool_arguments_fail_clearly(self):
+        client = _client_with_response(_tool_response("{"))
+        client._client.chat.completions.create.side_effect = [_tool_response("{")] * 3
+
+        with pytest.raises(RuntimeError, match="malformed JSON tool arguments"):
+            await client.acompletion(
+                "openai/test", [{"role": "user", "content": "x"}], []
+            )
+
+        assert client._client.chat.completions.create.await_count == 3
+
+    async def test_valid_tool_arguments_are_returned_unchanged(self):
+        client = _client_with_response(_tool_response('{"value": 1}'))
+
+        result = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert (
+            result.choices[0].message.tool_calls[0].function.arguments == '{"value": 1}'
+        )
+        assert client._client.chat.completions.create.await_count == 1
+
+    async def test_text_completion_with_no_tool_calls_returns_normally(self):
+        response = _response()
+        response.model_dump.return_value["choices"][0]["message"] = {
+            "role": "assistant",
+            "content": "done",
+            "tool_calls": None,
+        }
+        client = _client_with_response(response)
+
+        result = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert result.choices[0].message.content == "done"

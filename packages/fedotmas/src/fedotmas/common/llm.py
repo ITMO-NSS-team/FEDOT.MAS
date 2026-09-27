@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from google.adk.models.lite_llm import LiteLlm
 from litellm import ModelResponse, ModelResponseStream
@@ -22,6 +22,11 @@ __all__ = ["make_llm"]
 
 _log = get_logger("fedotmas.llm")
 _ERROR_PAYLOAD_LEN = 2000
+_MAX_TOOL_ARGUMENT_RETRIES = 2
+_INVALID_TOOL_ARGUMENTS_RETRY = (
+    "The previous tool-call arguments were invalid JSON. Return valid, concise "
+    "JSON tool arguments."
+)
 
 
 def _json_value(value: Any) -> Any:
@@ -66,11 +71,81 @@ def _finish_reason_is_error(response: Any) -> bool:
 def _error_payload(response: Any) -> str:
     try:
         payload = json.dumps(_json_value(response), default=str)
-    except Exception:
+    except Exception:  # noqa: BLE001 - payload diagnostics must survive serialization errors
         return "<unserializable provider response>"
     if len(payload) > _ERROR_PAYLOAD_LEN:
         return payload[:_ERROR_PAYLOAD_LEN] + "... (truncated)"
     return payload
+
+
+def _invalid_tool_argument_names(response: Any) -> list[str]:
+    """Return tool names whose OpenAI-compatible arguments are not JSON."""
+    payload = (
+        response.model_dump()
+        if hasattr(response, "model_dump")
+        else _json_value(response)
+    )
+    choices = payload.get("choices") if isinstance(payload, Mapping) else None
+    choices = [] if choices is None else choices
+    invalid = []
+    for choice in choices:
+        message = choice.get("message") if isinstance(choice, Mapping) else None
+        message = {} if message is None else message
+        calls = message.get("tool_calls") if isinstance(message, Mapping) else None
+        calls = [] if calls is None else calls
+        for call in calls:
+            function = call.get("function", {}) if isinstance(call, Mapping) else {}
+            arguments = (
+                function.get("arguments") if isinstance(function, Mapping) else None
+            )
+            try:
+                if not isinstance(arguments, str):
+                    raise TypeError("arguments must be a JSON string")
+                json.loads(arguments)
+            except (TypeError, json.JSONDecodeError):
+                invalid.append(str(function.get("name", "<unnamed>")))
+    return invalid
+
+
+def _response_shape(response: Any) -> tuple[Any, int, int]:
+    """Return finish reason, tool-call count, and text-content length for logging."""
+    payload = (
+        response.model_dump()
+        if hasattr(response, "model_dump")
+        else _json_value(response)
+    )
+    choices = payload.get("choices") if isinstance(payload, Mapping) else None
+    choice = choices[0] if choices else {}
+    message = choice.get("message") if isinstance(choice, Mapping) else None
+    message = {} if message is None else message
+    calls = message.get("tool_calls") if isinstance(message, Mapping) else None
+    content = message.get("content") if isinstance(message, Mapping) else None
+    return (
+        choice.get("finish_reason") if isinstance(choice, Mapping) else None,
+        len(calls) if isinstance(calls, list) else 0,
+        len(content) if isinstance(content, str) else 0,
+    )
+
+
+def _response_usage(response: Any) -> tuple[int, int]:
+    payload = (
+        response.model_dump()
+        if hasattr(response, "model_dump")
+        else _json_value(response)
+    )
+    usage = payload.get("usage") if isinstance(payload, Mapping) else None
+    if not isinstance(usage, Mapping):
+        return 0, 0
+    return (
+        int(usage.get("prompt_tokens") or 0),
+        int(usage.get("completion_tokens") or 0),
+    )
+
+
+def _attach_usage(error: Exception, prompt_tokens: int, completion_tokens: int) -> None:
+    error_with_usage = cast(Any, error)
+    error_with_usage.prompt_tokens = prompt_tokens
+    error_with_usage.completion_tokens = completion_tokens
 
 
 class _StreamAdapter:
@@ -136,13 +211,68 @@ class _ProxyClient:
         resp = await self._client.chat.completions.create(**kw)
         if stream:
             return _StreamAdapter(resp)
+        total_prompt_tokens, total_completion_tokens = _response_usage(resp)
+        for attempt in range(_MAX_TOOL_ARGUMENT_RETRIES + 1):
+            finish_reason, tool_call_count, content_length = _response_shape(resp)
+            if isinstance(finish_reason, str) and finish_reason.lower() in {
+                "length",
+                "max_tokens",
+            }:
+                _log.warning(
+                    "Provider response reached its output-token limit; finish_reason={}",
+                    finish_reason,
+                )
+            _log.debug(
+                "OpenAI-compatible response | finish_reason={} tool_calls={} content_chars={}",
+                finish_reason,
+                tool_call_count,
+                content_length,
+            )
+            invalid = _invalid_tool_argument_names(resp)
+            if not invalid:
+                break
+            if attempt == _MAX_TOOL_ARGUMENT_RETRIES:
+                error = RuntimeError(
+                    "LLM provider returned malformed JSON tool arguments after "
+                    f"{_MAX_TOOL_ARGUMENT_RETRIES + 1} attempts: {', '.join(invalid)}"
+                )
+                _attach_usage(error, total_prompt_tokens, total_completion_tokens)
+                raise error
+            _log.warning(
+                "Retrying OpenAI-compatible response with invalid JSON tool arguments: {}",
+                ", ".join(invalid),
+            )
+            retry_kw = dict(kw)
+            retry_kw["messages"] = [
+                *messages,
+                {"role": "user", "content": _INVALID_TOOL_ARGUMENTS_RETRY},
+            ]
+            try:
+                resp = await self._client.chat.completions.create(**retry_kw)
+            except Exception as error:
+                _attach_usage(error, total_prompt_tokens, total_completion_tokens)
+                raise
+            prompt_tokens, completion_tokens = _response_usage(resp)
+            total_prompt_tokens += prompt_tokens
+            total_completion_tokens += completion_tokens
         if _finish_reason_is_error(resp):
             payload = _error_payload(resp)
             _log.error("OpenAI-compatible response finished with error: {}", payload)
-            raise RuntimeError(
+            error = RuntimeError(
                 f"LLM provider returned finish_reason='error': {payload}"
             )
-        return ModelResponse(**resp.model_dump())
+            _attach_usage(error, total_prompt_tokens, total_completion_tokens)
+            raise error
+        payload = resp.model_dump()
+        if total_prompt_tokens or total_completion_tokens:
+            usage = payload.get("usage") or {}
+            usage.update(
+                prompt_tokens=total_prompt_tokens,
+                completion_tokens=total_completion_tokens,
+                total_tokens=total_prompt_tokens + total_completion_tokens,
+            )
+            payload["usage"] = usage
+        return ModelResponse(**payload)
 
 
 def make_llm(cfg: ModelConfig) -> BaseLlm:

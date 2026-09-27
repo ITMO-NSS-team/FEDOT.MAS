@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+import warnings
+from typing import Any
 from urllib.parse import urldefrag, urlsplit, urlunsplit
 
+from google.adk.agents.callback_context import CallbackContext
+from google.adk.models.llm_request import LlmRequest
 from google.adk.plugins import BasePlugin
 from google.adk.runners import InvocationContext
 from google.adk.tools.base_tool import BaseTool
@@ -10,20 +13,22 @@ from google.adk.tools.tool_context import ToolContext
 
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp import strip_tool_name_prefix
+from fedotmas.mcp.capabilities import (
+    ToolCapability,
+    is_inspection_tool,
+    normalize_tool_name,
+    tool_capability,
+)
+from fedotmas.plugins._research_telemetry import ResearchTelemetry
+from fedotmas.plugins._tool_error_circuit_breaker import (
+    DUPLICATE_TOOL_CALL,
+    WEB_BUDGET_EXHAUSTED,
+    INVALID_TOOL_INPUT
+)
 
 _log = get_logger("fedotmas.plugins.web_search_limit")
 
-DEFAULT_WEB_SEARCH_TOOL_NAMES = frozenset(
-    {
-        "search",
-        "web_search",
-        "web-search",
-        "websearch",
-        "google_search",
-        "searxng_search",
-    }
-)
-WEB_SEARCH_HINTS = (
+_WEB_SEARCH_DESCRIPTION_HINTS = (
     "web",
     "internet",
     "searxng",
@@ -32,7 +37,10 @@ WEB_SEARCH_HINTS = (
     "duckduckgo",
     "brave",
     "yahoo",
+    "tavily",
 )
+
+BUDGET_STATE_KEY = "_fedotmas_tool_budgets"
 
 
 #: Searches per agent before the budget answers "stop exploring".  Four ran out
@@ -41,7 +49,12 @@ DEFAULT_WEB_SEARCH_LIMIT = 20
 
 
 class WebSearchLimitPlugin(BasePlugin):
-    """Limit web-search tool calls per agent within one ADK run."""
+    """Limit web-search calls per agent within one ADK run.
+
+    Exhaustion returns a marked tool result for that agent to finalize from
+    current evidence. The legacy ``hard_fail=True`` argument warns and is ignored:
+    raising here aborts ADK's whole parallel tool-call batch.
+    """
 
     def __init__(
         self,
@@ -53,31 +66,40 @@ class WebSearchLimitPlugin(BasePlugin):
         ignore_local_urls: bool = True,
         reject_empty_urls: bool = False,
         dedupe_identical_calls: bool = True,
-        hard_fail: bool = False,
+        hard_fail: bool | None = None,
+        exhausted_agents: set[tuple[str, str, str]] | None = None,
+        telemetry: ResearchTelemetry | None = None,
+        budget_kind: str = "search",
         name: str = "fedotmas_web_search_limit",
     ) -> None:
         if max_calls_per_agent < 1:
             raise ValueError("max_calls_per_agent must be >= 1")
         super().__init__(name=name)
         self.max_calls_per_agent = max_calls_per_agent
-        self.hard_fail = hard_fail
-        # When True, every matched web/search tool call is blocked with a soft
-        # "answer now" result (never raises). Set during the post-budget
-        # finalization turn so the agent stops exploring and commits an answer.
-        self.finalizing = False
+        if hard_fail:
+            warnings.warn(
+                "hard_fail=True is deprecated and ignored; budget exhaustion is "
+                "always returned as a tool result so parallel calls stay correlated.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.count_unique_urls = count_unique_urls
         self.ignore_local_urls = ignore_local_urls
         self.reject_empty_urls = reject_empty_urls
         self.dedupe_identical_calls = dedupe_identical_calls
-        self._tool_names = {
-            name.lower() for name in (tool_names or DEFAULT_WEB_SEARCH_TOOL_NAMES)
-        }
+        self.telemetry = telemetry
+        self.budget_kind = budget_kind
+        self._tool_names = {name.lower() for name in (tool_names or set())}
+        self._custom_tool_names = tool_names is not None
         self._same_url_exempt_tool_names = {
             name.lower() for name in (same_url_exempt_tool_names or set())
         }
         self._counts: dict[tuple[str, str], int] = {}
         self._seen_calls: set[tuple[str, str, str]] = set()
         self._seen_urls: set[tuple[str, str, str]] = set()
+        self._exhausted_agents = (
+            exhausted_agents if exhausted_agents is not None else set()
+        )
 
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
@@ -88,7 +110,8 @@ class WebSearchLimitPlugin(BasePlugin):
         }
         self._seen_calls = {key for key in self._seen_calls if key[0] != session_id}
         self._seen_urls = {key for key in self._seen_urls if key[0] != session_id}
-        return None
+        stale_agents = {key for key in self._exhausted_agents if key[0] == session_id}
+        self._exhausted_agents.difference_update(stale_agents)
 
     async def before_tool_callback(
         self,
@@ -96,27 +119,67 @@ class WebSearchLimitPlugin(BasePlugin):
         tool: BaseTool,
         tool_args: dict[str, Any],
         tool_context: ToolContext,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         if not self._is_web_search_tool(tool):
             return None
 
-        if self.finalizing:
-            return _limit_result(
-                "Search/exploration budget exhausted and tools are now disabled. "
-                "Do not call web, browser, or search tools. Provide your best final "
-                "answer from the evidence already gathered."
-            )
-
         session_id = tool_context._invocation_context.session.id
-        agent_name = tool_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
+        agent_name = tool_context._invocation_context.agent.name  # ty: ignore[unresolved-attribute]
         tool_name = strip_tool_name_prefix(tool.name).lower()
-        key = (session_id, agent_name)
+        key = (session_id, agent_name, self.budget_kind)
+        state = getattr(tool_context, "state", None)
+        state_writable = all(hasattr(state, attr) for attr in ("get", "__setitem__"))
+        budgets = state.get(BUDGET_STATE_KEY) if state_writable else None
+        if not isinstance(budgets, dict):
+            budgets = {}
+            if state_writable:
+                state[BUDGET_STATE_KEY] = budgets
+        agent_budgets = budgets.setdefault(agent_name, {})
+        if isinstance(agent_budgets, dict):
+            used_now = self._counts.get(key, 0)
+            agent_budgets[self.budget_kind] = {
+                "limit": self.max_calls_per_agent,
+                "used": used_now,
+                "remaining": max(0, self.max_calls_per_agent - used_now),
+                "status": "exhausted"
+                if used_now >= self.max_calls_per_agent
+                else "available",
+            }
+
+        if key in self._exhausted_agents:
+            if self.telemetry is not None:
+                self.telemetry.budget_blocked(agent_name)
+                self.telemetry.record_blocked(
+                    agent_name,
+                    tool.name,
+                    tool_args,
+                    category="budget_exhausted",
+                    call_id=getattr(tool_context, "function_call_id", None),
+                    budget={
+                        "kind": self.budget_kind,
+                        "limit": self.max_calls_per_agent,
+                        "used": used_now,
+                        "remaining": 0,
+                        "status": "exhausted",
+                    },
+                )
+            return _finalize_result(agent_name, self.budget_kind)
 
         url = _normalise_url(tool_args.get("url"))
         if self.reject_empty_urls and "url" in tool_args and not url:
+            if self.telemetry is not None:
+                self.telemetry.blocked(agent_name)
+                self.telemetry.record_blocked(
+                    agent_name,
+                    tool.name,
+                    tool_args,
+                    category="invalid_input",
+                    call_id=getattr(tool_context, "function_call_id", None),
+                )
             return _limit_result(
                 "Empty URL rejected for web tool "
-                f"'{tool.name}' on agent '{agent_name}'."
+                f"'{tool.name}' on agent '{agent_name}'.",
+                error_code=INVALID_TOOL_INPUT,
             )
         if self.ignore_local_urls and _is_local_url(url):
             _log.debug(
@@ -132,11 +195,23 @@ class WebSearchLimitPlugin(BasePlugin):
             call_key = (session_id, agent_name, _call_fingerprint(tool, tool_args))
             if call_key in self._seen_calls:
                 _log.debug(
-                    "Web limit ignored duplicate call | agent={} tool={}",
+                    "Web limit blocked duplicate call | agent={} tool={}",
                     agent_name,
                     tool.name,
                 )
-                return None
+                if self.telemetry is not None:
+                    self.telemetry.duplicate(agent_name)
+                    self.telemetry.record_blocked(
+                        agent_name,
+                        tool.name,
+                        tool_args,
+                        category="duplicate_call",
+                        call_id=getattr(tool_context, "function_call_id", None),
+                    )
+                return {
+                    "error_code": DUPLICATE_TOOL_CALL,
+                    "message": "Identical tool call already made. Use its earlier result or change the query or URL.",
+                }
 
         url_key: tuple[str, str, str] | None = None
         if url:
@@ -152,15 +227,14 @@ class WebSearchLimitPlugin(BasePlugin):
                     url,
                 )
                 return None
-            if self.count_unique_urls:
-                if url_key in self._seen_urls:
-                    _log.debug(
-                        "Web limit ignored already-counted URL | agent={} tool={} url={}",
-                        agent_name,
-                        tool.name,
-                        url,
-                    )
-                    return None
+            if self.count_unique_urls and url_key in self._seen_urls:
+                _log.debug(
+                    "Web limit ignored already-counted URL | agent={} tool={} url={}",
+                    agent_name,
+                    tool.name,
+                    url,
+                )
+                return None
 
         used = self._counts.get(key, 0)
         if used >= self.max_calls_per_agent:
@@ -169,11 +243,52 @@ class WebSearchLimitPlugin(BasePlugin):
                 f"'{agent_name}': max {self.max_calls_per_agent} calls per run."
             )
             _log.warning(message)
-            if self.hard_fail:
-                raise WebSearchLimitExceeded(message)
-            return _limit_result(message)
+            self._exhausted_agents.add(key)
+            if self.telemetry is not None:
+                self.telemetry.exhausted(agent_name, self.budget_kind)
+                self.telemetry.record_blocked(
+                    agent_name,
+                    tool.name,
+                    tool_args,
+                    category="budget_exhausted",
+                    call_id=getattr(tool_context, "function_call_id", None),
+                    budget={
+                        "kind": self.budget_kind,
+                        "limit": self.max_calls_per_agent,
+                        "used": used,
+                        "remaining": 0,
+                        "status": "exhausted",
+                    },
+                )
+            next_step = (
+                "Stop discovery searches. Inspect already-found URLs with available "
+                "extraction tools, then synthesize from the evidence."
+                if self.budget_kind == "search"
+                else "Stop extraction and synthesize from the evidence already gathered."
+            )
+            return _limit_result(
+                f"{message} This agent's {self.budget_kind} budget is exhausted. {next_step}",
+                error_code=WEB_BUDGET_EXHAUSTED,
+            )
 
         self._counts[key] = used + 1
+        if isinstance(agent_budgets, dict):
+            remaining = max(0, self.max_calls_per_agent - used - 1)
+            budget_state = {
+                "limit": self.max_calls_per_agent,
+                "used": used + 1,
+                "remaining": remaining,
+                "status": "exhausted" if remaining == 0 else "available",
+            }
+            agent_budgets[self.budget_kind] = budget_state
+            if self.telemetry is not None:
+                self.telemetry.record_budget(
+                    agent_name,
+                    tool.name,
+                    tool_args,
+                    {"kind": self.budget_kind, **budget_state},
+                    call_id=getattr(tool_context, "function_call_id", None),
+                )
         if call_key is not None:
             self._seen_calls.add(call_key)
         if url_key is not None:
@@ -187,24 +302,101 @@ class WebSearchLimitPlugin(BasePlugin):
         )
         return None
 
+    async def before_model_callback(
+        self, *, callback_context: CallbackContext, llm_request: LlmRequest
+    ) -> None:
+        budgets = callback_context.state.get(BUDGET_STATE_KEY, {})
+        agent_name = callback_context._invocation_context.agent.name
+        current = budgets.get(agent_name, {}) if isinstance(budgets, dict) else {}
+        if not isinstance(current, dict):
+            return
+        if not (
+            isinstance(current.get(self.budget_kind), dict)
+            and current[self.budget_kind].get("status") == "exhausted"
+        ):
+            return
+        names = {
+            name
+            for name, tool in llm_request.tools_dict.items()
+            if self._is_web_search_tool(tool)
+        }
+        if names:
+            retained = []
+            for group in llm_request.config.tools or []:
+                declarations = group.function_declarations
+                if declarations is None:
+                    retained.append(group)
+                    continue
+                group.function_declarations = [
+                    item for item in declarations if item.name not in names
+                ]
+                if group.function_declarations:
+                    retained.append(group)
+            llm_request.config.tools = retained
+        llm_request.append_instructions(
+            [
+                (
+                    f"The {self.budget_kind} tool budget is exhausted for this agent. "
+                    "Those tools are unavailable now. Continue from collected evidence "
+                    "or state which required evidence remains unresolved."
+                )
+            ]
+        )
+
     def _is_web_search_tool(self, tool: BaseTool) -> bool:
-        # Through the prefix: the budget is configured with bare names, and a
-        # server declaring tool_name_prefix renames all of its tools.
         name = strip_tool_name_prefix(tool.name).lower()
-        if name in self._tool_names:
-            description = (tool.description or "").lower()
-            if name == "search":
-                return any(hint in description for hint in WEB_SEARCH_HINTS)
+        description = (tool.description or "").lower()
+        if self.budget_kind == "search":
+            if self._custom_tool_names and name not in self._tool_names:
+                return False
+            capability = tool_capability(tool.name, description=description)
+            if self._custom_tool_names and name != "search":
+                return True
+            if capability != ToolCapability.DISCOVERY:
+                return False
+            if normalize_tool_name(tool.name) == "search":
+                description = (tool.description or "").casefold()
+                return any(
+                    hint in description
+                    for hint in _WEB_SEARCH_DESCRIPTION_HINTS
+                )
             return True
+        if self.budget_kind == "scraping":
+            return is_inspection_tool(tool.name)
+        if self.budget_kind in {"browser", "browser_agent"}:
+            return tool_capability(tool.name) == ToolCapability.BROWSER_NAVIGATION
+        if self._custom_tool_names:
+            return name in self._tool_names
         return False
 
 
 class WebSearchLimitExceeded(RuntimeError):
-    """Raised when a hard web-search/tool budget is exhausted."""
+    """Legacy exception type retained for import compatibility; no longer raised.
+
+    Budget exhaustion is now returned as a synthetic tool result carrying the
+    ``WEB_BUDGET_EXHAUSTED`` error code. Raising from ADK callbacks can abort a
+    parallel tool-call batch and orphan its correlated responses.
+    """
 
 
-def _limit_result(message: str) -> dict[str, Any]:
-    return {"isError": True, "error": message}
+def _limit_result(message: str, *, error_code: str | None = None) -> dict[str, Any]:
+    result: dict[str, Any] = {"isError": True, "error": message}
+    if error_code is not None:
+        result["error_code"] = error_code
+    return result
+
+
+def _finalize_result(agent_name: str, budget_kind: str) -> dict[str, Any]:
+    next_step = (
+        "Inspect already-found URLs with available extraction tools, then synthesize."
+        if budget_kind == "search"
+        else "Synthesize from the evidence already gathered."
+    )
+    return _limit_result(
+        f"{budget_kind.capitalize()} tools are disabled for agent '{agent_name}' "
+        f"because its budget is exhausted. {next_step}",
+        error_code=WEB_BUDGET_EXHAUSTED,
+    )
 
 
 def _normalise_url(value: Any) -> str:

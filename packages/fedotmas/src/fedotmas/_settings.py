@@ -21,6 +21,7 @@ DEFAULT_META_MODEL = "qwen/qwen3.6-finetuned"
 DEFAULT_WORKER_MODELS: list[str] = ["openai/gpt-5-mini"]
 DEFAULT_META_TEMPERATURE = 0.3
 DEFAULT_MAX_LOOP_ITERATIONS = 3
+DEFAULT_MAX_AGENT_LLM_TURNS = 8
 
 
 @dataclass(frozen=True)
@@ -160,3 +161,20 @@ def get_max_loop_iterations() -> int:
         raise ValueError(
             f"Invalid FEDOTMAS_DEFAULT_MAX_LOOP_ITERATIONS='{env}', expected an integer"
         ) from None
+
+
+def get_max_agent_llm_turns() -> int:
+    """Maximum model requests one agent may make during a pipeline run."""
+    env = os.getenv("FEDOTMAS_DEFAULT_MAX_AGENT_LLM_TURNS")
+    if not env:
+        return DEFAULT_MAX_AGENT_LLM_TURNS
+    try:
+        value = int(env)
+    except ValueError:
+        raise ValueError(
+            "Invalid FEDOTMAS_DEFAULT_MAX_AGENT_LLM_TURNS="
+            f"'{env}', expected an integer"
+        ) from None
+    if value < 1:
+        raise ValueError("FEDOTMAS_DEFAULT_MAX_AGENT_LLM_TURNS must be >= 1")
+    return value

@@ -1,0 +1,23 @@
+[build-system]
+build-backend = "uv_build"
+requires = ["uv-build>=0.10.3,<0.11"]
+
+[project]
+name = "mcp-sampo-python"
+version = "0.1.0"
+description = "Leakage-safe general Python workspace for the public SAMPO benchmark"
+requires-python = ">=3.12"
+dependencies = ["e2b-code-interpreter>=1", "fastmcp>=2.14.5", "python-dotenv>=1"]
+scripts.mcp-sampo-python = "mcp_sampo_python.server:main"
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.pytest]
+ini_options.asyncio_mode = "auto"
+
+[tool.fedotmas]
+mcp.name = "sampo-python"
+mcp.description = "General Python data-science workspace preloaded only with public SAMPO inputs and allowed labels. Supports persistent code execution, batch file processing, and validated public prediction export; no host file upload/download or private data access."
+mcp.tags = ["sampo", "benchmark", "python", "data-science", "public-data", "safe"]
+mcp.timeout = 900

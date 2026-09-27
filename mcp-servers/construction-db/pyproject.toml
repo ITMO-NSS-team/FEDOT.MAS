@@ -1,0 +1,23 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-construction-db"
+version = "0.1.0"
+description = "Read-only MCP access to restored STAIRS and SAMPO PostgreSQL databases"
+requires-python = ">=3.12"
+dependencies = [
+  "fastmcp>=2.14.5",
+  "psycopg[binary]>=3.2",
+]
+scripts.mcp-construction-db = "mcp_construction_db.server:main"
+
+[dependency-groups]
+dev = [ "pytest" ]
+
+[tool.fedotmas]
+mcp.name = "construction-db"
+mcp.description = "Read-only, bounded schema inspection and SELECT queries for restored STAIRS/SAMPO PostgreSQL-compatible databases."
+mcp.tags = [ "construction", "stairs", "sampo", "database", "postgresql", "read-only" ]
+mcp.timeout = 30

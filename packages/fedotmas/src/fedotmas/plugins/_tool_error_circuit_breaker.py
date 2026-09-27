@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from google.adk.plugins import BasePlugin
 from google.adk.runners import InvocationContext
@@ -8,6 +8,10 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 
 from fedotmas.common.logging import get_logger
+from fedotmas.mcp import strip_tool_name_prefix
+
+if TYPE_CHECKING:
+    from fedotmas.plugins._research_telemetry import ResearchTelemetry
 
 _log = get_logger("fedotmas.plugins.tool_error_circuit_breaker")
 
@@ -20,19 +24,75 @@ _log = get_logger("fedotmas.plugins.tool_error_circuit_breaker")
 #: is a separate package.
 RESCUED_META_KEY = "fedotmas/rescued"
 
+# Machine-readable control-flow result returned when an agent's own web budget
+# is exhausted. It is a blocked call, not a failure of the underlying tool.
+WEB_BUDGET_EXHAUSTED = "WEB_BUDGET_EXHAUSTED"
+DUPLICATE_TOOL_CALL = "DUPLICATE_TOOL_CALL"
+TOOL_CIRCUIT_OPEN = "TOOL_CIRCUIT_OPEN"
+INVALID_TOOL_INPUT = "INVALID_TOOL_INPUT"
+RESEARCH_CONTROLLER_STATE_REQUIRED = "RESEARCH_CONTROLLER_STATE_REQUIRED"
+RESEARCH_CONVERGENCE_REQUIRED = "RESEARCH_CONVERGENCE_REQUIRED"
+CODE_AGENT_TASK_TOO_LARGE = "CODE_AGENT_TASK_TOO_LARGE"
+NON_EXECUTED_POLICY_ERROR_CODES = frozenset(
+    {
+        WEB_BUDGET_EXHAUSTED,
+        DUPLICATE_TOOL_CALL,
+        TOOL_CIRCUIT_OPEN,
+        INVALID_TOOL_INPUT,
+        "INVALID_VIDEO_URL",
+        "INVALID_CURSOR",
+        RESEARCH_CONTROLLER_STATE_REQUIRED,
+        RESEARCH_CONVERGENCE_REQUIRED,
+        "BROWSER_DISCOVERY_POLICY",
+        "BROWSER_AGENT_POLICY",
+        "EVIDENCE_FIRST_SEARCH_DISABLED",
+        "INSPECTION_ONLY_DISCOVERY_DISABLED",
+        "DISCOVERY_ONLY_INSPECTION_DISABLED",
+        "DISCOVERY_FANOUT_LIMIT",
+        "DISCOVERY_VALIDATION_REQUIRES_CANDIDATE",
+        "DISCOVERY_VALIDATION_LIMIT",
+        "INSPECT_CANDIDATES_FIRST",
+        "SOURCE_CANDIDATES_READY",
+        "TARGETED_RECOVERY_EXHAUSTED",
+        "TARGETED_RECOVERY_REQUIRES_IDENTITY",
+        CODE_AGENT_TASK_TOO_LARGE,
+        "CODE_AGENT_CONTEXT_TOO_LARGE",
+        "CODE_AGENT_BUDGET_EXHAUSTED",
+        "CODE_AGENT_EXECUTION_BUDGET_CLAMPED",
+        "TASK_DEADLINE_NEAR",
+    }
+)
+SOURCE_LEVEL_ERROR_CODES = frozenset(
+    {"TRANSCRIPTS_DISABLED", "NO_TRANSCRIPT_FOUND", "VIDEO_UNAVAILABLE", "AGE_RESTRICTED"}
+)
+
+
+def is_non_executed_policy_block(error_code: Any) -> bool:
+    return isinstance(error_code, str) and (
+        error_code in NON_EXECUTED_POLICY_ERROR_CODES
+        or error_code.startswith("INVALID_")
+    )
+
+
+def is_breaker_exempt_error_code(error_code: Any) -> bool:
+    return is_non_executed_policy_block(error_code) or (
+        isinstance(error_code, str) and error_code in SOURCE_LEVEL_ERROR_CODES
+    )
+
 
 class ToolErrorCircuitOpen(RuntimeError):
-    """Raised when repeated tool failures trip a circuit breaker."""
+    """Legacy exception retained for import compatibility; circuits are local."""
 
 
 class ToolErrorCircuitBreakerPlugin(BasePlugin):
-    """Abort runs that repeatedly hit tool errors for the same agent/tool pattern."""
+    """Open a local agent/tool circuit after repeated errors."""
 
     def __init__(
         self,
         *,
         max_errors_per_agent: int = 10,
         max_same_tool_error_type: int = 3,
+        telemetry: ResearchTelemetry | None = None,
         name: str = "fedotmas_tool_error_circuit_breaker",
     ) -> None:
         if max_errors_per_agent < 1:
@@ -42,8 +102,10 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         super().__init__(name=name)
         self.max_errors_per_agent = max_errors_per_agent
         self.max_same_tool_error_type = max_same_tool_error_type
+        self.telemetry = telemetry
         self._total_errors: dict[tuple[str, str], int] = {}
         self._pattern_errors: dict[tuple[str, str, str, str], int] = {}
+        self._open_circuits: dict[tuple[str, str, str], str] = {}
 
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
@@ -59,7 +121,38 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
             for key, count in self._pattern_errors.items()
             if key[0] != session_id
         }
-        return None
+        self._open_circuits = {
+            key: reason
+            for key, reason in self._open_circuits.items()
+            if key[0] != session_id
+        }
+
+    async def before_tool_callback(
+        self,
+        *,
+        tool: BaseTool,
+        tool_args: dict[str, Any],
+        tool_context: ToolContext,
+    ) -> dict | None:
+        session_id, agent_name = _session_agent(tool_context)
+        circuit_key = (session_id, agent_name, tool.name)
+        reason = self._open_circuits.get(circuit_key)
+        if reason is None:
+            return None
+        if self.telemetry is not None:
+            self.telemetry.circuit_blocked(agent_name, tool.name)
+            self.telemetry.record_blocked(
+                agent_name,
+                tool.name,
+                tool_args,
+                category="circuit_breaker",
+                call_id=getattr(tool_context, "function_call_id", None),
+            )
+        return {
+            "isError": True,
+            "error_code": TOOL_CIRCUIT_OPEN,
+            "error": reason,
+        }
 
     async def after_tool_callback(
         self,
@@ -68,7 +161,10 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         tool_args: dict[str, Any],
         tool_context: ToolContext,
         result: dict,
-    ) -> Optional[dict]:
+    ) -> dict | None:
+        error_code = get_explicit_error_code(result)
+        if is_breaker_exempt_error_code(error_code):
+            return None
         if not _is_error_result(result):
             return None
 
@@ -83,7 +179,7 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         tool_args: dict[str, Any],
         tool_context: ToolContext,
         error: Exception,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         self._record_error(
             tool=tool,
             tool_context=tool_context,
@@ -99,10 +195,14 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         tool_context: ToolContext,
         error_type: str,
     ) -> None:
-        session_id = tool_context._invocation_context.session.id
-        agent_name = tool_context._invocation_context.agent.name  # noqa: E501  # ty: ignore[unresolved-attribute]
+        session_id, agent_name = _session_agent(tool_context)
         total_key = (session_id, agent_name)
-        pattern_key = (session_id, agent_name, tool.name, error_type)
+        tool_name = strip_tool_name_prefix(tool.name)
+        circuit_key = (session_id, agent_name, tool.name)
+        pattern_key = (session_id, agent_name, tool_name, error_type)
+
+        if circuit_key in self._open_circuits:
+            return
 
         total = self._total_errors.get(total_key, 0) + 1
         pattern_total = self._pattern_errors.get(pattern_key, 0) + 1
@@ -121,16 +221,19 @@ class ToolErrorCircuitBreakerPlugin(BasePlugin):
         )
 
         if pattern_total >= self.max_same_tool_error_type:
-            raise ToolErrorCircuitOpen(
-                "Tool error circuit opened for agent "
-                f"'{agent_name}' on tool '{tool.name}' with error type "
-                f"'{error_type}': {pattern_total} repeated failures."
+            reason = (
+                f"The {tool.name} circuit is open for this agent after "
+                f"{pattern_total} {error_type} failures. Use another tool, existing "
+                "evidence, or finish your assigned role."
             )
-        if total >= self.max_errors_per_agent:
-            raise ToolErrorCircuitOpen(
-                "Tool error circuit opened for agent "
-                f"'{agent_name}': {total} tool errors in this run."
+            self._open_circuits[circuit_key] = reason
+        elif total >= self.max_errors_per_agent:
+            reason = (
+                f"The {tool.name} circuit is open for this agent after "
+                f"{total} tool failures in this run. Use another tool, existing "
+                "evidence, or finish your assigned role."
             )
+            self._open_circuits[circuit_key] = reason
 
 
 def _is_error_result(result: dict) -> bool:
@@ -139,12 +242,32 @@ def _is_error_result(result: dict) -> bool:
     meta = result.get("meta")
     if isinstance(meta, dict) and meta.get(RESCUED_META_KEY):
         return False
-    if result.get("isError") is True:
+    if result.get("isError") is True or result.get("is_error") is True:
         return True
-    return "error" in result and result.get("error") not in {None, ""}
+    value = result.get("error")
+    return "error" in result and value is not None and value != ""
+
+
+def _session_agent(tool_context: ToolContext) -> tuple[str, str]:
+    invocation = tool_context._invocation_context
+    return (
+        invocation.session.id,
+        invocation.agent.name,  # ty: ignore[unresolved-attribute]
+    )
 
 
 def _error_type_from_result(result: dict) -> str:
+    for payload in (
+        result,
+        *(
+            result.get(key)
+            for key in ("meta", "_meta", "structuredContent", "structured_content")
+        ),
+    ):
+        if isinstance(payload, dict):
+            code = payload.get("error_code")
+            if isinstance(code, str) and code:
+                return code
     value = result.get("error")
     if isinstance(value, dict):
         for key in ("type", "code", "error_type"):
@@ -153,3 +276,15 @@ def _error_type_from_result(result: dict) -> str:
     if isinstance(value, str) and value.strip():
         return value.split(":", 1)[0][:80]
     return "ToolErrorResult"
+
+
+def get_explicit_error_code(result: dict) -> str | None:
+    for payload in (
+        result,
+        *(result.get(key) for key in ("meta", "_meta", "structuredContent", "structured_content")),
+    ):
+        if isinstance(payload, dict):
+            code = payload.get("error_code")
+            if isinstance(code, str):
+                return code
+    return None
