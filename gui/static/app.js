@@ -2453,6 +2453,10 @@ function removeScenario(id) {
   const wasActive = S.preset && S.preset.id === id;
   const before = S.custom.length;
   S.custom = S.custom.filter((p) => p.id !== id);
+  // Удалённый штатный контрольный прогон не добавляем заново при следующем входе.
+  if (S.custom.length !== before
+      && (window.STARTUP_PRESETS || []).some((p) => p.id === id && p.installOnExisting)
+      && !S.hidden.includes(id)) S.hidden.push(id);
   if (S.custom.length === before && !S.hidden.includes(id)) S.hidden.push(id);
   storeScenarios();
   renderPresetList();
@@ -2482,6 +2486,15 @@ function initPresets() {
   // Обновление постановки встроенного сценария применяется к сохранённой копии
   // один раз; дальнейшие правки пользователя сохраняются до следующей редакции.
   let queryUpdated = false;
+  // Новую запись эталонного прогона добавляем и в браузеры, где уже сохранены
+  // свои сценарии. Старые прогоны и пользовательские правки не перезаписываем.
+  for (const preset of window.STARTUP_PRESETS || []) {
+    if (preset.installOnExisting && !S.hidden.includes(preset.id)
+        && !S.custom.some((item) => item.id === preset.id)) {
+      S.custom.unshift(JSON.parse(JSON.stringify(preset)));
+      queryUpdated = true;
+    }
+  }
   for (const preset of window.STARTUP_PRESETS || []) {
     const saved = S.custom.find((item) => item.id === preset.id);
     if (saved && (saved.queryRevision || 0) < (preset.queryRevision || 0)) {
