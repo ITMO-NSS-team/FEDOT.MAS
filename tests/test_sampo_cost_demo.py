@@ -45,11 +45,12 @@ def test_failures_stay_in_end_to_end_denominator():
     assert conditional == 1
 
 
-def test_system_names_are_common_and_finalization_guarded():
+def test_system_names_are_common_and_runner_exposes_only_smoke():
     runner = (ROOT / "scripts/run_sampo_cost_demo.py").read_text()
     for name in ("tfidf", "cheap_single_agent", "fedotmas_cost_aware", "codex"):
         assert name in runner
-    assert "Final evaluation is already finalized" in runner
+    assert 'sub.add_parser("smoke")' in runner
+    assert 'sub.add_parser("final")' not in runner
 
 
 def test_preregistration_contains_fixed_primary_success_threshold():

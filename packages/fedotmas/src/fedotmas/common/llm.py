@@ -21,7 +21,7 @@ __all__ = ["make_llm"]
 _log = get_logger("fedotmas.llm")
 _ERROR_PAYLOAD_LEN = 2000
 _MAX_TOOL_ARGUMENT_RETRIES = 2
-_DEFAULT_MAX_OUTPUT_TOKENS = 4096
+_DEFAULT_MAX_OUTPUT_TOKENS = 8192
 _INVALID_TOOL_ARGUMENTS_RETRY = (
     "The previous tool-call arguments were invalid JSON. Return valid, concise "
     "JSON tool arguments."
@@ -156,6 +156,8 @@ class _ProxyClient:
     pass through as-is to the proxy.
     """
 
+    request_observer = None
+
     def __init__(self, base_url: str, api_key: str, extra_body: dict[str, Any] | None):
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
         self._extra_body = dict(extra_body or {})
@@ -182,7 +184,13 @@ class _ProxyClient:
             model,
             _tool_names_for_log(tools),
         )
-        resp = await self._client.chat.completions.create(**kw)
+        async def create(request_kind):
+            observer = type(self).request_observer
+            if observer is not None:
+                observer(model=model, request_kind=request_kind)
+            return await self._client.chat.completions.create(**kw)
+
+        resp = await create("initial")
         if stream:
             return _StreamAdapter(resp)
         for attempt in range(_MAX_TOOL_ARGUMENT_RETRIES + 1):
@@ -210,6 +218,9 @@ class _ProxyClient:
                 *messages,
                 {"role": "user", "content": _INVALID_TOOL_ARGUMENTS_RETRY},
             ]
+            observer = type(self).request_observer
+            if observer is not None:
+                observer(model=model, request_kind="malformed_tool_retry")
             resp = await self._client.chat.completions.create(**retry_kw)
         if _finish_reason_is_error(resp):
             payload = _error_payload(resp)

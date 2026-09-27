@@ -91,6 +91,37 @@ def construct_split(seed: int = 20260927, target: int = 1000) -> dict[str, Any]:
     return manifest
 
 
+def construct_operational_set(seed: int = 20300927, target: int = 20) -> dict[str, Any]:
+    """Create the separate 20-example public-only operational smoke input."""
+    source = read_csv(ROOT / "artifacts/sampo_benchmark/benchmark_inputs.csv")
+    pilot = read_csv(ROOT / "artifacts/sampo_benchmark/pilot_inputs.csv")
+    final = read_csv(OUT / "public_inputs.csv")
+    pilot_ids = {r["example_id"] for r in pilot}
+    final_ids = {r["example_id"] for r in final}
+    blocked_names = {normalized_name(r["raw_work_name"]) for r in [*pilot, *final]}
+    eligible = [r for r in source if r["example_id"] not in pilot_ids | final_ids and normalized_name(r["raw_work_name"]) not in blocked_names]
+    if len(eligible) < target:
+        raise ValueError(f"Only {len(eligible)} operational rows available; need {target}")
+    selected = random.Random(seed).sample(eligible, target)
+    path = OUT / "operational_inputs.csv"
+    if path.exists():
+        previous = read_csv(path)
+        if previous != selected:
+            raise FileExistsError("Operational split exists and differs; refusing regeneration")
+    else:
+        write_csv(path, ["example_id", "raw_work_name"], selected)
+    manifest_path = OUT / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    provenance = {"seed": seed, "target_size": target, "ids": [r["example_id"] for r in selected], "sha256": sha256(path), "eligible_rows": len(eligible), "disjoint_ids_from_old_pilot": True, "disjoint_normalized_names_from_old_pilot": True, "disjoint_ids_from_final": True, "disjoint_normalized_names_from_final": True, "source_sha256": sha256(ROOT / "artifacts/sampo_benchmark/benchmark_inputs.csv")}
+    if "operational_set" in manifest and manifest["operational_set"] != provenance:
+        raise FileExistsError("Operational provenance differs from frozen manifest")
+    manifest["operational_set"] = provenance
+    temp = manifest_path.with_suffix(".tmp")
+    temp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp.replace(manifest_path)
+    return provenance
+
+
 def call_cost(call: dict[str, Any], pricing: dict[str, Any]) -> float:
     if call.get("provider_cost_usd") is not None:
         return float(call["provider_cost_usd"])

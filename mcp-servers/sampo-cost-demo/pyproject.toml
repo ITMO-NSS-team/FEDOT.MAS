@@ -1,0 +1,18 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-sampo-cost-demo"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [ "fastmcp>=2.14.5", "pydantic>=2" ]
+
+[project.scripts]
+mcp-sampo-cost-demo = "mcp_sampo_cost_demo.server:main"
+
+[tool.fedotmas]
+mcp.name = "sampo-cost-demo"
+mcp.description = "Batch-scoped public SAMPO candidate retrieval and prediction storage."
+mcp.tags = [ "sampo", "public-data", "safe" ]
+mcp.timeout = 300
