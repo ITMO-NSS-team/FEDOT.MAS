@@ -13,6 +13,8 @@ from typing import Any
 from fedotmas.common.codex_cli import is_codex_model, run_codex_cli
 from fedotmas.common.openrouter_proxy import openrouter_http_client
 
+from .security import ensure_model_allowed
+
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
 
@@ -60,6 +62,7 @@ async def complete(
     max_tokens: int | None = None,
 ) -> Completion:
     """Return one complete response through the selected model transport."""
+    ensure_model_allowed(model)
     if is_codex_model(model):
         prompt = "\n\n".join(
             f"[{item.get('role', 'user')}]\n{item.get('content', '')}"
@@ -84,7 +87,9 @@ async def complete(
     kwargs: dict[str, Any] = {
         "model": resolved,
         "messages": messages,
-        "max_tokens": max_tokens if max_tokens is not None else DEFAULT_MAX_OUTPUT_TOKENS,
+        "max_tokens": max_tokens
+        if max_tokens is not None
+        else DEFAULT_MAX_OUTPUT_TOKENS,
     }
     if json_schema is not None:
         kwargs["response_format"] = {"type": "json_object"}

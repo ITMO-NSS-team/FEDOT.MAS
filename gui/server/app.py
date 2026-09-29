@@ -116,11 +116,16 @@ app.post("/api/key")(security.set_key)
 @app.get("/api/status")
 async def status() -> dict:
     registry = resolve_mcp_registry("all") or {}
-    codex_authenticated, codex_note = await codex_login_status()
+    codex_allowed = security.model_allowed("host/test")
+    codex_authenticated, codex_note = (
+        await codex_login_status()
+        if codex_allowed
+        else (False, "Недоступен в публичном режиме")
+    )
     return {
         "live": True,
         "model": DEFAULT_MODEL,
-        "models": MODELS,
+        "models": [model for model in MODELS if security.model_allowed(model["id"])],
         "judge_model": JUDGE_MODEL,
         "safe_tools": SAFE_TOOLS,
         # подписи для списка инструментов в окне создания сценария
@@ -134,7 +139,7 @@ async def status() -> dict:
         "run_id": SERVER_RUN_ID,
         "has_key": bool(os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")),
         "openrouter_ready": bool(os.getenv("OPENROUTER_API_KEY")),
-        "codex_cli": bool(find_codex_cli()),
+        "codex_cli": codex_allowed and bool(find_codex_cli()),
         "codex_authenticated": codex_authenticated,
         "codex_status": codex_note,
         "base_url": os.getenv("OPENAI_BASE_URL", ""),
@@ -146,6 +151,7 @@ async def status() -> dict:
 async def _generate_impl(body: GenerateIn, queue: asyncio.Queue) -> dict:
     """Собственно генерация конфигурации; события мета-агента уходят в очередь."""
     model = body.model or DEFAULT_MODEL
+    security.ensure_model_allowed(model)
     tools = _allowed_tools(body.tools)
     stream = StreamPlugin(queue)
     servers, custom_names = _mcp_registry_for(tools, body.custom_mcp)
@@ -234,11 +240,14 @@ async def generate_stream(body: GenerateIn) -> StreamingResponse:
 async def run(body: RunIn) -> StreamingResponse:
     tools = _allowed_tools(body.tools)
     model = body.model or DEFAULT_MODEL
+    security.ensure_model_allowed(model)
     servers, custom_names = _mcp_registry_for(tools, body.custom_mcp)
     queue: asyncio.Queue = asyncio.Queue()
     is_mas = body.kind == "mas"
     cls = MAS if is_mas else MAW
     config = MASConfig(**body.config) if is_mas else MAWConfig(**body.config)
+    for agent in (config.coordinator, *config.workers) if is_mas else config.agents:
+        security.ensure_model_allowed(body.model or agent.model or model)
     config = sanitize_config(
         config, body.kind, custom_names, available_tools=servers
     )  # может прийти из файла
@@ -848,6 +857,7 @@ async def review(body: ReviewIn) -> dict:
 async def synthetic_examples(body: SyntheticExamplesIn) -> dict:
     """Генерирует новые входные данные в области применимости существующей МАС."""
     model = body.model or JUDGE_MODEL
+    security.ensure_model_allowed(model)
     quality_judge = LLMJudge(model=model)
     if not body.config:
         return {"ok": False, "error": "Сначала создайте или выберите МАС."}
