@@ -897,7 +897,17 @@ async def test_unresolved_handoff_and_malformed_artifact_remain_incomplete(monke
 
 
 @pytest.mark.asyncio
-async def test_later_loop_iteration_resolves_incomplete_artifact(monkeypatch):
+@pytest.mark.parametrize("persistent", [False, True])
+async def test_later_loop_iteration_resolves_incomplete_artifact(
+    monkeypatch, tmp_path, persistent
+):
+    from google.adk.sessions import DatabaseSessionService
+
+    service = (
+        DatabaseSessionService(db_url=f"sqlite+aiosqlite:///{tmp_path / 'recovery.db'}")
+        if persistent
+        else InMemorySessionService()
+    )
     config = MAWConfig(
         agents=[
             MAWAgentConfig(
@@ -932,7 +942,7 @@ async def test_later_loop_iteration_resolves_incomplete_artifact(monkeypatch):
     result = await run_pipeline(
         builder.build(config, autonomous=False),
         "Refine it.",
-        session_service=InMemorySessionService(),
+        session_service=service,
     )
 
     issue = result.state["_fedotmas_execution"]["handoff_issues"][0]
@@ -2791,3 +2801,89 @@ async def test_sequential_extractor_uses_upstream_source_for_browser_and_recover
         item["doi"] == "10.1234/abc" and item["url"] == "https://doi.org/10.1234/abc"
         for item in ledger
     )
+
+
+@pytest.mark.asyncio
+async def test_database_session_preserves_handoff_failure_and_turns(
+    monkeypatch, tmp_path
+):
+    from google.adk.sessions import DatabaseSessionService
+
+    config = MAWConfig(
+        agents=[
+            {
+                "name": "producer",
+                "instruction": "Produce.",
+                "output_key": "data",
+                "output_contract": {"required_fields": ["value"]},
+            },
+            {
+                "name": "consumer",
+                "instruction": "Answer from {data}.",
+                "output_key": "answer",
+                "input_requirements": [
+                    {"source_key": "data", "required_fields": ["value"]}
+                ],
+            },
+        ],
+        pipeline={
+            "type": "sequential",
+            "children": [
+                {"type": "agent", "agent_name": "producer"},
+                {"type": "agent", "agent_name": "consumer"},
+            ],
+        },
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(role="model", parts=[types.Part.from_text(text=value)])
+            for value in ["{}", "{}", "42"]
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_: llm)
+    service = DatabaseSessionService(
+        db_url=f"sqlite+aiosqlite:///{tmp_path / 'sessions.db'}"
+    )
+    result = await run_pipeline(
+        builder.build(config, autonomous=False), "Answer", session_service=service
+    )
+    assert result.status == "incomplete"
+    metadata = result.state["_fedotmas_execution"]
+    assert metadata["agent_llm_turns"] == {"producer": 1, "consumer": 1}
+    assert len(metadata["handoff_issues"]) == 2
+    assert (
+        metadata["contract_repairs"]["producer"][-1]["status"]
+        == "repair_missing_semantic_fields"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first",
+    [
+        '{"status":"unresolved","answer":null}',
+        '{"status":"abstained","reason":"No evidence"}',
+    ],
+)
+async def test_terminal_loop_recovers_previous_completion_status(monkeypatch, first):
+    config = MAWConfig(
+        agents=[{"name": "answerer", "instruction": "Answer.", "output_key": "answer"}],
+        pipeline={
+            "type": "loop",
+            "max_iterations": 2,
+            "children": [{"type": "agent", "agent_name": "answerer"}],
+        },
+        final_answer_agent="answerer",
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(role="model", parts=[types.Part.from_text(text=value)])
+            for value in [first, "42"]
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_: llm)
+    result = await run_pipeline(builder.build(config, autonomous=False), "Answer")
+    assert result.state["answer"] == "42"
+    assert result.status == "completed"

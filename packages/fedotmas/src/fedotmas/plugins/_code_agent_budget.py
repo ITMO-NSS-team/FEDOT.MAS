@@ -262,6 +262,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         ):
             invocation = tool_context._invocation_context
             phase_root = tool_context.state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+            tool_context.state[CODE_AGENT_PHASE_STATE_KEY] = phase_root
             assert invocation.agent is not None
             if isinstance(phase_root, dict) and invocation.agent.name not in phase_root:
                 phase_root[invocation.agent.name] = "inspection"
@@ -295,7 +296,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         root = state.get(CODE_AGENT_BUDGET_STATE_KEY)
         if not isinstance(root, dict):
             root = {}
-            state[CODE_AGENT_BUDGET_STATE_KEY] = root
+        state[CODE_AGENT_BUDGET_STATE_KEY] = root
         budget: dict[str, Any] = root.setdefault(
             agent_name,
             {
@@ -318,6 +319,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         if int(budget.get("calls", 0)) >= self.max_calls_per_agent:
             budget["phase"] = "budget_exhausted"
             phase_root = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+            state[CODE_AGENT_PHASE_STATE_KEY] = phase_root
             if isinstance(phase_root, dict):
                 phase_root[agent_name] = "budget_exhausted"
             if self.telemetry is not None:
@@ -352,6 +354,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         ):
             budget["phase"] = "budget_exhausted"
             phase_root = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+            state[CODE_AGENT_PHASE_STATE_KEY] = phase_root
             if isinstance(phase_root, dict):
                 phase_root[agent_name] = "budget_exhausted"
             if self.telemetry is not None:
@@ -425,6 +428,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 "session_persistent": False,
             }
         phase_root = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+        state[CODE_AGENT_PHASE_STATE_KEY] = phase_root
         if isinstance(phase_root, dict):
             phase_root[agent_name] = budget["phase"]
 
@@ -558,6 +562,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         )
         elapsed = max(0.0, time.monotonic() - started)
         if isinstance(budget, dict):
+            state[CODE_AGENT_BUDGET_STATE_KEY] = root
             budget["reserved_seconds"] = max(
                 0.0, float(budget.get("reserved_seconds", 0.0)) - reserved
             )
@@ -589,6 +594,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 # erase a recovery-only phase established by an earlier failure.
                 budget["phase"] = previous_phase
                 phases = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+                state[CODE_AGENT_PHASE_STATE_KEY] = phases
                 if isinstance(phases, dict):
                     phases[agent_name] = (
                         "inspection"
@@ -619,6 +625,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 else:
                     budget["phase"] = "complete"
                 phase_root = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+                state[CODE_AGENT_PHASE_STATE_KEY] = phase_root
                 if isinstance(phase_root, dict):
                     phase_root[agent_name] = budget["phase"]
                 # Keep only a concise structured summary in the model context.

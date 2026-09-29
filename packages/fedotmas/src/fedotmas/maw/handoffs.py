@@ -242,7 +242,9 @@ def append_execution_issue(
     metadata = state.get(EXECUTION_METADATA_KEY)
     if not isinstance(metadata, dict):
         metadata = {}
-        state[EXECUTION_METADATA_KEY] = metadata
+    # ADK persists top-level assignments; nested dict/list mutations alone
+    # disappear when a database session is reloaded.
+    state[EXECUTION_METADATA_KEY] = metadata
     issues = metadata.setdefault("handoff_issues", [])
     if not isinstance(issues, list):
         return
@@ -267,6 +269,7 @@ def resolve_execution_issue(
     for existing in issues:
         if isinstance(existing, dict) and _issue_identity(existing) == identity:
             existing["resolved"] = True
+            state[EXECUTION_METADATA_KEY] = metadata
 
 
 def _issue_identity(issue: dict[str, Any]) -> tuple[Any, ...]:

@@ -745,3 +745,37 @@ async def test_redirected_targeted_recovery_restores_recovery_phase():
         tool=_tool(), tool_args=args, tool_context=ctx
     )
     assert blocked["error_code"] == "CODE_AGENT_TARGETED_RECOVERY_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_existing_budget_mutation_is_in_adk_state_delta():
+    from google.adk.sessions.state import State
+
+    plugin = CodeAgentBudgetPlugin(
+        max_calls_per_agent=1,
+        total_seconds_per_agent=120,
+        max_seconds_per_call=60,
+        task_timeout_seconds=300,
+    )
+    ctx = _context(deadline=time.monotonic() + 200)
+    ctx.state = State(
+        {
+            TASK_DEADLINE_STATE_KEY: time.monotonic() + 200,
+            CODE_AGENT_BUDGET_STATE_KEY: {
+                "optimizer": {"calls": 1, "phase": "primary_running"}
+            },
+            CODE_AGENT_PHASE_STATE_KEY: {"optimizer": "primary_running"},
+        },
+        {},
+    )
+    result = await plugin.before_tool_callback(
+        tool=_tool(), tool_args={"task": "Compute"}, tool_context=ctx
+    )
+    assert result["error_code"] == "CODE_AGENT_BUDGET_EXHAUSTED"
+    assert (
+        ctx.state._delta[CODE_AGENT_BUDGET_STATE_KEY]["optimizer"]["phase"]
+        == "budget_exhausted"
+    )
+    assert (
+        ctx.state._delta[CODE_AGENT_PHASE_STATE_KEY]["optimizer"] == "budget_exhausted"
+    )

@@ -264,7 +264,7 @@ def _record_contract_repair(
     metadata = state.get(EXECUTION_METADATA_KEY)
     if not isinstance(metadata, dict):
         metadata = {}
-        state[EXECUTION_METADATA_KEY] = metadata
+    state[EXECUTION_METADATA_KEY] = metadata
     repairs = metadata.setdefault("contract_repairs", {})
     if not isinstance(repairs, dict):
         return
@@ -1011,6 +1011,15 @@ def _build_llm_agent(
                 "agent": cfg.name,
             }
             return
+        if (
+            cfg.name == final_answer_agent
+            and not _is_blank(value)
+            and callback_context.state.get(ABSTENTION_STATE_KEY)
+        ):
+            callback_context.state[ABSTENTION_STATE_KEY] = {
+                "status": "completed",
+                "agent": cfg.name,
+            }
         terminal_answer = terminal_boundary
         if terminal_answer:
             # This role may recover an input dependency, but its answer is
@@ -1056,6 +1065,7 @@ def _build_llm_agent(
                     metadata = callback_context.state.setdefault(
                         EXECUTION_METADATA_KEY, {}
                     )
+                    callback_context.state[EXECUTION_METADATA_KEY] = metadata
                     repair_tokens = metadata.setdefault(
                         "contract_repair_tokens",
                         {"prompt_tokens": 0, "completion_tokens": 0},
@@ -1484,7 +1494,7 @@ def _build_llm_agent(
         metadata = state.get(EXECUTION_METADATA_KEY)
         if not isinstance(metadata, dict):
             metadata = {}
-            state[EXECUTION_METADATA_KEY] = metadata
+        state[EXECUTION_METADATA_KEY] = metadata
         turns = metadata.setdefault("agent_llm_turns", {})
         used = turns.get(cfg.name, 0) if isinstance(turns, dict) else 0
         if used >= per_agent_limit:
@@ -2078,6 +2088,7 @@ def _record_turn_observability(
     metadata = state.setdefault(EXECUTION_METADATA_KEY, {})
     if not isinstance(metadata, dict):
         return
+    state[EXECUTION_METADATA_KEY] = metadata
     traces = metadata.setdefault("turn_observability", {})
     if not isinstance(traces, dict):
         return
@@ -2159,6 +2170,7 @@ def _record_turn_tool_call(
         if blocked_reason:
             record["reason"] = blocked_reason
         calls.append(record)
+        state[EXECUTION_METADATA_KEY] = metadata
 
 
 def _record_semantic_progress(

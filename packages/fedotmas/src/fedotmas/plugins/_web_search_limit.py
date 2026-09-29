@@ -137,8 +137,8 @@ class WebSearchLimitPlugin(BasePlugin):
         )
         if not isinstance(budgets, dict):
             budgets = {}
-            if state is not None and state_writable:
-                state[BUDGET_STATE_KEY] = budgets
+        if state is not None and state_writable:
+            state[BUDGET_STATE_KEY] = budgets
         agent_budgets = budgets.setdefault(agent_name, {})
         if isinstance(agent_budgets, dict):
             used_now = self._counts.get(key, 0)

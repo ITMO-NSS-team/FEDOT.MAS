@@ -422,3 +422,20 @@ class TestAutoAddWebSearchLimitPlugin:
     def test_can_disable_default_web_search_limit_plugin(self):
         maw = MAW(web_search_limit=None)
         assert not any(isinstance(p, WebSearchLimitPlugin) for p in maw._plugins)
+
+
+@pytest.mark.asyncio
+async def test_existing_search_budget_mutation_is_in_adk_state_delta():
+    from google.adk.sessions.state import State
+    from fedotmas.plugins._web_search_limit import BUDGET_STATE_KEY
+
+    plugin = WebSearchLimitPlugin(max_calls_per_agent=2)
+    ctx = _tool_context()
+    ctx.state = State({BUDGET_STATE_KEY: {"researcher": {}}}, {})
+    await plugin.before_tool_callback(
+        tool=_tool("search", "Search the web"),
+        tool_args={"query": "first"},
+        tool_context=ctx,
+    )
+    assert BUDGET_STATE_KEY in ctx.state._delta
+    assert ctx.state._delta[BUDGET_STATE_KEY]["researcher"]

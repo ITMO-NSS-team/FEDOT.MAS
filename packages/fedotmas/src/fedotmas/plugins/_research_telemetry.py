@@ -438,6 +438,7 @@ class ResearchTelemetry(BasePlugin):
                     item["inspection_error"] = error[:240]
                 else:
                     item.pop("inspection_error", None)
+                state[RESEARCH_CANDIDATE_LEDGER_KEY] = root
                 return not was_usefully_inspected
         return False
 
@@ -1107,6 +1108,7 @@ def _record_control_block(
         if isinstance(call_id, str):
             record["call_id"] = call_id[:120]
         blocked.append(record)
+        state["_fedotmas_execution"] = metadata
 
 
 def _find_controller_action(value: Any, depth: int = 0) -> str | None:
@@ -1143,6 +1145,7 @@ def _record_controller_recommendation(state: Any, agent: str, action: str) -> No
     if isinstance(events, list) and events:
         events[-1]["controller_recommendation"] = action
     if isinstance(metadata, dict):
+        state["_fedotmas_execution"] = metadata
         recommendations = metadata.setdefault("controller_recommendations", {})
         if isinstance(recommendations, dict):
             recommendations[agent] = action
