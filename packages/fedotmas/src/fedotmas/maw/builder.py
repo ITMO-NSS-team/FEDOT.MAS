@@ -15,6 +15,7 @@ from google.adk.models import LLMRegistry
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
+from google.adk.sessions.state import State
 from google.adk.tools.exit_loop_tool import exit_loop
 from google.adk.utils.instructions_utils import inject_session_state
 from google.genai import types as genai_types
@@ -257,7 +258,9 @@ def _contract_instruction(cfg: MAWAgentConfig) -> str:
     )
 
 
-def _record_contract_repair(state: dict[str, Any], agent: str, event: dict) -> None:
+def _record_contract_repair(
+    state: dict[str, Any] | State, agent: str, event: dict
+) -> None:
     metadata = state.get(EXECUTION_METADATA_KEY)
     if not isinstance(metadata, dict):
         metadata = {}
@@ -269,7 +272,7 @@ def _record_contract_repair(state: dict[str, Any], agent: str, event: dict) -> N
 
 
 def _upstream_identity_values(
-    state: dict[str, Any], cfg: MAWAgentConfig
+    state: dict[str, Any] | State, cfg: MAWAgentConfig
 ) -> dict[str, dict[str, Any]]:
     values = {}
     for requirement in cfg.input_requirements:
@@ -306,7 +309,7 @@ def _best_artifact_candidate(
 
 
 def _inherit_identity_fields(
-    value: Any, cfg: MAWAgentConfig, state: dict[str, Any]
+    value: Any, cfg: MAWAgentConfig, state: dict[str, Any] | State
 ) -> dict[str, Any] | None:
     """Copy only declared, available upstream identity values into an artifact."""
     artifact = parse_artifact(value, cfg.output_contract)
@@ -405,6 +408,7 @@ async def _repair_contract_once(
 ) -> tuple[Any, dict[str, int], str | None]:
     """Make one tools-free formatting repair using only the existing artifact."""
     llm = LLMRegistry.new_llm(model) if isinstance(model, str) else model
+    assert cfg.output_contract is not None
     identity = set(cfg.output_contract.identity_fields)
     produced = [
         field for field in cfg.output_contract.required_fields if field not in identity
@@ -773,7 +777,7 @@ def _resolve_llm(
 
 
 def _resolve_recovered_handoffs(
-    state: dict[str, Any], cfg: MAWAgentConfig, artifact: dict[str, Any] | None
+    state: dict[str, Any] | State, cfg: MAWAgentConfig, artifact: dict[str, Any] | None
 ) -> None:
     """Resolve input gaps only for an explicitly permitted recovery role."""
     for requirement in cfg.input_requirements:
@@ -1517,8 +1521,8 @@ def _build_llm_agent(
                     role="model",
                     parts=limit_parts,
                 ),
-                turnComplete=True,
-                finishReason=genai_types.FinishReason.STOP,
+                turn_complete=True,
+                finish_reason=genai_types.FinishReason.STOP,
             )
         turn_index = used + 1
         if isinstance(turns, dict):
@@ -2055,7 +2059,7 @@ def _artifact_records(value: Any):
 
 
 def _record_turn_observability(
-    state: dict[str, Any],
+    state: dict[str, Any] | State,
     agent: str,
     *,
     turn_index: int,
@@ -2107,6 +2111,8 @@ def _visible_tool_declarations(
 ) -> list[dict[str, Any]]:
     declarations: list[dict[str, Any]] = []
     for group in llm_request.config.tools or []:
+        if not isinstance(group, genai_types.Tool):
+            continue
         for declaration in group.function_declarations or []:
             name = str(declaration.name or "")
             if name in removed:
@@ -2155,11 +2161,13 @@ def _record_turn_tool_call(
         calls.append(record)
 
 
-def _record_semantic_progress(state: dict[str, Any], agent: str, signal: str) -> bool:
+def _record_semantic_progress(
+    state: dict[str, Any] | State, agent: str, signal: str
+) -> bool:
     root = state.get(RESEARCH_PROGRESS_STATE_KEY)
     if not isinstance(root, dict):
         root = {}
-    progress = root.get(agent)
+    progress: dict[str, Any] | None = root.get(agent)
     if not isinstance(progress, dict):
         progress = {"version": 0, "progress_events": [], "seen_signals": []}
     seen = progress.get("seen_signals")
@@ -2178,7 +2186,7 @@ def _record_semantic_progress(state: dict[str, Any], agent: str, signal: str) ->
     return True
 
 
-def _controller_recommendation(state: dict[str, Any], agent: str) -> str | None:
+def _controller_recommendation(state: dict[str, Any] | State, agent: str) -> str | None:
     metadata = state.get(EXECUTION_METADATA_KEY)
     recommendations = (
         metadata.get("controller_recommendations")

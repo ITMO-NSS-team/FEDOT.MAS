@@ -10,6 +10,7 @@ from google.adk.plugins import BasePlugin
 from google.adk.runners import InvocationContext
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
+from google.genai import types
 
 from fedotmas.common.logging import get_logger
 from fedotmas.mcp import strip_tool_name_prefix
@@ -23,7 +24,7 @@ from fedotmas.plugins._research_telemetry import ResearchTelemetry
 from fedotmas.plugins._tool_error_circuit_breaker import (
     DUPLICATE_TOOL_CALL,
     WEB_BUDGET_EXHAUSTED,
-    INVALID_TOOL_INPUT
+    INVALID_TOOL_INPUT,
 )
 
 _log = get_logger("fedotmas.plugins.web_search_limit")
@@ -94,7 +95,7 @@ class WebSearchLimitPlugin(BasePlugin):
         self._same_url_exempt_tool_names = {
             name.lower() for name in (same_url_exempt_tool_names or set())
         }
-        self._counts: dict[tuple[str, str], int] = {}
+        self._counts: dict[tuple[str, str, str], int] = {}
         self._seen_calls: set[tuple[str, str, str]] = set()
         self._seen_urls: set[tuple[str, str, str]] = set()
         self._exhausted_agents = (
@@ -129,10 +130,14 @@ class WebSearchLimitPlugin(BasePlugin):
         key = (session_id, agent_name, self.budget_kind)
         state = getattr(tool_context, "state", None)
         state_writable = all(hasattr(state, attr) for attr in ("get", "__setitem__"))
-        budgets = state.get(BUDGET_STATE_KEY) if state_writable else None
+        budgets = (
+            state.get(BUDGET_STATE_KEY)
+            if state is not None and state_writable
+            else None
+        )
         if not isinstance(budgets, dict):
             budgets = {}
-            if state_writable:
+            if state is not None and state_writable:
                 state[BUDGET_STATE_KEY] = budgets
         agent_budgets = budgets.setdefault(agent_name, {})
         if isinstance(agent_budgets, dict):
@@ -306,6 +311,7 @@ class WebSearchLimitPlugin(BasePlugin):
         self, *, callback_context: CallbackContext, llm_request: LlmRequest
     ) -> None:
         budgets = callback_context.state.get(BUDGET_STATE_KEY, {})
+        assert callback_context._invocation_context.agent is not None
         agent_name = callback_context._invocation_context.agent.name
         current = budgets.get(agent_name, {}) if isinstance(budgets, dict) else {}
         if not isinstance(current, dict):
@@ -323,6 +329,9 @@ class WebSearchLimitPlugin(BasePlugin):
         if names:
             retained = []
             for group in llm_request.config.tools or []:
+                if not isinstance(group, types.Tool):
+                    retained.append(group)
+                    continue
                 declarations = group.function_declarations
                 if declarations is None:
                     retained.append(group)
@@ -357,8 +366,7 @@ class WebSearchLimitPlugin(BasePlugin):
             if normalize_tool_name(tool.name) == "search":
                 description = (tool.description or "").casefold()
                 return any(
-                    hint in description
-                    for hint in _WEB_SEARCH_DESCRIPTION_HINTS
+                    hint in description for hint in _WEB_SEARCH_DESCRIPTION_HINTS
                 )
             return True
         if self.budget_kind == "scraping":

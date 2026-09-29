@@ -263,14 +263,12 @@ class _ProxyClient:
     def __init__(self, base_url: str, api_key: str, extra_body: dict[str, Any] | None):
         self._request_timeout = _request_timeout_from_env()
         http_client = openrouter_http_client(base_url)
-        kwargs = {"http_client": http_client} if http_client is not None else {}
-        
         self._client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key,
             timeout=self._request_timeout,
             max_retries=0,
-            **kwargs,
+            http_client=http_client,
         )
         self._extra_body = dict(extra_body or {})
 
@@ -314,7 +312,9 @@ class _ProxyClient:
                 remaining = min(remaining, _task_safe_window(task_deadline))
             timeout = min(self._request_timeout, remaining)
             if timeout <= 0:
-                raise LLMRequestTimeout(model, self._request_timeout, time.monotonic() - started)
+                raise LLMRequestTimeout(
+                    model, self._request_timeout, time.monotonic() - started
+                )
             request_kw["timeout"] = timeout
             _log.debug(
                 "OpenAI-compatible request | model={} request_timeout={}s attempt={} tools={}",
@@ -350,8 +350,7 @@ class _ProxyClient:
                     stream
                     or timeout_retried
                     or remaining
-                    <= _TIMEOUT_RETRY_BACKOFF_S
-                    + min(self._request_timeout, 0.001)
+                    <= _TIMEOUT_RETRY_BACKOFF_S + min(self._request_timeout, 0.001)
                 ):
                     raise
                 timeout_retried = True

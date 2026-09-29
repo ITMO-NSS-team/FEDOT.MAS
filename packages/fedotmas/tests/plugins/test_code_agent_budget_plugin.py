@@ -303,7 +303,7 @@ async def test_verifier_unresolved_upstream_gets_recovery_and_one_correction():
 
 @pytest.mark.asyncio
 async def test_code_agent_tool_is_removed_after_recovery():
-    from types import SimpleNamespace
+    from google.genai import types
 
     plugin = CodeAgentBudgetPlugin(
         max_calls_per_agent=4,
@@ -347,8 +347,8 @@ async def test_code_agent_tool_is_removed_after_recovery():
     callback = MagicMock()
     callback.state = ctx.state
     callback._invocation_context.agent.name = "optimizer"
-    declaration = SimpleNamespace(name="solve_with_code")
-    group = SimpleNamespace(function_declarations=[declaration])
+    declaration = types.FunctionDeclaration(name="solve_with_code")
+    group = types.Tool(function_declarations=[declaration])
     request = MagicMock()
     request.tools_dict = {"solve_with_code": _tool()}
     request.config.tools = [group]

@@ -313,6 +313,10 @@ def test_malformed_or_wrong_schema_json_does_not_satisfy_contract(value):
         "No exact answer was computed",
         "No answer to verify",
         "The exact optimum was not computed",
+        "<solution>unresolved</solution>",
+        "<solution>42</solution><solution>unresolved</solution>",
+        '{"status":"unresolved","answer":42}',
+        '{"answer":null,"explanation":"<solution>42</solution>"}',
     ],
 )
 def test_explicit_terminal_non_answers_are_detected(value):
@@ -329,6 +333,54 @@ def test_concrete_answer_with_uncertainty_explanation_is_not_abstention():
     assert not is_unresolved_answer(
         {"answer": 42, "discarded_candidate": {"status": "unresolved"}}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        json.dumps(
+            {
+                "answer": 42,
+                "explanation": "Earlier there was no exact answer; now verified from the source.",
+            }
+        ),
+        json.dumps(
+            {
+                "verified_answer": 0,
+                "diagnostic": {"value": None},
+                "explanation": "No answer to verify was available initially.",
+            }
+        ),
+        "<solution>42</solution> Earlier there was no exact answer.",
+        "<solution>unresolved</solution> Recovered: <solution>42</solution>",
+    ],
+)
+async def test_concrete_terminal_answer_overrides_historical_failure_prose(
+    monkeypatch, answer
+):
+    assert not is_unresolved_answer(answer)
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(name="answerer", instruction="Answer.", output_key="answer")
+        ],
+        pipeline=MAWStepConfig(type="agent", agent_name="answerer"),
+    )
+    llm = _ScriptedLlm(
+        model="openai/test",
+        responses=[
+            types.Content(role="model", parts=[types.Part.from_text(text=answer)])
+        ],
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_args: llm)
+    result = await run_pipeline(
+        builder.build(config, autonomous=False),
+        "Find the answer.",
+        session_service=InMemorySessionService(),
+    )
+    assert result.status == "completed"
+    assert result.state["answer"] == answer
+    assert "__fedotmas_completion" not in result.state
 
 
 @pytest.mark.asyncio

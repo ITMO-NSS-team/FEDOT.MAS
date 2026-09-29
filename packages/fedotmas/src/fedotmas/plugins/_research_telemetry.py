@@ -46,7 +46,10 @@ def _read_gate_state(state: Any, agent: str) -> dict[str, Any]:
     if not isinstance(gate, dict):
         return {}
     # Read old snapshots from the preceding threshold-based implementation safely.
-    return {**gate, "phase": gate.get("phase", "inspect" if gate.get("gated") else "discover")}
+    return {
+        **gate,
+        "phase": gate.get("phase", "inspect" if gate.get("gated") else "discover"),
+    }
 
 
 def _tool_failed(result: dict[str, Any]) -> bool:
@@ -64,7 +67,9 @@ def _inspection_has_content(value: Any, *, depth: int = 0) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
     if isinstance(value, list):
-        return any(_inspection_has_content(item, depth=depth + 1) for item in value[:12])
+        return any(
+            _inspection_has_content(item, depth=depth + 1) for item in value[:12]
+        )
     if not isinstance(value, dict):
         return False
     content_keys = {
@@ -185,10 +190,17 @@ class ResearchTelemetry(BasePlugin):
         tool_context: ToolContext,
     ) -> dict[str, Any] | None:
         kind = _research_tool_kind(tool.name)
-        if kind is None and tool_capability(tool.name, description=getattr(tool, "description", "") or "") == ToolCapability.DISCOVERY:
+        if (
+            kind is None
+            and tool_capability(
+                tool.name, description=getattr(tool, "description", "") or ""
+            )
+            == ToolCapability.DISCOVERY
+        ):
             kind = "search"
         if kind is None:
             return None
+        assert tool_context._invocation_context.agent is not None
         agent = tool_context._invocation_context.agent.name
         self.attempt(agent, kind, tool_args)
         calls = self._calls[agent]
@@ -310,17 +322,28 @@ class ResearchTelemetry(BasePlugin):
         if not isinstance(root, dict):
             root = {}
         existing = root.get(agent)
-        ledger = [
-            dict(item)
-            for item in existing
-            if isinstance(item, dict) and isinstance(item.get("url"), str)
-        ] if isinstance(existing, list) else []
+        ledger = (
+            [
+                dict(item)
+                for item in existing
+                if isinstance(item, dict) and isinstance(item.get("url"), str)
+            ]
+            if isinstance(existing, list)
+            else []
+        )
         by_url = {item["url"]: item for item in ledger}
         new_urls: list[str] = []
-        next_update = max(
-            (item.get("updated", -1) for item in ledger if isinstance(item.get("updated"), int)),
-            default=-1,
-        ) + 1
+        next_update = (
+            max(
+                (
+                    item.get("updated", -1)
+                    for item in ledger
+                    if isinstance(item.get("updated"), int)
+                ),
+                default=-1,
+            )
+            + 1
+        )
         normalized_tool = normalize_tool_name(strip_tool_name_prefix(tool_name))
         safe_query = _sanitize_query(query)
         for raw in results:
@@ -351,7 +374,12 @@ class ResearchTelemetry(BasePlugin):
             if not item.get("title"):
                 item["title"] = str(raw.get("title") or "")[:MAX_CANDIDATE_TITLE_CHARS]
             if not item.get("snippet"):
-                snippet = raw.get("snippet") or raw.get("content") or raw.get("description") or ""
+                snippet = (
+                    raw.get("snippet")
+                    or raw.get("content")
+                    or raw.get("description")
+                    or ""
+                )
                 item["snippet"] = str(snippet)[:MAX_CANDIDATE_SNIPPET_CHARS]
             item["source_tool"] = normalized_tool[:80]
             item["query"] = safe_query
@@ -359,7 +387,10 @@ class ResearchTelemetry(BasePlugin):
             # Retain inspected evidence and the most recent uninspected sources.
             inspected = [item for item in ledger if item.get("inspected") is True]
             uninspected = [item for item in ledger if item.get("inspected") is not True]
-            ledger = (inspected[-8:] + uninspected[-(MAX_CANDIDATES_PER_AGENT - min(8, len(inspected))):])
+            ledger = (
+                inspected[-8:]
+                + uninspected[-(MAX_CANDIDATES_PER_AGENT - min(8, len(inspected))) :]
+            )
             ledger.sort(key=lambda item: int(item.get("updated", 0)))
         root[agent] = ledger
         state[RESEARCH_CANDIDATE_LEDGER_KEY] = root
@@ -380,8 +411,19 @@ class ResearchTelemetry(BasePlugin):
         state[RESEARCH_INSPECTED_SOURCES_KEY] = root
         return True
 
-    def _mark_candidate_inspected(self, state: Any, agent: str, url: str, *, status: str = "success", tool: str = "", error: str = "") -> bool:
-        root = state.get(RESEARCH_CANDIDATE_LEDGER_KEY) if hasattr(state, "get") else None
+    def _mark_candidate_inspected(
+        self,
+        state: Any,
+        agent: str,
+        url: str,
+        *,
+        status: str = "success",
+        tool: str = "",
+        error: str = "",
+    ) -> bool:
+        root = (
+            state.get(RESEARCH_CANDIDATE_LEDGER_KEY) if hasattr(state, "get") else None
+        )
         ledger = root.get(agent) if isinstance(root, dict) else None
         if not isinstance(ledger, list):
             return False
@@ -405,7 +447,7 @@ class ResearchTelemetry(BasePlugin):
         root = state.get(RESEARCH_PROGRESS_STATE_KEY)
         if not isinstance(root, dict):
             root = {}
-        progress = root.get(agent)
+        progress: dict[str, Any] | None = root.get(agent)
         if not isinstance(progress, dict):
             progress = {"version": 0, "progress_events": []}
         progress["version"] = int(progress.get("version", 0)) + 1
@@ -422,7 +464,7 @@ class ResearchTelemetry(BasePlugin):
         root = state.get(RESEARCH_PROGRESS_STATE_KEY)
         if not isinstance(root, dict):
             root = {}
-        progress = root.get(agent)
+        progress: dict[str, Any] | None = root.get(agent)
         if not isinstance(progress, dict):
             progress = {"version": 0, "progress_events": []}
         count = progress.get("candidate_inspection_progress_count", 0)
@@ -463,12 +505,16 @@ class ResearchTelemetry(BasePlugin):
             if hasattr(state, "__setitem__"):
                 state[RESEARCH_GATE_STATE_KEY] = root
             return
-        candidates = {
-            item for item in old.get("candidate_urls", []) if isinstance(item, str)
-        } if isinstance(old.get("candidate_urls", []), list) else set()
-        pending = {
-            item for item in old.get("pending_urls", []) if isinstance(item, str)
-        } if isinstance(old.get("pending_urls", []), list) else set()
+        candidates = (
+            {item for item in old.get("candidate_urls", []) if isinstance(item, str)}
+            if isinstance(old.get("candidate_urls", []), list)
+            else set()
+        )
+        pending = (
+            {item for item in old.get("pending_urls", []) if isinstance(item, str)}
+            if isinstance(old.get("pending_urls", []), list)
+            else set()
+        )
         phase = "inspect" if old.get("phase") == "inspect" else "discover"
         if discovered:
             candidates.update(discovered)
@@ -503,11 +549,18 @@ class ResearchTelemetry(BasePlugin):
         result: dict,
     ) -> None:
         kind = _research_tool_kind(tool.name)
-        if kind is None and tool_capability(tool.name, description=getattr(tool, "description", "") or "") == ToolCapability.DISCOVERY:
+        if (
+            kind is None
+            and tool_capability(
+                tool.name, description=getattr(tool, "description", "") or ""
+            )
+            == ToolCapability.DISCOVERY
+        ):
             kind = "search"
+        assert tool_context._invocation_context.agent is not None
         agent = tool_context._invocation_context.agent.name
         error_code = get_explicit_error_code(result)
-        if is_non_executed_policy_block(error_code):
+        if error_code is not None and is_non_executed_policy_block(error_code):
             self._record_call_result(
                 agent,
                 tool.name,
@@ -536,26 +589,25 @@ class ResearchTelemetry(BasePlugin):
                 # An attempted inspection counts as inspection even if the source
                 # is unavailable; discovery can resume after failed candidates.
                 self.inspected(agent, url.strip())
-                inspection_has_content = (
-                    not _tool_failed(result) and _inspection_has_content(result)
-                )
+                inspection_has_content = not _tool_failed(
+                    result
+                ) and _inspection_has_content(result)
                 candidate_progress = self._mark_candidate_inspected(
-                    tool_context.state, agent, url,
+                    tool_context.state,
+                    agent,
+                    url,
                     status=(
                         "failed"
                         if _tool_failed(result)
-                        else "success" if inspection_has_content else "empty"
+                        else "success"
+                        if inspection_has_content
+                        else "empty"
                     ),
                     tool=tool.name,
                     error=_bounded_inspection_error(result),
                 )
-                self._mark_source_inspected(
-                    tool_context.state, agent, url
-                )
-                if (
-                    candidate_progress
-                    and inspection_has_content
-                ):
+                self._mark_source_inspected(tool_context.state, agent, url)
+                if candidate_progress and inspection_has_content:
                     self._mark_candidate_inspection_progress(
                         tool_context.state, agent, url
                     )
@@ -581,11 +633,11 @@ class ResearchTelemetry(BasePlugin):
                     payload["results"],
                 )
                 candidates = [
-                    _sanitize_url(item["url"])
+                    url
                     for item in payload["results"]
                     if isinstance(item, dict)
                     and isinstance(item.get("url"), str)
-                    and _sanitize_url(item["url"])
+                    and (url := _sanitize_url(item["url"])) is not None
                 ]
                 metrics = self._agents[agent]
                 if new_urls:
@@ -596,15 +648,23 @@ class ResearchTelemetry(BasePlugin):
                         if isinstance(item, dict)
                         and isinstance(item.get("url"), str)
                         and str(item.get("title") or "").strip()
-                        and str(item.get("snippet") or item.get("content") or "").strip()
+                        and str(
+                            item.get("snippet") or item.get("content") or ""
+                        ).strip()
                     }
                     if set(new_urls) & evidence_urls:
-                        self._mark_progress(tool_context.state, agent, "candidate_evidence")
-                    progress_root = tool_context.state.get(RESEARCH_PROGRESS_STATE_KEY, {})
+                        self._mark_progress(
+                            tool_context.state, agent, "candidate_evidence"
+                        )
+                    progress_root = tool_context.state.get(
+                        RESEARCH_PROGRESS_STATE_KEY, {}
+                    )
                     if not isinstance(progress_root, dict):
                         progress_root = {}
                     progress = progress_root.setdefault(agent, {})
-                    progress["productive_discovery_waves"] = min(3, int(progress.get("productive_discovery_waves", 0)) + 1)
+                    progress["productive_discovery_waves"] = min(
+                        3, int(progress.get("productive_discovery_waves", 0)) + 1
+                    )
                     tool_context.state[RESEARCH_PROGRESS_STATE_KEY] = progress_root
                 else:
                     metrics["searches_with_no_new_candidates"] += 1
@@ -618,9 +678,15 @@ class ResearchTelemetry(BasePlugin):
                     self._sync_gate_state(
                         tool_context.state, agent, discovered=candidates
                     )
-                metrics["candidate_urls_discovered"] = len(
-                    tool_context.state.get(RESEARCH_CANDIDATE_LEDGER_KEY, {}).get(agent, [])
-                ) if had_ledger else metrics["candidate_urls_discovered"]
+                metrics["candidate_urls_discovered"] = (
+                    len(
+                        tool_context.state.get(RESEARCH_CANDIDATE_LEDGER_KEY, {}).get(
+                            agent, []
+                        )
+                    )
+                    if had_ledger
+                    else metrics["candidate_urls_discovered"]
+                )
         if kind == "browser_agent":
             payload = _browser_payload(result)
             usage = payload.get("usage", {}) if payload else {}
@@ -745,6 +811,7 @@ class ResearchTelemetry(BasePlugin):
     ) -> None:
         kind = _research_tool_kind(tool.name)
         if kind is not None:
+            assert tool_context._invocation_context.agent is not None
             agent = tool_context._invocation_context.agent.name
             metrics = self._agents[agent]
             metrics["failed_calls"] += 1
@@ -753,18 +820,20 @@ class ResearchTelemetry(BasePlugin):
             if kind == "search":
                 metrics["backend_errors"] += 1
             if kind in {"scraping", "browser_agent"}:
-                url = _inspection_candidate_url(tool.name, tool_args, tool_context.state)
+                url = _inspection_candidate_url(
+                    tool.name, tool_args, tool_context.state
+                )
                 if url:
                     self.inspected(agent, url)
                     self._mark_candidate_inspected(
-                        tool_context.state, agent, url,
+                        tool_context.state,
+                        agent,
+                        url,
                         status="failed",
                         tool=tool.name,
                         error=str(error),
                     )
-                    self._mark_source_inspected(
-                        tool_context.state, agent, url
-                    )
+                    self._mark_source_inspected(tool_context.state, agent, url)
                     if _research_mode(tool_context.state, agent) == "mixed":
                         self._sync_gate_state(
                             tool_context.state, agent, inspected_url=url
@@ -782,7 +851,10 @@ class ResearchTelemetry(BasePlugin):
     async def on_event_callback(
         self, *, invocation_context: InvocationContext, event: Any
     ) -> None:
-        agent = event.author or invocation_context.agent.name
+        agent = event.author
+        if not agent:
+            assert invocation_context.agent is not None
+            agent = invocation_context.agent.name
         content = getattr(event, "content", None)
         for part in getattr(content, "parts", None) or []:
             response_part = getattr(part, "function_response", None)
@@ -806,7 +878,9 @@ class ResearchTelemetry(BasePlugin):
             progress.get("no_progress_turns") if isinstance(progress, dict) else None
         )
         if isinstance(no_progress, int) and not isinstance(no_progress, bool):
-            metrics["no_progress_turns"] = max(metrics["no_progress_turns"], no_progress)
+            metrics["no_progress_turns"] = max(
+                metrics["no_progress_turns"], no_progress
+            )
 
     def snapshot(self) -> dict[str, dict[str, Any]]:
         snapshot = {agent: dict(metrics) for agent, metrics in self._agents.items()}
@@ -886,16 +960,16 @@ class ResearchTelemetry(BasePlugin):
                 error = str(
                     browser_result.get("error", browser_result.get("message", ""))
                 )
-        if is_non_executed_policy_block(code):
+        if code is not None and is_non_executed_policy_block(code):
             item["status"] = "blocked"
             item["error_category"] = _error_category(code)
         elif is_error:
             item["status"] = "executed_error"
             item["error_category"] = _error_category(error)
         elif (
-            (is_discovery or tool_capability(item.get("tool", "")) == ToolCapability.DISCOVERY)
-            and item["result_count"] == 0
-        ):
+            is_discovery
+            or tool_capability(item.get("tool", "")) == ToolCapability.DISCOVERY
+        ) and item["result_count"] == 0:
             item["status"] = "executed_empty"
             item["error_category"] = "empty_results"
         else:
@@ -981,9 +1055,9 @@ def _sanitize_url(value: Any) -> str | None:
             and key.casefold() not in {"feature", "ab_channel", "si"}
         ]
         query.sort()
-        return urlunsplit(
-            (parsed.scheme.lower(), host, path, urlencode(query), "")
-        )[:500]
+        return urlunsplit((parsed.scheme.lower(), host, path, urlencode(query), ""))[
+            :500
+        ]
     except ValueError:
         return "[invalid-url]"
 
@@ -1040,7 +1114,12 @@ def _find_controller_action(value: Any, depth: int = 0) -> str | None:
         return None
     if isinstance(value, dict):
         action = value.get("action")
-        if action in {"continue_search", "change_strategy", "strategy_blocked", "synthesize"}:
+        if action in {
+            "continue_search",
+            "change_strategy",
+            "strategy_blocked",
+            "synthesize",
+        }:
             return action
         for nested in value.values():
             if found := _find_controller_action(nested, depth + 1):
@@ -1069,7 +1148,9 @@ def _record_controller_recommendation(state: Any, agent: str, action: str) -> No
             recommendations[agent] = action
 
 
-def _inspection_candidate_url(name: str, args: dict[str, Any], state: Any) -> str | None:
+def _inspection_candidate_url(
+    name: str, args: dict[str, Any], state: Any
+) -> str | None:
     if not is_inspection_tool(name):
         return None
     for key in (
@@ -1183,5 +1264,12 @@ def _code_agent_payload(result: dict[str, Any]) -> dict[str, Any] | None:
 def _bounded_inspection_error(result: Any) -> str:
     if not _tool_failed(result):
         return ""
-    raw = result.get("error") or result.get("message") or result.get("error_code") or "inspection failed" if isinstance(result, dict) else "inspection failed"
+    raw = (
+        result.get("error")
+        or result.get("message")
+        or result.get("error_code")
+        or "inspection failed"
+        if isinstance(result, dict)
+        else "inspection failed"
+    )
     return " ".join(str(raw).split())[:240]

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from typing import Any
+
+from google.adk.sessions.state import State
 
 from fedotmas.maw.models import ArtifactContract, ArtifactRequirement
 
@@ -36,7 +39,6 @@ def is_unresolved_answer(value: Any) -> bool:
     """Detect explicit terminal non-answers; structured null state takes priority."""
     parsed_candidates = parse_artifact_candidates(value)
     if parsed_candidates:
-
         if any(
             str(parsed.get("status", "")).casefold() == "unresolved"
             for parsed in parsed_candidates
@@ -45,12 +47,23 @@ def is_unresolved_answer(value: Any) -> bool:
         # A null nested candidate is not evidence that the actual answer is
         # unresolved. Only a top-level answer field has that meaning.
         for parsed in parsed_candidates:
-            if any(parsed.get(key) is None for key in _ANSWER_NULL_KEYS if key in parsed):
+            if any(
+                parsed.get(key) is None for key in _ANSWER_NULL_KEYS if key in parsed
+            ):
                 return True
+        # Explicit terminal non-answers above take priority. Otherwise, prose
+        # about earlier failures must not override a populated answer field.
+        if any(
+            _field_is_present(parsed, key)
+            for parsed in parsed_candidates
+            for key in _ANSWER_NULL_KEYS
+        ):
+            return False
     if isinstance(value, str):
-        if _UNRESOLVED_TEXT.search(value):
-            return True
-        return False
+        solutions = re.findall(r"<solution>(.*?)</solution>", value, re.DOTALL)
+        if solutions and solutions[-1].strip():
+            value = solutions[-1]
+        return bool(_UNRESOLVED_TEXT.search(value))
     return False
 
 
@@ -185,7 +198,7 @@ def _is_blank(value: Any) -> bool:
 
 
 def describe_requirement(
-    state: dict[str, Any], requirement: ArtifactRequirement
+    state: Mapping[str, Any] | State, requirement: ArtifactRequirement
 ) -> tuple[str, list[str], dict[str, Any] | None]:
     value = state.get(requirement.source_key)
     fields = list(
@@ -223,7 +236,9 @@ def validate_output_contract(value: Any, contract: ArtifactContract) -> list[str
     return missing
 
 
-def append_execution_issue(state: dict[str, Any], issue: dict[str, Any]) -> None:
+def append_execution_issue(
+    state: dict[str, Any] | State, issue: dict[str, Any]
+) -> None:
     metadata = state.get(EXECUTION_METADATA_KEY)
     if not isinstance(metadata, dict):
         metadata = {}
@@ -240,7 +255,9 @@ def append_execution_issue(state: dict[str, Any], issue: dict[str, Any]) -> None
     issues.append({**issue, "resolved": False})
 
 
-def resolve_execution_issue(state: dict[str, Any], issue: dict[str, Any]) -> None:
+def resolve_execution_issue(
+    state: dict[str, Any] | State, issue: dict[str, Any]
+) -> None:
     """Mark the matching historical handoff issue resolved after revalidation."""
     metadata = state.get(EXECUTION_METADATA_KEY)
     issues = metadata.get("handoff_issues") if isinstance(metadata, dict) else None
@@ -258,7 +275,7 @@ def _issue_identity(issue: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def unresolved_execution_issues(state: dict[str, Any]) -> list[dict[str, Any]]:
+def unresolved_execution_issues(state: dict[str, Any] | State) -> list[dict[str, Any]]:
     metadata = state.get(EXECUTION_METADATA_KEY)
     issues = metadata.get("handoff_issues") if isinstance(metadata, dict) else None
     if not isinstance(issues, list):

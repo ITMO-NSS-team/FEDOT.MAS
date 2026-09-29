@@ -94,7 +94,7 @@ def create_toolset(
     )
     # Used only for bounded turn-observability records; the predicate itself
     # owns filtering and the MCP server continues to expose its internal tool.
-    toolset._fedotmas_filtered_diagnostic_tools = filtered_diagnostics
+    setattr(toolset, "_fedotmas_filtered_diagnostic_tools", filtered_diagnostics)
     return toolset
 
 

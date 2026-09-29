@@ -16,7 +16,7 @@ from copy import deepcopy
 from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from google.adk.models._capabilities import LlmCapabilities
 from google.adk.models.base_llm import BaseLlm
@@ -228,7 +228,11 @@ class CodexCliLlm(BaseLlm):
         )
 
 
-def _creation_options() -> dict[str, int]:
+class _CreationOptions(TypedDict, total=False):
+    creationflags: int
+
+
+def _creation_options() -> _CreationOptions:
     return {"creationflags": 0x08000000} if os.name == "nt" else {}
 
 
@@ -282,7 +286,9 @@ def _strict_output_schema(schema: dict[str, Any]) -> dict[str, Any]:
                     "dynamic additionalProperties are not supported"
                 )
             if "patternProperties" in node:
-                raise ValueError("Codex structured output does not support patternProperties")
+                raise ValueError(
+                    "Codex structured output does not support patternProperties"
+                )
             node["additionalProperties"] = False
             node["required"] = list(node.get("properties", {}))
         for key in ("properties", "$defs", "definitions"):
@@ -314,6 +320,8 @@ def _response_schema(request: LlmRequest) -> dict[str, Any] | None:
 def _function_declarations(request: LlmRequest) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     for tool in request.config.tools or []:
+        if not isinstance(tool, types.Tool):
+            continue
         for declaration in tool.function_declarations or []:
             schema = declaration.parameters_json_schema
             if schema is None and declaration.parameters is not None:

@@ -10,6 +10,7 @@ from google.adk.plugins import BasePlugin
 from google.adk.runners import InvocationContext
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
+from google.genai import types
 
 from fedotmas.mcp import strip_tool_name_prefix
 from fedotmas.plugins._research_telemetry import ResearchTelemetry
@@ -59,6 +60,9 @@ def _disable_code_tool(llm_request: LlmRequest) -> None:
     }
     retained = []
     for group in llm_request.config.tools or []:
+        if not isinstance(group, types.Tool):
+            retained.append(group)
+            continue
         declarations = group.function_declarations
         if declarations is None:
             retained.append(group)
@@ -168,6 +172,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         }
         if "solve_with_code" not in tool_names:
             return
+        assert callback_context._invocation_context.agent is not None
         agent_name = callback_context._invocation_context.agent.name
         root = callback_context.state.get(CODE_AGENT_BUDGET_STATE_KEY, {})
         current = root.get(agent_name, {}) if isinstance(root, dict) else {}
@@ -255,6 +260,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         ):
             invocation = tool_context._invocation_context
             phase_root = tool_context.state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
+            assert invocation.agent is not None
             if isinstance(phase_root, dict) and invocation.agent.name not in phase_root:
                 phase_root[invocation.agent.name] = "inspection"
             return {
@@ -288,7 +294,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         if not isinstance(root, dict):
             root = {}
             state[CODE_AGENT_BUDGET_STATE_KEY] = root
-        budget = root.setdefault(
+        budget: dict[str, Any] = root.setdefault(
             agent_name,
             {
                 "calls": 0,
