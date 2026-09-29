@@ -123,6 +123,8 @@ def _tokens(sql: str) -> Iterator[str]:
     i, length = 0, len(sql)
     while i < length:
         char = sql[i]
+        if sql[i : i + 3].lower() == 'u&"':
+            raise QueryRejected("Unicode-escaped SQL identifiers are not supported.")
         if char.isspace():
             i += 1
         elif sql.startswith("--", i):
@@ -156,6 +158,7 @@ def _tokens(sql: str) -> Iterator[str]:
             else:
                 raise QueryRejected("Invalid SQL: unterminated string literal.")
         elif char == '"':
+            start = i
             i += 1
             while i < length:
                 if sql[i] == '"':
@@ -168,6 +171,9 @@ def _tokens(sql: str) -> Iterator[str]:
                     i += 1
             else:
                 raise QueryRejected("Invalid SQL: unterminated quoted identifier.")
+            # Identifiers can name callable functions. Keep the quotes so a
+            # column named "update" is not mistaken for a SQL keyword.
+            yield sql[start:i]
         elif char == ";":
             yield ";"
             i += 1
@@ -214,7 +220,11 @@ def validate_select_sql(sql: str) -> str:
         raise QueryRejected(
             f"Only read-only SELECT is allowed; forbidden keyword: {forbidden[0].upper()}."
         )
-    side_effects = sorted(set(words) & _SIDE_EFFECT_FUNCTIONS)
+    identifiers = {
+        (word[1:-1].replace('""', '"') if word.startswith('"') else word).casefold()
+        for word in words
+    }
+    side_effects = sorted(identifiers & _SIDE_EFFECT_FUNCTIONS)
     if side_effects:
         raise QueryRejected(f"Query uses prohibited function: {side_effects[0]}().")
     if words[0] == "with":
