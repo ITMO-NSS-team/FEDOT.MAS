@@ -41,9 +41,72 @@ def _truncate(text: str, max_lines: int | None) -> str:
     )
 
 
+def _page_document(
+    text: str,
+    *,
+    start_line: int,
+    max_lines: int | None,
+    start_char: int | None,
+    max_chars: int,
+) -> tuple[str, int, int, int, int, bool]:
+    total_lines = text.count("\n") + (1 if text else 0)
+    if start_char is not None:
+        offset = min(max(0, start_char), len(text))
+        page = text[offset : offset + max_chars]
+    else:
+        lines = text.splitlines(keepends=True)
+        start_line = min(max(0, start_line), len(lines))
+        selected = lines[start_line:] if max_lines is None else lines[start_line : start_line + max_lines]
+        offset = sum(len(line) for line in lines[:start_line])
+        page = "".join(selected)[:max_chars]
+    next_char = offset + len(page)
+    next_line = text[:next_char].count("\n")
+    return page, total_lines, (text[:offset].count("\n")), next_line, next_char, next_char < len(text)
+
+
+def _convert_xls(path: str) -> str:
+    """Convert legacy XLS sheets to a compact, pageable text representation."""
+    import xlrd
+
+    workbook = xlrd.open_workbook(path, on_demand=True)
+    lines = []
+    for sheet in workbook.sheets():
+        lines.append(f"## Sheet: {sheet.name}")
+        for row_index in range(sheet.nrows):
+            values = [str(sheet.cell_value(row_index, column)) for column in range(sheet.ncols)]
+            lines.append(f"{row_index + 1}\t" + "\t".join(values))
+    workbook.release_resources()
+    return "\n".join(lines)
+
+
+def _extract_document(path: str, describe_images: bool = False) -> str:
+    if Path(path).suffix.lower() == ".xls":
+        return _convert_xls(path)
+    md = _md_with_vision() if describe_images else _md
+    return md.convert(path).text_content
+
+
 class DocumentResult(BaseModel):
     content: str = Field(default="", description="Extracted text in markdown")
     error: str | None = Field(default=None, description="Error message if failed")
+    total_lines: int = 0
+    start_line: int = 0
+    next_start_line: int | None = None
+    total_chars: int = 0
+    next_start_char: int | None = None
+    truncated: bool = False
+
+
+class DocumentMatch(BaseModel):
+    line: int
+    text: str
+
+
+class DocumentFindResult(BaseModel):
+    matches: list[DocumentMatch] = Field(default_factory=list)
+    total_matches: int = 0
+    next_start_line: int | None = None
+    error: str | None = None
 
 
 class ZipEntry(BaseModel):
@@ -71,27 +134,93 @@ async def read_document(
     file_path: Annotated[str, Field(description="Path to the document")],
     ctx: Context,
     max_lines: Annotated[int | None, Field(description="Max lines to return")] = 1000,
+    start_line: Annotated[int, Field(description="First line to return", ge=0)] = 0,
+    start_char: Annotated[int | None, Field(description="Character cursor from a prior page", ge=0)] = None,
+    max_chars: Annotated[int, Field(description="Maximum page size in characters", ge=500, le=4500)] = 3500,
     describe_images: Annotated[
         bool, Field(description="Use LLM vision to describe embedded images")
     ] = False,
 ) -> DocumentResult:
     """Read a document and extract text content as markdown.
 
-    Supports: PDF, DOCX, PPTX, XLSX, CSV, JSON, XML, HTML,
+    Supports: PDF, DOCX, PPTX, XLS, XLSX, CSV, JSON, XML, HTML,
     plain text, and source code files.
 
-    Set describe_images=True to use LLM vision for embedded images
+    Use start_line/max_lines or the returned next_start_char cursor to read later
+    pages. Each response is bounded so result transport truncation cannot hide the
+    next page. Set describe_images=True to use LLM vision for embedded images
     (requires OPENAI_API_KEY). Without it, images are skipped or shown as alt text.
     """
     try:
         path = os.path.expanduser(file_path)
         await ctx.info(f"Reading: {os.path.basename(path)}")
-        md = _md_with_vision() if describe_images else _md
-        content = md.convert(path).text_content
-        return DocumentResult(content=_truncate(content, max_lines))
-    except Exception as e:
+        content = _extract_document(path, describe_images)
+        page, total_lines, actual_start_line, next_line, next_char, truncated = _page_document(
+            content,
+            start_line=start_line,
+            max_lines=max_lines,
+            start_char=start_char,
+            max_chars=max_chars,
+        )
+        return DocumentResult(
+            content=page,
+            total_lines=total_lines,
+            start_line=actual_start_line,
+            next_start_line=next_line if truncated else None,
+            total_chars=len(content),
+            next_start_char=next_char if truncated else None,
+            truncated=truncated,
+        )
+    except Exception as e:  # noqa: BLE001 - surface document conversion errors via MCP
         await ctx.error(f"Failed to read document: {e}")
         return DocumentResult(error=str(e))
+
+
+@mcp.tool
+async def find_document(
+    file_path: Annotated[str, Field(description="Path to the document")],
+    query: Annotated[str, Field(description="Text to find")],
+    ctx: Context,
+    start_line: Annotated[int, Field(description="First 1-based line to search", ge=1)] = 1,
+    max_matches: Annotated[int, Field(description="Maximum matching lines to return", ge=1, le=10)] = 10,
+    context_chars: Annotated[int, Field(description="Characters around each match", ge=0, le=200)] = 160,
+) -> DocumentFindResult:
+    """Find text in a document and return matching lines with a continuation cursor."""
+    try:
+        path = os.path.expanduser(file_path)
+        await ctx.info(f"Searching: {os.path.basename(path)}")
+        content = _extract_document(path)
+        needle = query.casefold()
+        if not needle:
+            return DocumentFindResult(error="query must not be empty")
+        lines = content.splitlines()
+        matches: list[DocumentMatch] = []
+        total = 0
+        for line_number, line in enumerate(lines, start=1):
+            position = line.casefold().find(needle)
+            if position < 0:
+                continue
+            total += 1
+            if line_number < start_line or len(matches) >= max_matches:
+                continue
+            left = max(0, position - context_chars)
+            right = min(len(line), position + len(query) + context_chars)
+            matches.append(DocumentMatch(line=line_number, text=line[left:right]))
+        has_more = any(
+            line_number > matches[-1].line and needle in line.casefold()
+            for line_number, line in enumerate(lines, start=1)
+        ) if matches else any(
+            line_number >= start_line and needle in line.casefold()
+            for line_number, line in enumerate(lines, start=1)
+        )
+        return DocumentFindResult(
+            matches=matches,
+            total_matches=total,
+            next_start_line=matches[-1].line + 1 if has_more and matches else None,
+        )
+    except Exception as e:  # noqa: BLE001 - surface document search errors via MCP
+        await ctx.error(f"Failed to search document: {e}")
+        return DocumentFindResult(error=str(e))
 
 
 @mcp.tool
@@ -124,7 +253,7 @@ async def list_zip_contents(
             total_files=len(files),
             total_size=total_size,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - preserve structured ZIP tool errors
         await ctx.error(f"Failed to list ZIP: {e}")
         return ZipContentsResult(error=str(e))
 
@@ -155,7 +284,7 @@ async def extract_zip(
             files=names,
             total_extracted=len(names),
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - preserve structured ZIP tool errors
         await ctx.error(f"Failed to extract ZIP: {e}")
         return ZipExtractResult(error=str(e))
 

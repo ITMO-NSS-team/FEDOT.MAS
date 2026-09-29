@@ -112,14 +112,35 @@ button{font-family:inherit; font-size:inherit; color:inherit; cursor:pointer}
 .block-grow{flex:0 0 auto}
 .row-title{display:flex; align-items:center; justify-content:space-between; gap:8px; text-transform:none}
 .row-title>span:first-child{font-size:11px; letter-spacing:.9px; text-transform:uppercase}
+.scenario-title-row{flex-direction:column; align-items:stretch}
+.scenario-actions{display:flex; flex-wrap:wrap; gap:8px; min-width:0}
+.scenario-actions .btn{flex:1 1 110px; white-space:normal; overflow-wrap:anywhere; letter-spacing:normal}
 .block-title{font-size:11px; letter-spacing:.9px; text-transform:uppercase; color:var(--text-mute); font-weight:600}
 .muted-count{color:var(--line); margin-left:4px}
 textarea#query{
   width:100%; resize:none; flex:0 0 auto; min-height:104px; background:var(--bg-soft); color:var(--text);
   border:1px solid var(--line); border-radius:var(--r-md); padding:10px 11px;
-  font-family:inherit; font-size:13px; line-height:1.5; outline:none;
+  font-family:inherit; font-size:16px; line-height:1.5; outline:none;
 }
 textarea#query:focus{border-color:color-mix(in srgb, var(--coord) 50%, transparent); box-shadow:0 0 0 3px color-mix(in srgb, var(--coord) 12%, transparent)}
+.query-title{min-height:29px}
+.query-block.query-expanded{
+  position:fixed; inset:0; z-index:15; width:100vw; height:100vh;
+  margin:0; padding:clamp(18px, 4vw, 64px); gap:20px;
+  background:var(--panel); box-shadow:var(--shadow);
+}
+.query-block.query-expanded .query-title,
+.query-block.query-expanded .run-row,
+.query-block.query-expanded textarea#query{width:100%; max-width:1400px; margin-inline:auto}
+.query-block.query-expanded .query-title>span:first-child{font-size:20px; letter-spacing:0; text-transform:none; color:var(--text)}
+.query-block.query-expanded #btn-query-expand{font-size:15px; padding:8px 12px}
+.query-block.query-expanded textarea#query{
+  flex:1 1 auto; min-height:0; padding:clamp(18px, 2vw, 32px);
+  font-size:clamp(24px, 1.6vw, 28px); line-height:1.55; overflow-y:auto;
+}
+.query-block.query-expanded .run-row{justify-content:flex-end}
+.query-block.query-expanded .run-row .btn{flex:0 1 auto; font-size:15px}
+.query-block.query-expanded .run-row .btn-ghost{white-space:normal}
 .hint{font-size:11px; line-height:1.4; color:var(--text-mute); margin:-2px 0 1px}
 .run-row{display:flex; flex-wrap:wrap; gap:8px}
 .btn{
@@ -159,7 +180,7 @@ textarea#query:focus{border-color:color-mix(in srgb, var(--coord) 50%, transpare
 .tag-maw{color:var(--worker); border-color:color-mix(in srgb, var(--worker) 35%, transparent)}
 
 .block-foot{border-top:1px solid var(--line-soft); padding-top:11px; gap:5px; margin-top:auto; flex:0 0 auto}
-.stat-line{display:flex; justify-content:space-between; font-size:12px; color:var(--text-mute)}
+.stat-line{display:flex; flex-wrap:wrap; gap:4px 8px; justify-content:space-between; font-size:12px; color:var(--text-mute)}
 .stat-line b{color:var(--text-dim); font-weight:560}
 .stat-line b.hl{color:var(--coord)}
 
@@ -205,7 +226,8 @@ textarea#query:focus{border-color:color-mix(in srgb, var(--coord) 50%, transpare
 .metric span{font-size:10.5px; letter-spacing:.6px; text-transform:uppercase; color:var(--text-mute)}
 .metric b{font-size:15px; font-weight:600; font-variant-numeric:tabular-nums}
 
-.player{display:flex; align-items:center; gap:10px; padding:10px 14px; border-top:1px solid var(--line-soft)}
+.player{display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:10px 14px; border-top:1px solid var(--line-soft)}
+.player .pbtn{flex-shrink:0; white-space:nowrap}
 .pbtn{
   width:32px;height:32px; border-radius:9px; border:1px solid var(--line); background:var(--panel-2);
   display:flex; align-items:center; justify-content:center; transition:.15s;
@@ -240,6 +262,7 @@ textarea#query:focus{border-color:color-mix(in srgb, var(--coord) 50%, transpare
 .msg-name{font-size:12px; font-weight:580; font-family:var(--mono); color:var(--role); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .msg-phase{font-size:10.5px; color:var(--text-mute); margin-left:auto; white-space:nowrap; flex:none}
 .msg-text{font-size:12.5px; color:var(--text-dim); white-space:pre-wrap}
+.msg-text.md{white-space:normal; overflow-wrap:anywhere; line-height:1.5}
 .msg-tool{
   display:inline-flex; align-items:center; gap:6px; margin-top:7px;
   font-family:var(--mono); font-size:11px; color:var(--tool);
@@ -251,11 +274,11 @@ textarea#query:focus{border-color:color-mix(in srgb, var(--coord) 50%, transpare
 .agent-cards,.tool-cards{overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:9px}
 .acard{border:1px solid var(--line); background:var(--bg-soft); border-radius:var(--r-md); padding:11px 12px}
 .acard-head{display:flex; align-items:center; gap:8px; margin-bottom:6px}
-.acard-name{font-family:var(--mono); font-size:12.5px; font-weight:580; color:var(--role); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.acard-role{margin-left:auto; font-size:10.5px; color:var(--text-mute); flex:none; white-space:nowrap}
-.acard-instr{font-size:12px; color:var(--text-dim); border-left:2px solid var(--line); padding-left:9px; white-space:pre-wrap}
+.acard-name{font-family:var(--mono); font-size:15px; font-weight:580; color:var(--role); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.acard-role{margin-left:auto; font-size:12px; color:var(--text-mute); flex:none; white-space:nowrap}
+.acard-instr{font-size:14px; line-height:1.5; color:var(--text-dim); border-left:2px solid var(--line); padding-left:9px; white-space:pre-wrap}
 .acard-foot{display:flex; flex-wrap:wrap; gap:5px; margin-top:8px}
-.pill{font-family:var(--mono); font-size:10.5px; border:1px solid var(--line); border-radius:5px; padding:2px 6px; color:var(--text-mute)}
+.pill{font-family:var(--mono); font-size:12px; border:1px solid var(--line); border-radius:5px; padding:2px 6px; color:var(--text-mute)}
 .pill-out{color:var(--worker); border-color:color-mix(in srgb, var(--worker) 32%, transparent)}
 .pill-tool{color:var(--tool); border-color:color-mix(in srgb, var(--tool) 32%, transparent)}
 
@@ -281,8 +304,8 @@ pre.json .p{color:var(--text-mute)}
 #graph .node.coord .node-box{stroke:color-mix(in srgb, var(--coord) 55%, transparent)}
 #graph .node.active .node-box{stroke:var(--coord); fill:color-mix(in srgb, var(--coord) 8%, var(--node-fill)); filter:url(#glow)}
 #graph .node.done .node-box{stroke:color-mix(in srgb, var(--ok) 50%, transparent)}
-#graph .node-name{fill:var(--text); font-family:var(--mono); font-size:11.5px; font-weight:500}
-#graph .node-sub{fill:var(--text-mute); font-size:10.5px; font-family:var(--mono)}
+#graph .node-name{fill:var(--text); font-family:var(--mono); font-size:14px; font-weight:550}
+#graph .node-sub{fill:var(--text-mute); font-size:12px; font-family:var(--mono)}
 #graph .node-av{stroke-width:1.6; fill:none; stroke-linecap:round; stroke-linejoin:round; stroke:var(--role)}
 #graph .node-av-bg{fill:var(--role); fill-opacity:.12; stroke:var(--role); stroke-opacity:.32}
 #graph .group-label-bg{fill:var(--panel)}
@@ -336,6 +359,8 @@ pre.json .p{color:var(--text-mute)}
   font-size:11.5px; max-width:170px; outline:none; cursor:pointer}
 #model-select option{background:var(--panel); color:var(--text)}
 body.zoomed{zoom:1.18}
+body.query-fullscreen{overflow:hidden}
+body.zoomed.query-fullscreen{zoom:1}
 
 /* ---------- Источники данных ---------- */
 .block-data{border-top:1px solid var(--line-soft); padding-top:11px; flex:0 0 auto}
@@ -362,16 +387,42 @@ body.zoomed{zoom:1.18}
 .ans-winner.system{color:var(--ok); background:color-mix(in srgb, var(--ok) 12%, transparent)}
 .ans-winner.single{color:var(--warn); background:color-mix(in srgb, var(--warn) 12%, transparent)}
 .ans-winner.tie{color:var(--text-dim); background:var(--panel-2)}
+.ans-winner.error{color:var(--warn); background:color-mix(in srgb, var(--warn) 12%, transparent)}
 .answer-actions{display:flex; gap:8px; padding:10px 14px; border-top:1px solid var(--line-soft)}
 .answer-actions .btn{flex:1 1 auto}
+.synthetic-box{display:flex; flex-direction:column; gap:8px; padding:10px 14px;
+  border-top:1px solid var(--line-soft); background:var(--bg-soft)}
+.synthetic-head{display:flex; align-items:flex-start; justify-content:space-between; gap:10px}
+.synthetic-head>div{display:flex; flex-direction:column; gap:2px}
+.synthetic-head b{font-size:12px; color:var(--text); font-weight:620}
+.synthetic-head span,.synthetic-head label,.synthetic-note{font-size:10.5px; color:var(--text-mute)}
+.synthetic-head label{display:flex; align-items:center; gap:5px; white-space:nowrap}
+.synthetic-head select{border:1px solid var(--line); border-radius:6px; background:var(--panel);
+  color:var(--text); font:inherit; padding:2px 4px}
+.synthetic-box>#btn-synthetic{width:100%}
+.synthetic-note:empty,.synthetic-list:empty{display:none}
+.synthetic-note.error{color:var(--warn)}
+.synthetic-list{display:flex; flex-direction:column; gap:6px; max-height:230px; overflow-y:auto}
+.synthetic-item{border:1px solid var(--line); border-radius:var(--r-sm); background:var(--panel);
+  padding:7px 8px; display:flex; flex-direction:column; gap:6px}
+.synthetic-text{font-size:11.5px; line-height:1.45; color:var(--text); white-space:pre-wrap; word-break:break-word}
+.synthetic-meta{display:flex; align-items:center; justify-content:space-between; gap:8px;
+  font-size:10px; color:var(--text-mute)}
+.synthetic-controls{display:flex; gap:5px}
+.synthetic-controls button{border:0; padding:0; background:transparent; color:var(--worker);
+  font:inherit; cursor:pointer}
+.synthetic-controls button[data-action="remove"]{color:var(--text-mute)}
 
-/* Markdown внутри ответа */
-.ans-text.md p{margin:0 0 7px}
-.ans-text.md h5{margin:12px 0 6px; font-size:13px; font-weight:640; color:var(--text)}
-.ans-text.md ul,.ans-text.md ol{margin:0 0 8px; padding-left:20px}
-.ans-text.md li{margin:2px 0}
-.ans-text.md hr{border:none; border-top:1px solid var(--line); margin:10px 0}
-.ans-text.md code{font-family:var(--mono); font-size:11.5px; background:var(--panel-2); padding:1px 4px; border-radius:4px}
+/* Один безопасный Markdown-рендерер для ответа и хода выполнения. */
+.ans-text.md p,.msg-text.md p{margin:0 0 7px}
+.ans-text.md p:last-child,.msg-text.md p:last-child{margin-bottom:0}
+.ans-text.md h5,.msg-text.md h5{margin:12px 0 6px; font-size:13px; font-weight:640; color:var(--text)}
+.ans-text.md ul,.ans-text.md ol,.msg-text.md ul,.msg-text.md ol{margin:0 0 8px; padding-left:20px}
+.ans-text.md li,.msg-text.md li{margin:2px 0}
+.ans-text.md hr,.msg-text.md hr{border:none; border-top:1px solid var(--line); margin:10px 0}
+.ans-text.md code,.msg-text.md code{font-family:var(--mono); font-size:11.5px; background:var(--panel-2); padding:1px 4px; border-radius:4px}
+.ans-text.md pre,.msg-text.md pre{max-width:100%; overflow-x:auto; padding:8px 10px; border-radius:var(--r-sm); background:var(--panel-2); white-space:pre; font-size:11.5px}
+.ans-text.md pre code,.msg-text.md pre code{padding:0; background:none; white-space:inherit}
 .ans-table{border-collapse:collapse; width:100%; margin:6px 0 10px; font-size:12px; display:block; overflow-x:auto}
 .ans-table th,.ans-table td{border:1px solid var(--line); padding:4px 7px; text-align:left; vertical-align:top}
 .ans-table th{background:var(--panel-2); font-weight:600; white-space:nowrap}
@@ -419,6 +470,9 @@ body.zoomed{zoom:1.18}
   outline:none; cursor:pointer; padding:2px 0;
 }
 .model-pick:focus-within{border-color:color-mix(in srgb, var(--coord) 50%, transparent)}
+#models-modal .model-pick{flex-direction:column; align-items:stretch; gap:8px; padding:12px}
+#models-modal .model-pick>span,#models-modal .model-pick select{font-size:15px}
+#models-modal .model-pick select{text-align:left; text-align-last:left; width:100%}
 
 /* ---------- Список инструментов в окне сценария ---------- */
 .tools-box{border:1px solid var(--line); border-radius:var(--r-md); background:var(--bg-soft); padding:8px 10px}

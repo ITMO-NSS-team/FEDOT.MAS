@@ -14,10 +14,19 @@
   window.OFFLINE_DEMO = true;
 
   const MODELS = [
-    { id: "openai/gpt-4.1-mini", label: "gpt-4.1-mini", open: false },
-    { id: "openai/gpt-oss-120b", label: "gpt-oss-120b (открытые веса)", open: true },
-    { id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash (открытые веса)", open: true },
-    { id: "qwen/qwen3-235b-a22b-2507", label: "Qwen3 235B (открытые веса)", open: true },
+    { id: "openrouter/qwen/qwen3-235b-a22b-2507", label: "Qwen3 235B A22B · OpenRouter", open: true },
+    { id: "openrouter/deepseek/deepseek-v3.2", label: "DeepSeek V3.2 · OpenRouter", open: true },
+    { id: "openrouter/z-ai/glm-5", label: "GLM 5 · OpenRouter", open: true },
+    { id: "openrouter/mistralai/mistral-small-2603", label: "Mistral Small 4 · OpenRouter", open: true },
+    { id: "openrouter/qwen/qwen3-32b", label: "Qwen3 32B · OpenRouter", open: true },
+    { id: "openrouter/qwen/qwen3-coder", label: "Qwen3 Coder · OpenRouter", open: true },
+    { id: "openrouter/deepseek/deepseek-chat-v3.1", label: "DeepSeek V3.1 · OpenRouter", open: true },
+    { id: "openrouter/meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B Instruct · OpenRouter", open: true },
+    { id: "openrouter/moonshotai/kimi-k2.5", label: "Kimi K2.5 · OpenRouter", open: true },
+    { id: "openrouter/openai/gpt-oss-120b", label: "GPT-OSS 120B · OpenRouter", open: true },
+    { id: "host/gpt-5.6-terra", label: "GPT-5.6 Terra · подписка Codex", open: false },
+    { id: "host/gpt-5.6-sol", label: "GPT-5.6 Sol · подписка Codex", open: false },
+    { id: "host/gpt-5.6-luna", label: "GPT-5.6 Luna · подписка Codex", open: false },
   ];
   const TOOLS = [
     ["sandbox-light", "расчёты на чистом Python"],
@@ -129,6 +138,17 @@
         gen: { tokens: 8168, seconds: 26.6 }, model: "openai/gpt-4.1-mini" }));
     }
     if (url.includes("api/run")) return Promise.resolve(stream(runEvents()));
+
+    if (url.includes("api/synthetic_examples")) {
+      const source = String(body.query || "").trim();
+      const variants = [
+        `Переформулируй задачу и выполни её: ${source}`,
+        `Нужно решить следующую задачу, сохранив все её условия: ${source}`,
+        `Выполни запрос ниже без изменения исходных ограничений: ${source}`,
+      ].slice(0, Math.max(1, Math.min(10, Number(body.count) || 1)));
+      return sleep(800).then(() => json({ ok: true, examples: variants,
+        model: body.model || MODELS[0].id, tokens: 180 }));
+    }
 
     if (url.includes("api/effort")) {
       // Итог трудоёмкости — сумма часов по подзадачам, как и в живом режиме

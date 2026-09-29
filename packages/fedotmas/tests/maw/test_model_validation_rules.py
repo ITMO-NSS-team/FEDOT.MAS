@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from fedotmas.maw.maw import (
     _drop_generated_token_budgets,
+    _normalize_generated_agent_names,
+    _normalize_generated_research_modes,
+    _normalize_generated_research_policies,
 )
 from fedotmas.maw.models import (
     AgentPoolConfig,
+    ArtifactRequirement,
     MAWAgentConfig,
     MAWConfig,
     MAWStepConfig,
 )
+from pydantic import ValidationError
 
 
 class TestDuplicateAgentNames:
@@ -72,7 +75,7 @@ class TestAutoInferType:
     """Rules 4-5: MAWStepConfig auto-infers type from fields."""
 
     def test_infer_agent_type(self):
-        step = MAWStepConfig(**{"agent_name": "x", "type": "agent"})
+        step = MAWStepConfig(agent_name="x", type="agent")
         assert step.type == "agent"
 
     def test_infer_agent_type_from_agent_name(self):
@@ -107,6 +110,138 @@ class TestSingleAgentAutoFill:
     def test_single_agent_auto_fill(self, single_agent_data):
         config = MAWConfig.model_validate(single_agent_data)
         assert config.pipeline.agent_name == "solver"
+
+
+def test_generated_names_normalize_and_update_pipeline_and_terminal_refs():
+    config = MAWConfig.model_validate(
+        {
+            "agents": [
+                {"name": "2 scout", "instruction": "x", "output_key": "a"},
+                {"name": "2-scout", "instruction": "y", "output_key": "b"},
+                {"name": "final answer!", "instruction": "z", "output_key": "c"},
+            ],
+            "final_answer_agent": "final answer!",
+            "pipeline": {
+                "type": "sequential",
+                "children": [
+                    {"type": "agent", "agent_name": "2 scout"},
+                    {"type": "agent", "agent_name": "2-scout"},
+                    {"type": "agent", "agent_name": "final answer!"},
+                ],
+            },
+        }
+    )
+
+    normalized = _normalize_generated_agent_names(config)
+
+    assert [agent.name for agent in normalized.agents] == [
+        "_2_scout",
+        "_2_scout_2",
+        "final_answer_",
+    ]
+    assert normalized.final_answer_agent == "final_answer_"
+    assert [node.agent_name for node in normalized.pipeline.children] == [
+        "_2_scout",
+        "_2_scout_2",
+        "final_answer_",
+    ]
+
+
+def test_name_normalization_leaves_caller_supplied_names_untouched():
+    config = MAWConfig.model_validate(
+        {
+            "agents": [
+                {"name": "2 caller", "instruction": "x", "output_key": "caller"},
+                {"name": "2-caller", "instruction": "y", "output_key": "generated"},
+            ],
+            "pipeline": {
+                "type": "sequential",
+                "children": [
+                    {"type": "agent", "agent_name": "2 caller"},
+                    {"type": "agent", "agent_name": "2-caller"},
+                ],
+            },
+        }
+    )
+
+    normalized = _normalize_generated_agent_names(config, preserved_names={"2 caller"})
+
+    assert [agent.name for agent in normalized.agents] == ["2 caller", "_2_caller"]
+
+
+def test_generated_research_modes_follow_capabilities_and_pipeline_roles():
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(
+                name="source_finder",
+                instruction="Select candidate sources.",
+                output_key="sources",
+                tools=["websearch-tavily"],
+            ),
+            MAWAgentConfig(
+                name="structured_extractor",
+                instruction="Extract fields from selected source URLs.",
+                output_key="extracted",
+                tools=["document", "youtube-transcript"],
+            ),
+            MAWAgentConfig(
+                name="general_researcher",
+                instruction="Research and inspect the requested claim.",
+                output_key="result",
+                tools=["websearch-searxng", "web-scraping"],
+            ),
+        ],
+        pipeline=MAWStepConfig(
+            type="sequential",
+            children=[
+                MAWStepConfig(type="agent", agent_name="source_finder"),
+                MAWStepConfig(type="agent", agent_name="structured_extractor"),
+                MAWStepConfig(type="agent", agent_name="general_researcher"),
+            ],
+        ),
+    )
+
+    _normalize_generated_research_modes(config)
+
+    assert [agent.research_mode for agent in config.agents] == [
+        "discovery_only",
+        "inspection_only",
+        "mixed",
+    ]
+
+
+def test_explicit_generated_modes_are_corrected_to_match_tools():
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(name="mixed_search", instruction="", output_key="a", tools=["websearch-tavily"], research_mode="mixed"),
+            MAWAgentConfig(name="inspect_search", instruction="", output_key="b", tools=["websearch-searxng"], research_mode="inspection_only"),
+            MAWAgentConfig(name="mixed_inspector", instruction="", output_key="c", tools=["document"], research_mode="mixed"),
+        ],
+        pipeline=MAWStepConfig(type="sequential", children=[MAWStepConfig(type="agent", agent_name=name) for name in ("mixed_search", "inspect_search", "mixed_inspector")]),
+    )
+    _normalize_generated_research_modes(config)
+    assert [agent.research_mode for agent in config.agents] == ["discovery_only", "discovery_only", "inspection_only"]
+
+
+@pytest.mark.parametrize("mode", ["discovery_only", "inspection_only", "mixed"])
+def test_no_tool_final_agent_resets_generated_research_mode(mode):
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(
+                name="final_answer",
+                instruction="Synthesize the answer.",
+                output_key="answer",
+                tools=[],
+                research_mode=mode,
+            )
+        ],
+        pipeline=MAWStepConfig(type="agent", agent_name="final_answer"),
+        final_answer_agent="final_answer",
+    )
+
+    _normalize_generated_research_modes(config)
+
+    assert config.agents[0].research_mode == "mixed"
 
 
 class TestNonLeafWithoutChildren:
@@ -259,3 +394,79 @@ class TestGeneratedTokenBudget:
         _drop_generated_token_budgets(config)
 
         assert config.agents[0].max_output_tokens is None
+
+    def test_generated_turn_limit_is_discarded(self):
+        config = self._config(None)
+        config.agents[0].max_llm_turns = 4
+        _drop_generated_token_budgets(config)
+
+        assert config.agents[0].max_llm_turns is None
+
+    def test_handwritten_turn_limit_is_preserved_without_generated_cleanup(self):
+        config = self._config(None)
+        config.agents[0].max_llm_turns = 4
+
+        assert config.agents[0].max_llm_turns == 4
+
+    def test_evidence_first_without_inputs_becomes_independent(self):
+        config = self._config(None)
+        config.agents[0].research_policy = "evidence_first"
+        _drop_generated_token_budgets(config)
+
+        assert config.agents[0].research_policy == "independent"
+
+    def test_evidence_first_first_stage_with_non_upstream_requirement_is_independent(self):
+        config = MAWConfig(
+            agents=[
+                MAWAgentConfig(
+                    name="first",
+                    instruction="Discover evidence.",
+                    output_key="first_output",
+                    research_policy="evidence_first",
+                    input_requirements=[
+                        ArtifactRequirement(
+                            source_key="later_output", required_fields=["evidence"]
+                        )
+                    ],
+                ),
+                MAWAgentConfig(
+                    name="later",
+                    instruction="Inspect evidence.",
+                    output_key="later_output",
+                ),
+            ],
+            pipeline=MAWStepConfig(
+                type="sequential",
+                children=[
+                    MAWStepConfig(type="agent", agent_name="first"),
+                    MAWStepConfig(type="agent", agent_name="later"),
+                ],
+            ),
+        )
+
+        _normalize_generated_research_policies(config)
+
+        assert config.agents[0].research_policy == "independent"
+
+
+def test_user_query_is_available_to_first_stage_research_policy():
+    config = MAWConfig(
+        agents=[
+            MAWAgentConfig(
+                name="reader",
+                instruction="Use {user_query} and return an evidence packet.",
+                output_key="evidence",
+                research_policy="evidence_first",
+                input_requirements=[
+                    ArtifactRequirement(
+                        source_key="user_query", required_fields=["task"]
+                    )
+                ],
+            )
+        ],
+        pipeline=MAWStepConfig(type="agent", agent_name="reader"),
+    )
+
+    _normalize_generated_research_policies(config)
+
+    assert config.agents[0].research_policy == "evidence_first"

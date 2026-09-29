@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class KeyIn(BaseModel):
@@ -32,7 +32,7 @@ class GenerateIn(BaseModel):
     task: str
     custom_mcp: list[CustomMCP] | None = None
     query: str | None = None    # нужен, чтобы увидеть ссылки на файлы с данными
-    kind: str = "maw"
+    kind: str = "mas"
     model: str | None = None
     tools: list[str] | None = None
     russian: bool = True
@@ -42,7 +42,7 @@ class GenerateIn(BaseModel):
 class RunIn(BaseModel):
     config: dict
     query: str
-    kind: str = "maw"
+    kind: str = "mas"
     tools: list[str] | None = None
     model: str | None = None
     custom_mcp: list[CustomMCP] | None = None
@@ -50,7 +50,7 @@ class RunIn(BaseModel):
 
 class PrepareIn(BaseModel):
     text: str
-    kind: str = "maw"
+    kind: str = "mas"
     model: str | None = None
     web: bool = True
     tools: list[str] | None = None
@@ -64,7 +64,7 @@ class BaselineIn(BaseModel):
 class EffortIn(BaseModel):
     task: str
     config: dict | None = None
-    kind: str = "maw"
+    kind: str = "mas"
     model: str | None = None
 
 
@@ -75,5 +75,38 @@ class JudgeIn(BaseModel):
     model: str | None = None
 
 
+class SyntheticExamplesIn(BaseModel):
+    """Новые входные данные для уже созданной системы."""
+
+    query: str = Field(min_length=1, max_length=12_000)
+    count: int = Field(default=3, ge=1, le=10)
+    config: dict
+    tools: list[str] = Field(default_factory=list)
+    existing_examples: list[str] = Field(default_factory=list, max_length=100)
+    model: str | None = None
+
+
+class ReviewIn(BaseModel):
+    query: str
+    system_answer: str
+    trace: list[dict] = Field(default_factory=list)
+    model: str | None = None
+
+
 class ExportIn(BaseModel):
     presets: list[dict]
+
+
+class SynapseExportIn(BaseModel):
+    config: dict
+    kind: str = "maw"
+    workflow_id: str = Field(min_length=1, max_length=200)
+    workflow_name: str = Field(min_length=1, max_length=300)
+
+
+class CodeExportIn(BaseModel):
+    config: dict
+    kind: str = "mas"
+    tools: list[str] | None = None
+    model: str | None = None
+    custom_mcp: list[CustomMCP] | None = None

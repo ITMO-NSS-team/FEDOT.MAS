@@ -16,7 +16,9 @@ window.MCP_SERVERS = {
   "sandbox":           "Полная песочница Python: pip, файловый ввод-вывод, shell, сессии в стиле Jupyter.",
   "sandbox-light":     "Ограниченная песочница Python: только builtins, без импортов и доступа к файлам.",
   "sequential-thinking": "Пошаговое рассуждение для сложных задач с ветвлением и пересмотром гипотез.",
-  "youtube-transcript": "Транскрипты и метаданные видео YouTube."
+  "youtube-transcript": "Транскрипты и метаданные видео YouTube.",
+  "rubber-recipe-predictor": "Оценка четырёх свойств заданного рецепта SBR/NR/N220 по открытым данным; состав не изменяется.",
+  "technology-card-audit": "Извлечение норм из демонстрационной ТТК и программная проверка фактической производительности."
 };
 
 window.META_MODEL = "qwen/qwen3.6-finetuned";

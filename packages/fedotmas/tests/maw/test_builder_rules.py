@@ -5,21 +5,20 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pydantic import ValidationError
-
 from fedotmas._settings import ModelConfig
 from fedotmas.maw.builder import (
+    _STATE_REF_RE,
     AUTONOMY_CLOSING,
     AUTONOMY_PREAMBLE,
-    _STATE_REF_RE,
     _build_llm_agent,
-    _instruction_provider,
     _inject_exit_loop,
+    _instruction_provider,
     _resolve_llm,
     build,
+    frame_instruction,
 )
-from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
-
+from fedotmas.maw.models import ArtifactRequirement, MAWAgentConfig, MAWConfig, MAWStepConfig
+from pydantic import ValidationError
 
 # ---- Rules 1-3: text normalization (via MAWAgentConfig model_validator) ----
 
@@ -27,10 +26,10 @@ from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 class TestNormalizeAngleBrackets:
     """Rule 1: <state_key> → {state_key?} (via MAWConfig, context-aware)."""
 
-    def _build(self, instruction: str, extra_keys: list[str] = []) -> str:
+    def _build(self, instruction: str, extra_keys: list[str] | None = None) -> str:
         agents = [
             MAWAgentConfig(name=f"a{i}", instruction="x", output_key=k)
-            for i, k in enumerate(extra_keys)
+            for i, k in enumerate(extra_keys or [])
         ]
         agents.append(MAWAgentConfig(name="t", instruction=instruction, output_key="k"))
         cfg = MAWConfig(
@@ -215,15 +214,15 @@ class TestInjectExitLoop:
         _inject_exit_loop([seq])
         assert seq.tools == original_tools
 
-    def test_injects_into_last_llm(self):
-        """exit_loop goes into the *last* LlmAgent only."""
+    def test_injects_into_all_llm_children(self):
+        """Every LlmAgent child gets exit_loop so limits can stop the loop."""
         from google.adk.tools.exit_loop_tool import exit_loop
 
         a1 = self._make_mock_llm_agent("first", tools=[])
         a2 = self._make_mock_llm_agent("second", tools=[])
         _inject_exit_loop([a1, a2])
+        assert exit_loop in a1.tools
         assert exit_loop in a2.tools
-        assert exit_loop not in a1.tools
 
     def test_none_tools_becomes_list(self):
         """Agent with tools=None gets [exit_loop]."""
@@ -397,6 +396,30 @@ class TestMaxOutputTokensIsPassedThrough:
         assert self._built(None).generate_content_config is None
 
 
+def test_code_agent_worker_guidance_reserves_calls_for_computation(monkeypatch):
+    monkeypatch.setattr(
+        "fedotmas.maw.builder.create_toolset",
+        lambda *_args, **_kwargs: (lambda: None),
+    )
+    agent = _build_llm_agent(
+        MAWAgentConfig(
+            name="solver",
+            instruction="Compute from the local file.",
+            output_key="result",
+            tools=["code-agent"],
+        ),
+        None,
+        None,
+        autonomous=False,
+    )
+
+    assert "self-contained solve_with_code(files=[...]) call" in agent.instruction
+    assert "Do not use code-agent merely to inspect or print file contents" in (
+        agent.instruction
+    )
+    assert "use document tools for reading" in agent.instruction
+
+
 def _readonly_context(state: dict):
     """Minimal stand-in: both attributes ADK's interpolation reads."""
     ctx = MagicMock()
@@ -484,8 +507,107 @@ class TestMissingInputIsNamed:
         assert 'MISSING INPUT "calc"' in text
         assert 'MISSING INPUT "raw_data"' not in text
 
+    @pytest.mark.asyncio
+    async def test_appended_runtime_braces_are_literal(self):
+        requirement = ArtifactRequirement(source_key="source", purpose="Return one value per {line}")
+        provider = _instruction_provider(
+            "Use {solution}.", "writer", frozenset({"solution"}),
+            input_requirements=[requirement],
+        )
+        text = await provider(_readonly_context({"solution": "ready", "source": "row {n}"}))
+        assert "Use ready." in text
+        assert "Return one value per {line}" in text
+        assert "row {n}" in text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]"),
+            (
+                '[{"candidate":1},{"candidate":2}]',
+                '[{"candidate":1},{"candidate":2}]',
+            ),
+            ("Hello {customer_name}", "Hello {customer_name}"),
+        ],
+    )
+    async def test_state_reference_preserves_full_payload_and_braces(
+        self, value, expected
+    ):
+        provider = _instruction_provider(
+            "Pass {raw_data?} to the next step.",
+            "writer",
+            frozenset({"raw_data"}),
+        )
+        text = await provider(_readonly_context({"raw_data": value}))
+        assert expected in text
+
+    @pytest.mark.asyncio
+    async def test_missing_upstream_state_diagnostic_survives_interpolation(self):
+        provider = _instruction_provider("Use {upstream}.", "writer", frozenset({"upstream"}))
+        text = await provider(_readonly_context({}))
+        assert 'MISSING INPUT "upstream"' in text
+
+    @pytest.mark.asyncio
+    async def test_agent_output_key_is_not_a_required_upstream_input(self):
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="compound_finder",
+                instruction="Use {compound_research?} and {source_data?}.",
+                output_key="compound_research",
+                model="openai/gpt-4o",
+            ),
+            mcp_registry=None,
+            worker_models=None,
+            state_keys=frozenset({"user_query", "compound_research", "source_data"}),
+            autonomous=False,
+        )
+
+        text = await agent.instruction(_readonly_context({}))
+
+        assert 'MISSING INPUT "compound_research"' not in text
+        assert 'MISSING INPUT "source_data"' in text
+
+    @pytest.mark.asyncio
+    async def test_first_self_reference_is_safe_and_later_reads_previous_output(self):
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="writer",
+                instruction="Refine {draft}",
+                output_key="draft",
+                model="openai/gpt-4o",
+            ),
+            mcp_registry=None,
+            worker_models=None,
+            state_keys=frozenset({"user_query", "draft"}),
+            autonomous=False,
+        )
+
+        first_iteration = await agent.instruction(_readonly_context({}))
+        second_iteration = await agent.instruction(
+            _readonly_context({"draft": "the previous draft"})
+        )
+
+        assert 'No previous output for "draft" exists yet' in first_iteration
+        assert "MISSING INPUT" not in first_iteration
+        assert "Refine the previous draft" in second_iteration
+        assert "No previous output" not in second_iteration
+
 
 class TestInstructionProviderIsOnlyUsedWhenNeeded:
+    def test_agent_uses_explicit_state_instead_of_accumulated_history(self):
+        agent = _build_llm_agent(
+            MAWAgentConfig(
+                name="writer",
+                instruction="Use {research_result} to answer {user_query}.",
+                output_key="report",
+            ),
+            None,
+            None,
+        )
+
+        assert agent.include_contents == "none"
+
     def test_static_instruction_stays_a_string(self):
         """No refs, no per-call work: ADK takes a plain string as-is."""
         agent = _build_llm_agent(
@@ -565,6 +687,19 @@ class TestAutonomyPreamble:
         for text in (AUTONOMY_PREAMBLE, AUTONOMY_CLOSING):
             assert not _STATE_REF_RE.search(text)
             assert "{" not in text
+
+    def test_intermediate_research_role_gets_handoff_framing(self):
+        text = frame_instruction(
+            "Find reliable sources and pass their URLs and evidence to the extractor."
+        )
+
+        assert "Complete the role assigned" in text
+        assert "requested deliverable" in text
+        assert "downstream agents" in text
+        assert "Do not take over sibling or downstream responsibilities" in text
+        assert "Do not ask the user for input" in text
+        assert "give the best answer" not in text
+        assert "Write the answer itself" not in text
 
     def test_a_caller_with_a_person_in_the_loop_can_turn_it_off(self):
         agent = _build_llm_agent(

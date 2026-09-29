@@ -1,6 +1,7 @@
 from typing import Literal
 
 from fedotmas.mcp._config import HttpMCPServer, MCPServerConfig, StdioMCPServer
+from fedotmas.mcp.capabilities import ToolCapability, tool_capability
 from fedotmas.mcp.describe import (
     UnreachableServer,
     build_description,
@@ -37,14 +38,16 @@ def resolve_mcp_registry(
 
 __all__ = [
     "HttpMCPServer",
-    "UnreachableServer",
-    "build_description",
-    "describe_servers",
-    "list_server_tools",
     "MCPServerConfig",
     "StdioMCPServer",
+    "ToolCapability",
+    "UnreachableServer",
+    "build_description",
+    "create_toolset",
+    "describe_servers",
     "discover_local_servers",
     "get_server_descriptions",
-    "create_toolset",
+    "list_server_tools",
     "strip_tool_name_prefix",
+    "tool_capability",
 ]

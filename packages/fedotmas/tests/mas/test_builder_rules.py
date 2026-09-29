@@ -51,6 +51,22 @@ class TestBuildFlatHierarchy:
         assert root.sub_agents[1].name == "beta"
 
 
+def test_output_token_limits_roundtrip_and_reach_all_agents():
+    config = _config()
+    for agent in [config.coordinator, *config.workers]:
+        agent.max_output_tokens = 12000
+    restored = MASConfig.model_validate_json(config.model_dump_json())
+    root = build_routing_system(restored)
+    for agent in [root, *root.sub_agents]:
+        assert agent.generate_content_config.max_output_tokens == 12000
+
+
+def test_output_token_limit_is_optional_for_existing_configs():
+    root = build_routing_system(_config())
+    for agent in [root, *root.sub_agents]:
+        assert agent.generate_content_config.max_output_tokens is None
+
+
 class TestWorkerDescriptionPassedThrough:
     """Rule 2: Each LlmAgent receives description= kwarg."""
 

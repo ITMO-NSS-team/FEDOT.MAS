@@ -55,6 +55,12 @@ just doctor
 
 Install only what the task needs and pass those names to `mcp_servers=`.
 
+## ProtoLLM integration example
+
+An isolated [ProtoLLM example](examples/protollm/README.md) reviews a FEDOT.MAS
+report through the ProtoLLM OpenRouter connector. Its Git-pinned dependency and
+environment are separate from the core GUI installation.
+
 ## Development
 
 **With just:**

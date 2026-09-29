@@ -18,6 +18,7 @@ class MASAgentConfig(BaseModel):
     model: str | None = None
     tools: list[str] = []
     output_key: str | None = None
+    max_output_tokens: int | None = None
 
     @model_validator(mode="after")
     def _normalize_model(self) -> MASAgentConfig:

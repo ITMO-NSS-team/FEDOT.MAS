@@ -6,14 +6,17 @@
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from fedotmas.common.codex_cli import is_codex_model
 from fedotmas.common.logging import get_logger
+from fedotmas.common.openrouter_proxy import openrouter_http_client
 
-from .config import ACCESS_TOKEN, DEFAULT_MODEL, PUBLIC_MODE
+from .config import ACCESS_TOKEN, DEFAULT_MODEL, JUDGE_MODEL, MODELS, PUBLIC_MODE
 from .schemas import KeyIn
 
 _log = get_logger("gui.security")
@@ -21,9 +24,19 @@ _log = get_logger("gui.security")
 # Открыто без токена: страница должна загрузиться, чтобы показать форму ввода ключа.
 OPEN_API = {"/api/status"}
 # Пути, которые тратят деньги на модели: без ключа пользователя их не пускаем.
-NEEDS_KEY = {"/api/generate", "/api/generate_stream", "/api/run", "/api/prepare",
-             "/api/baseline", "/api/effort", "/api/effort_breakdown",
-             "/api/judge", "/api/judge_stream"}
+NEEDS_KEY = {
+    "/api/generate",
+    "/api/generate_stream",
+    "/api/run",
+    "/api/prepare",
+    "/api/baseline",
+    "/api/effort",
+    "/api/effort_breakdown",
+    "/api/judge",
+    "/api/judge_stream",
+    "/api/review",
+    "/api/synthetic_examples",
+}
 
 # Ключ пользователя живёт в памяти процесса и подставляется в окружение — оттуда его
 # читают и FEDOT.MAS (resolve_model_config), и прямые вызовы клиента. Расчёт на одного
@@ -36,23 +49,48 @@ def user_key_set() -> bool:
     return _user_key_set
 
 
+def model_allowed(model: str | None) -> bool:
+    """Public visitors must not use the server owner's native CLI account."""
+    return not (PUBLIC_MODE and is_codex_model(model))
+
+
+def ensure_model_allowed(model: str | None) -> None:
+    if not model_allowed(model):
+        raise HTTPException(403, "Локальные модели Codex недоступны в публичном режиме")
+
+
 def mask(key: str) -> str:
     """Ключ нигде не должен появляться целиком — ни в логах, ни в ответах API."""
     key = key.strip()
     return f"{key[:6]}…{key[-4:]}" if len(key) > 14 else "…"
 
 
+def _key_available(model: str) -> bool:
+    """Есть ли ключ, которым реально пойдёт запрос этой модели.
+
+    litellm читает для openrouter/* только OPENROUTER_API_KEY — наличие
+    OPENAI_API_KEY такую модель не оплатит, и наоборот.
+    """
+    if model.startswith("openrouter/"):
+        return bool(os.getenv("OPENROUTER_API_KEY"))
+    return bool(os.getenv("OPENAI_API_KEY"))
+
+
 # Имена, под которыми стенд открывают штатно. Туннель добавляет своё — его имя
 # берётся из GUI_ALLOWED_HOSTS (через запятую), иначе запрос с него отклонится.
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"}
-_EXTRA_HOSTS = {h.strip().lower() for h in os.getenv("GUI_ALLOWED_HOSTS", "").split(",") if h.strip()}
+_EXTRA_HOSTS = {
+    h.strip().lower()
+    for h in os.getenv("GUI_ALLOWED_HOSTS", "").split(",")
+    if h.strip()
+}
 
 
 def _host_allowed(host: str) -> bool:
     """Свой ли это адрес. Пустой Host считаем своим: его не ставят только не-браузеры."""
     if not host:
         return True
-    host = host.strip().rstrip(".").strip("[]")     # «localhost.», «[::1]» — тот же адрес
+    host = host.strip().rstrip(".").strip("[]")  # «localhost.», «[::1]» — тот же адрес
     if host in _LOCAL_HOSTS or host in _EXTRA_HOSTS:
         return True
     # Туннели выдают имя при каждом запуске, заранее его не знаешь. В публичном режиме
@@ -96,32 +134,79 @@ def install(app: FastAPI) -> None:
                 # обходился именно тем способом, от которого он и ставился.
                 try:
                     parsed = urlparse(origin)
-                    origin_host, origin_port = (parsed.hostname or "").lower(), parsed.port
-                except ValueError:                  # в том числе порт вне диапазона
+                    origin_host, origin_port = (
+                        (parsed.hostname or "").lower(),
+                        parsed.port,
+                    )
+                except ValueError:  # в том числе порт вне диапазона
                     origin_host, origin_port = "", None
                 if not origin_host or not _host_allowed(origin_host):
                     _log.warning("Межсайтовый запрос отклонён | origin={}", origin)
-                    return JSONResponse({"error": "запрос пришёл со стороннего сайта"},
-                                        status_code=403)
+                    return JSONResponse(
+                        {"error": "запрос пришёл со стороннего сайта"}, status_code=403
+                    )
                 # Имя своё, а порт другой — это другой сайт: страница Jupyter или чужого
                 # dev-сервера на localhost:8888. Проверено запросом: без этой сверки она
                 # запускала агентов, которым в локальном режиме доступны файлы машины.
                 # В публичном режиме такой запрос и так остановит токен доступа.
-                if (not PUBLIC_MODE and origin_host.rstrip(".") in _LOCAL_HOSTS
-                        and origin_port != host_port):
-                    _log.warning("Запрос со страницы на другом порту отклонён | origin={}", origin)
-                    return JSONResponse({"error": "запрос пришёл со стороннего сайта"},
-                                        status_code=403)
+                if (
+                    not PUBLIC_MODE
+                    and origin_host.rstrip(".") in _LOCAL_HOSTS
+                    and origin_port != host_port
+                ):
+                    _log.warning(
+                        "Запрос со страницы на другом порту отклонён | origin={}",
+                        origin,
+                    )
+                    return JSONResponse(
+                        {"error": "запрос пришёл со стороннего сайта"}, status_code=403
+                    )
         if PUBLIC_MODE and path not in OPEN_API:
-            if not secrets.compare_digest(request.headers.get("x-access-token", ""), ACCESS_TOKEN):
-                return JSONResponse({"error": "нет доступа: откройте ссылку целиком, вместе с токеном"},
-                                    status_code=401)
+            if not secrets.compare_digest(
+                request.headers.get("x-access-token", ""), ACCESS_TOKEN
+            ):
+                return JSONResponse(
+                    {"error": "нет доступа: откройте ссылку целиком, вместе с токеном"},
+                    status_code=401,
+                )
             if path == "/api/export-presets":
                 # Пишет файл на диск рядом с кодом — наружу такое не отдаём.
-                return JSONResponse({"error": "экспорт пресетов доступен только локально"},
-                                    status_code=403)
-        if path in NEEDS_KEY and not os.getenv("OPENAI_API_KEY"):
-            return JSONResponse({"error": "не задан ключ провайдера"}, status_code=428)
+                return JSONResponse(
+                    {"error": "экспорт пресетов доступен только локально"},
+                    status_code=403,
+                )
+        if path in NEEDS_KEY:
+            selected_model = (
+                JUDGE_MODEL
+                if path
+                in {
+                    "/api/judge",
+                    "/api/judge_stream",
+                    "/api/review",
+                    "/api/synthetic_examples",
+                }
+                else DEFAULT_MODEL
+            )
+            try:
+                payload = json.loads((await request.body()) or b"{}")
+                selected_model = payload.get("model") or selected_model
+            except (json.JSONDecodeError, AttributeError, UnicodeDecodeError):
+                pass
+            if isinstance(selected_model, str) and not model_allowed(selected_model):
+                return JSONResponse(
+                    {"error": "Локальные модели Codex недоступны в публичном режиме"},
+                    status_code=403,
+                )
+            if not isinstance(selected_model, str):
+                return JSONResponse(
+                    {"error": "model должен быть строкой"}, status_code=422
+                )
+            if not is_codex_model(selected_model) and not _key_available(
+                selected_model
+            ):
+                return JSONResponse(
+                    {"error": "не задан ключ провайдера"}, status_code=428
+                )
         return await call_next(request)
 
     @app.middleware("http")
@@ -141,16 +226,41 @@ async def set_key(body: KeyIn) -> dict:
     key = (body.key or "").strip()
     if not key:
         os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("OPENROUTER_API_KEY", None)
         _user_key_set = False
         return {"ok": True, "has_key": False}
-    base = (os.getenv("OPENAI_BASE_URL") or "").strip()
+    # Ключи OpenRouter начинаются с sk-or-: проверяем их на самом OpenRouter,
+    # моделью из списка стенда — DEFAULT_MODEL может оказаться codex-моделью,
+    # которой у провайдера нет.
+    openrouter = key.startswith("sk-or-")
+    if openrouter:
+        base = "https://openrouter.ai/api/v1"
+        probe = next(
+            (
+                m["id"].removeprefix("openrouter/")
+                for m in MODELS
+                if m["id"].startswith("openrouter/")
+            ),
+            "openai/gpt-4o",
+        )
+    else:
+        base = (os.getenv("OPENAI_BASE_URL") or "").strip()
+        probe = DEFAULT_MODEL
     try:
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(base_url=base or None, api_key=key, timeout=25)
-        await client.chat.completions.create(
-            model=DEFAULT_MODEL, max_tokens=1,
-            messages=[{"role": "user", "content": "ping"}])
+        http_client = openrouter_http_client(base)
+        async with AsyncOpenAI(
+            base_url=base or None,
+            api_key=key,
+            timeout=25,
+            **({"http_client": http_client} if http_client is not None else {}),
+        ) as client:
+            await client.chat.completions.create(
+                model=probe,
+                max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}],
+            )
     except Exception as exc:
         # В тексте ошибки провайдер иногда повторяет присланный ключ — вычищаем.
         note = str(exc).replace(key, mask(key))[:300]
@@ -168,6 +278,9 @@ async def set_key(body: KeyIn) -> dict:
             human = note
         return {"ok": False, "error": human}
     os.environ["OPENAI_API_KEY"] = key
+    if openrouter:
+        # litellm оплачивает openrouter/* только из этой переменной
+        os.environ["OPENROUTER_API_KEY"] = key
     _user_key_set = True
     _log.info("Принят ключ пользователя {}", mask(key))
     return {"ok": True, "has_key": True, "masked": mask(key)}

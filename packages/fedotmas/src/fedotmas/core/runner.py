@@ -4,7 +4,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from google.adk import Runner
 from google.adk.agents.base_agent import BaseAgent
@@ -13,23 +13,15 @@ from google.adk.memory import BaseMemoryService
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
-from tenacity import RetryError
 
+from fedotmas.common.llm import llm_request_deadline
 from fedotmas.common.logging import get_logger
-from fedotmas.plugins import WebSearchLimitExceeded, WebSearchLimitPlugin
+from fedotmas.maw.handoffs import ABSTENTION_STATE_KEY, unresolved_execution_issues
 
 _log = get_logger("fedotmas.core.runner")
 
 # ADK keeps its own copy private (base_llm_flow._NO_CONTENT_ERROR_CODE).
 _NO_CONTENT_ERROR_CODE = "MODEL_RETURNED_NO_CONTENT"
-
-SEARCH_LIMIT_RECOVERY_PROMPT = (
-    "SearchLimitExceeded: web/search exploration budget is exhausted. "
-    "Stop exploration immediately. Do not call any more web, browser, or search "
-    "tools. Synthesize the best possible final answer from the evidence already "
-    "available in the conversation and session state. If evidence is incomplete, "
-    "state the best supported answer concisely."
-)
 
 
 @dataclass
@@ -45,6 +37,26 @@ class PipelineResult:
     #: The pipeline carries on past them, so callers need this to tell "the
     #: model answered wrongly" from "the model never got to answer".
     truncated_agents: list[str] = field(default_factory=list)
+    status: Literal["completed", "timed_out", "failed", "limited", "incomplete"] = (
+        "completed"
+    )
+
+
+class PipelineExecutionError(RuntimeError):
+    """Pipeline failure that retains state and token usage seen before it."""
+
+    def __init__(self, cause: Exception, result: PipelineResult) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.result = result
+
+
+@dataclass
+class _TokenUsage:
+    """Mutable counters so cancellation cannot discard consumed event usage."""
+
+    prompt: int = 0
+    completion: int = 0
 
 
 async def run_pipeline(
@@ -77,12 +89,11 @@ async def run_pipeline(
         initial_state: Extra keys to inject into ``session.state`` before
             execution (``user_query`` is always set automatically).
         timeout: Optional wall-clock budget (seconds) for pipeline *execution*.
-            On expiry the run is stopped and the partial ``session.state``
-            accumulated so far is returned instead of raising — so any
-            sub-answers already produced can still be salvaged.
+            On expiry the run is stopped and partial state is returned with
+            ``status='timed_out'`` for diagnostics.
 
     Returns:
-        The full ``session.state`` dict after pipeline execution.
+        A ``PipelineResult`` containing full session state and execution status.
     """
     if isinstance(agent_or_app, App):
         app = agent_or_app
@@ -118,76 +129,51 @@ async def run_pipeline(
 
     root_name = app.root_agent.name  # ty: ignore[unresolved-attribute]
     _log.info("Pipeline run started | pipeline={}", root_name)
-    total_prompt = 0
-    total_completion = 0
+    usage = _TokenUsage()
     truncated_agents: list[str] = []
     pipeline_start = time.monotonic()
+    failure: Exception | None = None
+    timed_out = False
 
-    async with Runner(
-        app=app,
-        session_service=session_service,
-        memory_service=memory_service,
-    ) as runner:
-        try:
-            total_prompt, total_completion = await _consume_with_timeout(
-                runner=runner,
-                user_id=user_id,
-                session_id=session.id,
-                message=message,
-                total_prompt=total_prompt,
-                total_completion=total_completion,
-                truncated_agents=truncated_agents,
-                timeout=timeout,
-            )
-        except (asyncio.TimeoutError, TimeoutError):
-            _log.warning(
-                "Pipeline execution exceeded {}s budget; salvaging partial state",
-                timeout,
-            )
-        except BaseException as exc:
-            if not _is_search_limit_exceeded(exc):
-                raise
-
-            _log.warning(
-                "Search limit exceeded; requesting final answer from current evidence"
-            )
-            # Disable web/search/browser tools for the finalization turn so the
-            # agent cannot re-trigger the budget (which would re-raise uncaught)
-            # or loop on error results burning the remaining time budget.
-            _enter_finalize_mode(app.plugins)
-            recovery_message = types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=SEARCH_LIMIT_RECOVERY_PROMPT)],
-            )
+    try:
+        async with Runner(
+            app=app,
+            session_service=session_service,
+            memory_service=memory_service,
+        ) as runner:
             try:
-                total_prompt, total_completion = await _consume_with_timeout(
-                    runner=runner,
-                    user_id=user_id,
-                    session_id=session.id,
-                    message=recovery_message,
-                    total_prompt=total_prompt,
-                    total_completion=total_completion,
-                    truncated_agents=truncated_agents,
-                    timeout=timeout,
-                )
-            except (asyncio.TimeoutError, TimeoutError):
-                _log.warning("Finalization turn timed out; salvaging partial state")
-            except BaseException as exc2:
-                if _is_search_limit_exceeded(exc2):
-                    _log.warning(
-                        "Finalization turn still hit budget; salvaging partial state"
+                deadline = state.get("_fedotmas_task_deadline_monotonic")
+                if not isinstance(deadline, int | float):
+                    deadline = time.monotonic() + timeout if timeout and timeout > 0 else None
+                with llm_request_deadline(deadline):
+                    await _consume_with_timeout(
+                        runner=runner,
+                        user_id=user_id,
+                        session_id=session.id,
+                        message=message,
+                        usage=usage,
+                        truncated_agents=truncated_agents,
+                        timeout=timeout,
                     )
-                else:
-                    raise
+            except TimeoutError:
+                timed_out = True
+                _log.warning(
+                    "Pipeline execution exceeded {}s budget; preserving partial state",
+                    timeout,
+                )
+            except Exception as exc:  # noqa: BLE001 - retain partial accounting for any agent failure
+                failure = exc
+    except Exception as cleanup_or_runner_error:  # noqa: BLE001
+        if timed_out or failure is not None:
+            _log.warning(
+                "Runner cleanup failed after primary {}: {}",
+                "timeout" if timed_out else "execution failure",
+                cleanup_or_runner_error,
+            )
+        else:
+            failure = cleanup_or_runner_error
 
     total_elapsed = time.monotonic() - pipeline_start
-    _log.info(
-        "Pipeline complete | total_elapsed={:.1f}s total_prompt={} total_completion={}",
-        total_elapsed,
-        total_prompt,
-        total_completion,
-    )
-
     # Re-fetch the session to get the fully-updated state.
     final_session = await session_service.get_session(
         app_name=effective_name,
@@ -198,13 +184,50 @@ async def run_pipeline(
         raise RuntimeError(
             f"Session '{session.id}' lost after pipeline execution — results unavailable"
         )
-    return PipelineResult(
+    metadata = final_session.state.get("_fedotmas_execution", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    repair_usage = metadata.get("contract_repair_tokens", {})
+    if isinstance(repair_usage, dict):
+        prompt_tokens = repair_usage.get("prompt_tokens", 0)
+        completion_tokens = repair_usage.get("completion_tokens", 0)
+        if isinstance(prompt_tokens, int) and not isinstance(prompt_tokens, bool):
+            usage.prompt += max(0, prompt_tokens)
+        if isinstance(completion_tokens, int) and not isinstance(
+            completion_tokens, bool
+        ):
+            usage.completion += max(0, completion_tokens)
+    _log.info(
+        "Pipeline complete | total_elapsed={:.1f}s total_prompt={} total_completion={}",
+        total_elapsed,
+        usage.prompt,
+        usage.completion,
+    )
+    status: Literal["completed", "timed_out", "failed", "limited", "incomplete"]
+    if failure is not None:
+        status = "failed"
+    elif timed_out:
+        status = "timed_out"
+    elif metadata.get("limited_agents"):
+        status = "limited"
+    elif (
+        isinstance(final_session.state.get(ABSTENTION_STATE_KEY), dict)
+        and final_session.state[ABSTENTION_STATE_KEY].get("status") in {"abstained", "unresolved"}
+    ) or unresolved_execution_issues(final_session.state):
+        status = "incomplete"
+    else:
+        status = "completed"
+    result = PipelineResult(
         state=dict(final_session.state),
-        total_prompt_tokens=total_prompt,
-        total_completion_tokens=total_completion,
+        total_prompt_tokens=usage.prompt,
+        total_completion_tokens=usage.completion,
         elapsed=total_elapsed,
         truncated_agents=truncated_agents,
+        status=status,
     )
+    if failure is not None:
+        raise PipelineExecutionError(failure, result) from failure
+    return result
 
 
 async def _consume_with_timeout(
@@ -213,11 +236,10 @@ async def _consume_with_timeout(
     user_id: str,
     session_id: str,
     message: types.Content,
-    total_prompt: int,
-    total_completion: int,
+    usage: _TokenUsage,
     truncated_agents: list[str],
     timeout: float | None,
-) -> tuple[int, int]:
+) -> None:
     """Consume runner events, optionally bounded by *timeout* seconds.
 
     On timeout the consuming coroutine is cancelled (stopping the pipeline) and
@@ -229,13 +251,13 @@ async def _consume_with_timeout(
         user_id=user_id,
         session_id=session_id,
         message=message,
-        total_prompt=total_prompt,
-        total_completion=total_completion,
+        usage=usage,
         truncated_agents=truncated_agents,
     )
     if timeout is None or timeout <= 0:
-        return await coro
-    return await asyncio.wait_for(coro, timeout=timeout)
+        await coro
+    else:
+        await asyncio.wait_for(coro, timeout=timeout)
 
 
 async def _consume_runner_events(
@@ -244,10 +266,9 @@ async def _consume_runner_events(
     user_id: str,
     session_id: str,
     message: types.Content,
-    total_prompt: int,
-    total_completion: int,
+    usage: _TokenUsage,
     truncated_agents: list[str],
-) -> tuple[int, int]:
+) -> None:
     async for event in runner.run_async(
         user_id=user_id,
         session_id=session_id,
@@ -259,8 +280,8 @@ async def _consume_runner_events(
         # Token accumulation (business logic — stays in runner)
         if event.usage_metadata:
             um = event.usage_metadata
-            total_prompt += um.prompt_token_count or 0
-            total_completion += um.candidates_token_count or 0
+            usage.prompt += um.prompt_token_count or 0
+            usage.completion += um.candidates_token_count or 0
 
         # Error handling (control flow — stays in runner)
         if event.error_code:
@@ -310,56 +331,8 @@ async def _consume_runner_events(
                 f"{event.error_message}"
             )
 
-    return total_prompt, total_completion
-
 
 def _record_empty_step(truncated_agents: list[str], author: str | None) -> None:
     # The field names which steps came up empty, not how often.
     if author and author not in truncated_agents:
         truncated_agents.append(author)
-
-
-def _is_search_limit_exceeded(
-    exc: BaseException, _seen: set[int] | None = None
-) -> bool:
-    """True if *exc* is, or wraps, a ``WebSearchLimitExceeded``.
-
-    The exception reaches us wrapped — a worker-model retry produces
-    ``RetryError[WebSearchLimitExceeded]`` — so we must peel ``RetryError``,
-    exception groups, and ``__cause__``/``__context__`` chains, not just check
-    the outermost type.
-    """
-    if _seen is None:
-        _seen = set()
-    if exc is None or id(exc) in _seen:
-        return False
-    _seen.add(id(exc))
-
-    if isinstance(exc, WebSearchLimitExceeded):
-        return True
-    if isinstance(exc, RetryError):
-        try:
-            inner = exc.last_attempt.exception()
-        except Exception:
-            inner = None
-        if isinstance(inner, BaseException) and _is_search_limit_exceeded(inner, _seen):
-            return True
-    if isinstance(exc, BaseExceptionGroup):
-        if any(_is_search_limit_exceeded(item, _seen) for item in exc.exceptions):
-            return True
-    for nxt in (exc.__cause__, exc.__context__):
-        if isinstance(nxt, BaseException) and _is_search_limit_exceeded(nxt, _seen):
-            return True
-    return False
-
-
-def _enter_finalize_mode(plugins: list[BasePlugin]) -> None:
-    """Switch web-search/scraping limit plugins into finalization mode.
-
-    In this mode the plugins block every web/search/browser tool call (returning
-    a terse "answer now" result instead of raising), so the post-budget
-    finalization turn can produce an answer without re-tripping the limit.
-    """
-    for plugin in plugins:
-        if isinstance(plugin, WebSearchLimitPlugin):
-            plugin.finalizing = True

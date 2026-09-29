@@ -73,7 +73,7 @@ const ROLE_RULES = [
   [/critic|valid|review|complian|fraud|check|критик|валид|провер|контрол|комплаенс|мошен/i, "shield", "critic"],
   [/research|search|explor|vendor|news|registry|litig|поиск|исследов|разведк|новост|реестр/i, "search", "worker"],
   [/sql|schema|query|data|telemetry|телеметри|данн|запрос|витрин|схем/i, "db", "worker"],
-  [/analy|scor|synthes|risk|insight|анализ|оценк|риск|синтез|скоринг|вывод/i, "chart", "worker"],
+  [/analy|scor|synthes|aggreg|risk|insight|анализ|оценк|риск|синтез|агрег|скоринг|вывод/i, "chart", "worker"],
   [/writer|memo|report|plan|answer|doc|histor|extract|план|отчёт|отчет|записк|журнал|документ|истори|извлеч/i, "doc", "worker"],
   [/billing|invoice|payment|tariff|биллинг|счёт|счет|платеж|тариф|комисси/i, "coin", "worker"],
   [/support|tech|repair|maint|поддержк|техник|ремонт|обслуживан|наладк/i, "wrench", "worker"],
@@ -104,7 +104,8 @@ const S = {
   k: 1, cx: 0, cy: 0, bbox: null, needFit: true, userAdjusted: false, group: null,
   backend: null, live: true, abort: null, liveTimer: null, custom: [], hidden: [],
   models: { gen: "", run: "", single: "", judge: "" }, mcpCustom: [],   // мета-агент, исполнение, судья
-  answer: null, baseline: null, judge: null, query: "",
+  answer: null, baseline: null, judge: null, review: null, evaluationBusy: false, evaluationEpoch: 0,
+  query: "", syntheticExamples: [],
 };
 
 /* ─────────────────────────── Утилиты ─────────────────────────── */
@@ -169,11 +170,40 @@ function pipelineDepth(node) {
 }
 
 /* ─────────────────────────── Раскладка графа ─────────────────────────── */
-const NW = 204, NH = 60, HGAP = 54, VGAP = 24, JUNC = 38, PAD = 24, LOOPTOP = 26;
+const NW = 224, NH = 68, HGAP = 54, VGAP = 24, JUNC = 38, PAD = 24, LOOPTOP = 26;
+const NAME_CHARS = 20, NAME_SIZE = 12, NAME_LINE_H = 15;
+
+function wrapNodeName(value) {
+  const pending = Array.from(String(value || "?").trim().replace(/\s+/g, " "));
+  const lines = [];
+  while (pending.length) {
+    if (pending.length <= NAME_CHARS) {
+      lines.push(pending.join(""));
+      break;
+    }
+    const part = pending.slice(0, NAME_CHARS);
+    let split = NAME_CHARS;
+    for (let i = part.length - 1; i >= NAME_CHARS / 4; i--) {
+      if (part[i] === " " || part[i] === "_" || part[i] === "-") {
+        split = i + 1;
+        break;
+      }
+    }
+    const line = pending.splice(0, split).join("").trim();
+    if (line) lines.push(line);
+    while (pending[0] === " ") pending.shift();
+  }
+  return lines.length ? lines : ["?"];
+}
+
+function nodeHeight(name) {
+  return NH + Math.max(0, wrapNodeName(name).length - 2) * NAME_LINE_H;
+}
 
 function measure(n) {
   if (n.type === "agent" || !(n.children || []).length)
-    return { w: NW, h: NH, node: { ...n, type: "agent", agent_name: n.agent_name || "?" } };
+    return { w: NW, h: nodeHeight(n.agent_name),
+             node: { ...n, type: "agent", agent_name: n.agent_name || "?" } };
   const kids = n.children.map(measure);
   if (n.type === "parallel") {
     return { w: Math.max(...kids.map((k) => k.w)) + 2 * JUNC,
@@ -203,8 +233,8 @@ function layoutMAW(pipeline, stageW) {
   function place(m, x, y) {
     const n = m.node;
     if (n.type === "agent") {
-      nodes.push({ name: n.agent_name, x, y, w: NW, h: NH });
-      return { entry: { x, y: y + NH / 2 }, exit: { x: x + NW, y: y + NH / 2 }, name: n.agent_name };
+      nodes.push({ name: n.agent_name, x, y, w: NW, h: m.h });
+      return { entry: { x, y: y + m.h / 2 }, exit: { x: x + NW, y: y + m.h / 2 }, name: n.agent_name };
     }
     if (n.type === "parallel") {
       const sp = { x: x + JUNC / 2, y: y + m.h / 2 }, mp = { x: x + m.w - JUNC / 2, y: y + m.h / 2 };
@@ -265,7 +295,8 @@ function layoutMAS(cfg) {
   const nodes = [], edges = [], groups = [], junctions = [];
   const ws = cfg.workers || [];
   if (!ws.length) {
-    nodes.push({ name: cfg.coordinator.name, x: 0, y: 0, w: NW, h: NH, coord: true });
+    nodes.push({ name: cfg.coordinator.name, x: 0, y: 0, w: NW,
+                 h: nodeHeight(cfg.coordinator.name), coord: true });
     return { nodes, edges, groups, junctions };
   }
   const per = ws.length > 3 ? Math.ceil(ws.length / 2) : ws.length;
@@ -275,15 +306,19 @@ function layoutMAS(cfg) {
   const maxW = Math.max(...rows.map((r) => rowW(r.length)));
   const cx = maxW / 2 - NW / 2;
 
-  nodes.push({ name: cfg.coordinator.name, x: cx, y: 0, w: NW, h: NH, coord: true });
-  rows.forEach((row, ri) => {
+  const coordH = nodeHeight(cfg.coordinator.name);
+  nodes.push({ name: cfg.coordinator.name, x: cx, y: 0, w: NW, h: coordH, coord: true });
+  let rowY = coordH + 92;
+  rows.forEach((row) => {
     const x0 = (maxW - rowW(row.length)) / 2;
-    const y = NH + 92 + ri * (NH + 58);
+    const rowH = Math.max(...row.map((w) => nodeHeight(w.name)));
     row.forEach((w, i) => {
       const x = x0 + i * (NW + 30);
-      nodes.push({ name: w.name, x, y, w: NW, h: NH });
-      edges.push({ from: { x: cx + NW / 2, y: NH }, to: { x: x + NW / 2, y }, vertical: true, toName: w.name });
+      const h = nodeHeight(w.name), y = rowY + (rowH - h) / 2;
+      nodes.push({ name: w.name, x, y, w: NW, h });
+      edges.push({ from: { x: cx + NW / 2, y: coordH }, to: { x: x + NW / 2, y }, vertical: true, toName: w.name });
     });
+    rowY += rowH + 58;
   });
   return { nodes, edges, groups, junctions };
 }
@@ -315,20 +350,21 @@ function bezier(e) {
 
 function drawNode(nd, i) {
   const a = S.agents.get(nd.name) || { name: nd.name, role: roleOf(nd.name, !!nd.coord), tools: [] };
+  const h = nd.h || NH;
   const pos = el("g", { transform: `translate(${nd.x},${nd.y})` });
   const g = el("g", { class: `node ${ROLE_CLASS[a.role.kind]} ${a.isCoord || nd.coord ? "coord" : ""}`,
                       "data-agent": nd.name, style: `animation-delay:${i * 55}ms` });
 
-  g.appendChild(el("rect", { class: "ring", x: -4, y: -4, width: NW + 8, height: NH + 8, rx: 15 }));
-  g.appendChild(el("rect", { class: "node-box", width: NW, height: NH, rx: 12 }));
-  g.appendChild(el("rect", { class: "node-av-bg", x: 13, y: NH / 2 - 16, width: 32, height: 32, rx: 9 }));
+  g.appendChild(el("rect", { class: "ring", x: -4, y: -4, width: NW + 8, height: h + 8, rx: 15 }));
+  g.appendChild(el("rect", { class: "node-box", width: NW, height: h, rx: 12 }));
+  g.appendChild(el("rect", { class: "node-av-bg", x: 13, y: h / 2 - 16, width: 32, height: 32, rx: 9 }));
 
-  const glyph = el("g", { class: "node-av", transform: `translate(17,${NH / 2 - 12})` });
+  const glyph = el("g", { class: "node-av", transform: `translate(17,${h / 2 - 12})` });
   ICONS[a.role.icon].forEach((d) => glyph.appendChild(el("path", { d })));
   g.appendChild(glyph);
 
-  // Имена от мета-агента бывают длинными (особенно русские): кегль подбирается
-  // под ширину карточки, а ниже пола 8px имя обрезается — полное видно в подсказке.
+  // Длинное имя переносим по словам/подчёркиваниям; длинное слово делим на части.
+  // Высота узла уже учтена в раскладке графа, поэтому не приходится обрезать имя.
   const TEXT_W = NW - 53 - 12;
   const fit = (s, max, min) => {
     const size = Math.min(max, TEXT_W / (Math.max(s.length, 1) * 0.6));
@@ -337,13 +373,16 @@ function drawNode(nd, i) {
       : { size: min, text: trunc(s, Math.floor(TEXT_W / (min * 0.6))) };
   };
 
-  const name = fit(String(nd.name || ""), 11.5, 8);
-  const nameEl = el("text", { class: "node-name", x: 53, y: NH / 2 - 3, style: `font-size:${name.size.toFixed(1)}px` }, name.text);
+  const lines = wrapNodeName(nd.name);
+  const labelY = lines.length === 1 ? 27 : 20;
+  const nameEl = el("text", { class: "node-name", x: 53, y: labelY, style: `font-size:${NAME_SIZE}px` });
+  lines.forEach((line, n) => nameEl.appendChild(el("tspan", { x: 53, dy: n ? NAME_LINE_H : 0 }, line)));
   nameEl.appendChild(el("title", {}, String(nd.name)));
   g.appendChild(nameEl);
 
-  const sub = fit(a.output_key ? "→ " + a.output_key : trunc(a.description || "", 30), 10.5, 7.5);
-  const subEl = el("text", { class: "node-sub", x: 53, y: NH / 2 + 15, style: `font-size:${sub.size.toFixed(1)}px` }, sub.text);
+  const sub = fit(a.output_key ? "→ " + a.output_key : trunc(a.description || "", 30), 12, 9);
+  const subY = labelY + (lines.length - 1) * NAME_LINE_H + 18;
+  const subEl = el("text", { class: "node-sub", x: 53, y: subY, style: `font-size:${sub.size.toFixed(1)}px` }, sub.text);
   subEl.appendChild(el("title", {}, a.output_key ? "→ " + a.output_key : String(a.description || "")));
   g.appendChild(subEl);
 
@@ -524,7 +563,7 @@ function pushMessage(e) {
        <span class="msg-name">${esc(e.agent)}</span>
        <span class="msg-phase">${esc(e.phase)}${e.group ? " · параллельно" : ""}</span>
      </div>
-     <div class="msg-text">${esc(e.text)}</div>` +
+     <div class="msg-text md">${mdToHtml(e.text)}</div>` +
     (e.io ? `<details class="msg-io">
        <summary>вход и выход</summary>
        <div class="io-label">инструкция агента</div>
@@ -615,7 +654,6 @@ function renderInspector() {
       a.isCoord ? '<span class="pill">координатор</span>' : "",
       a.output_key ? `<span class="pill pill-out">${esc(a.output_key)}</span>` : "",
       ...(a.tools || []).map((t) => `<span class="pill pill-tool">${esc(t)}</span>`),
-      a.model ? `<span class="pill">${esc(a.model)}</span>` : "",
     ].join("");
     return `<div class="acard ${cls}">
       <div class="acard-head">
@@ -646,14 +684,15 @@ function renderInspector() {
 
   // JSON
   $("json-label").textContent = p.kind === "mas" ? "MASConfig · config.json" : "MAWConfig · config.json";
-  $("json").innerHTML = highlightJSON(p.config);
+  $("json").innerHTML = highlightJSON(JSON.parse(JSON.stringify(p.config,
+    (key, value) => key === "model" ? undefined : value)));
 }
 
-/** Лёгкий рендер Markdown: агенты отвечают заголовками, списками и таблицами. */
+/** Безопасный рендер Markdown для ответов и ленты: исходный текст сначала экранируется. */
 function mdToHtml(src) {
   const lines = esc(String(src || "")).split("\n");
   const out = [];
-  let list = null, table = null;
+  let list = null, table = null, code = null;
 
   const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
   const closeTable = () => {
@@ -665,13 +704,22 @@ function mdToHtml(src) {
       table = null;
     }
   };
-  const inline = (s) => s
-    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-    .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<i>$2</i>")
-    .replace(/`([^`]+)`/g, "<code>$1</code>");
+  const closeCode = () => {
+    if (code) { out.push(`<pre><code>${code.join("\n")}</code></pre>`); code = null; }
+  };
+  const inline = (s) => s.split(/(`[^`]+`)/g).map((part) => /^`[^`]+`$/.test(part)
+    ? `<code>${part.slice(1, -1)}</code>`
+    : part.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+          .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<i>$2</i>")).join("");
 
   for (const raw of lines) {
     const line = raw.trimEnd();
+    if (/^\s*```/.test(line)) {
+      if (code) closeCode();
+      else { closeList(); closeTable(); code = []; }
+      continue;
+    }
+    if (code) { code.push(raw); continue; }
     const cells = line.trim().startsWith("|") && line.trim().endsWith("|")
       ? line.trim().slice(1, -1).split("|").map((c) => c.trim()) : null;
 
@@ -698,7 +746,7 @@ function mdToHtml(src) {
     closeList();
     out.push(`<p>${inline(line)}</p>`);
   }
-  closeList(); closeTable();
+  closeList(); closeTable(); closeCode();
   return out.join("");
 }
 
@@ -755,6 +803,85 @@ function shortAnswer(text) {
   return "";
 }
 
+function displayMeta(value) {
+  return String(value || "").split("·").filter(part =>
+    !/host\/|openrouter\/|codex|terra|\bsol\b|\bluna\b|gpt-|claude|gemini|deepseek|qwen|glm-|mistral|kimi/i.test(part)
+  ).map(part => part.trim()).filter(Boolean).join(" · ");
+}
+
+function rubberQualityHtml(preset) {
+  const agents = preset?.kind === "mas"
+    ? [preset.config?.coordinator, ...(preset.config?.workers || [])]
+    : (preset?.config?.agents || []);
+  if (!preset || ![...(preset.tools || []), ...agents.flatMap(a => a?.tools || [])]
+    .includes("rubber-recipe-predictor")) return "";
+  const quality = preset.rubberQuality;
+  const labels = {
+    thermal_conductivity_w_mk: "Теплопроводность, Вт/(м·К)",
+    oil_swelling_pct_1006h: "Набухание в масле после 1006 ч, %",
+    water_swelling_pct_1006h: "Набухание в воде после 1006 ч, %",
+    specific_gravity: "Относительная плотность",
+  };
+  const rows = Object.entries(labels).map(([key, label]) => {
+    const value = quality?.mape_pct?.[key];
+    return `<tr><td>${label}</td><td>${Number.isFinite(value) && value >= 0 ? value.toFixed(2).replace(".", ",") + " %" : "нет данных"}</td></tr>`;
+  }).join("");
+  const current = preset.rubberValidation;
+  const currentValue = current?.mape_pct;
+  const baseline = quality?.baseline_example;
+  const heldOut = current?.reference_used_in_training === false;
+  const currentText = Number.isFinite(currentValue) && currentValue >= 0
+    ? heldOut
+      ? `${currentValue.toFixed(2).replace(".", ",")} % — среднее по четырём характеристикам для рецептуры этого запуска. Контрольная точка исключена из обучения; прогноз построен по ${esc(current.training_rows)} другим рецептурам. Это проверка по оцифрованным данным статьи, не лабораторное испытание и не оценка ответа агентов МАС.`
+      : `${currentValue.toFixed(2).replace(".", ",")} % — среднее по четырём характеристикам. Сравнение с точной рецептурой из обучающего набора, не независимая проверка.`
+    : current?.reason === "no_exact_reference"
+      ? `Нет контрольных измерений для этой рецептуры.${baseline ? " Ниже приведён отдельный пример с опубликованными значениями." : ""}`
+      : "Нет данных проверки текущего расчёта. Выполните новый запуск с обновлённым предиктором.";
+  const propertyText = value => Number.isFinite(value) ? value.toFixed(3).replace(".", ",") : "—";
+  const baselineBlock = baseline && !Number.isFinite(currentValue) ? `<h4>Базовый пример: протекторная смесь NR/SBR 50/50, N220 60 phr</h4>
+    <div class="ans-text">Одну опубликованную точку исключили из обучения: прогноз рассчитан по остальным
+    ${esc(baseline.training_rows)} рецептурам и сопоставлен со значениями этой точки.</div>
+    <table class="ans-table"><thead><tr><th>Характеристика</th><th>Прогноз</th><th>Из статьи</th><th>APE</th></tr></thead><tbody>
+    ${Object.entries(labels).map(([key, label]) => `<tr><td>${label}</td>
+      <td>${propertyText(baseline.predicted?.[key])}</td>
+      <td>${propertyText(baseline.measured?.[key])}</td>
+      <td>${Number.isFinite(baseline.ape_pct?.[key]) ? baseline.ape_pct[key].toFixed(2).replace(".", ",") + " %" : "—"}</td></tr>`).join("")}
+    </tbody></table>
+    <div class="ans-meta">MAPE этого примера = среднее четырёх APE =
+    ${Number.isFinite(baseline.mape_pct) ? baseline.mape_pct.toFixed(2).replace(".", ",") + " %" : "нет данных"}.
+    APE = |прогноз − значение из статьи| / |значение из статьи| × 100 %.
+    Данные приблизительно оцифрованы с графиков
+    <a href="https://doi.org/10.5281/zenodo.3838695" target="_blank" rel="noopener noreferrer">исследования протекторных смесей</a>.
+    Это ретроспективная проверка на отложенной точке, не лабораторная проверка текущей рецептуры или готовой шины.</div>` : "";
+  return `<div class="ans-card"><h4>Качество расчётной модели · MAPE</h4>
+    <table class="ans-table"><thead><tr><th>Характеристика</th><th>MAPE</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="ans-meta">Средняя абсолютная процентная ошибка: среднее |прогноз − наблюдение| / |наблюдение| × 100 %.
+    ${quality ? `LOOCV по ${esc(quality.samples)} оцифрованным точкам: обучение на остальных точках, проверка на исключённой.` : "Для расчёта подключите обновлённый сервер GUI и заново выберите сценарий."}
+    Это оценка расчётной модели на наборе данных, не ошибка конкретной рецептуры и не оценка ответа МАС.
+    Требуется независимая лабораторная проверка.</div>
+    <h4>MAPE текущего расчёта</h4><div class="ans-text">${currentText}</div>
+    ${Number.isFinite(currentValue) && heldOut ? `<table class="ans-table"><thead><tr><th>Характеристика</th><th>Прогноз</th><th>Из статьи</th><th>APE</th></tr></thead><tbody>${Object.entries(labels).map(([key, label]) => {
+      const value = current.ape_pct?.[key];
+      return `<tr><td>${label}</td><td>${propertyText(current.predicted?.[key])}</td><td>${propertyText(current.reference?.[key])}</td><td>${Number.isFinite(value) ? value.toFixed(2).replace(".", ",") + " %" : "нет данных"}</td></tr>`;
+    }).join("")}</tbody></table>` : Number.isFinite(currentValue) ? `<table class="ans-table"><thead><tr><th>Характеристика</th><th>Ошибка, %</th></tr></thead><tbody>${Object.entries(labels).map(([key, label]) => {
+      const value = current.ape_pct?.[key];
+      return `<tr><td>${label}</td><td>${Number.isFinite(value) ? value.toFixed(2).replace(".", ",") : "нет данных"}</td></tr>`;
+    }).join("")}</tbody></table>` : ""}
+    ${baselineBlock}</div>`;
+}
+
+async function loadRubberQuality(preset) {
+  if (!rubberQualityHtml(preset)) return;
+  try {
+    const response = await fetch("api/rubber-quality", {cache: "no-store"});
+    const quality = await readJson(response, "MAPE");
+    if (!quality.ok) return;
+    preset.rubberQuality = quality;
+    storeScenarios();
+    if (S.preset === preset) renderAnswer();
+  } catch { /* Offline: retain the previously saved dataset-level metrics. */ }
+}
+
 function renderAnswer() {
   const host = $("answer");
   const blocks = [];
@@ -768,26 +895,35 @@ function renderAnswer() {
       <div class="ans-text md">${mdToHtml(S.answer.text)}</div>
       ${short ? `<div class="ans-short"><span class="ans-short-label">Ответ на вопрос</span>
          <div class="ans-text md">${mdToHtml(short)}</div></div>` : ""}
-      ${S.answer.meta ? `<div class="ans-meta">${esc(S.answer.meta)}</div>` : ""}
+      ${S.answer.meta ? `<div class="ans-meta">${esc(displayMeta(S.answer.meta))}</div>` : ""}
     </div>`);
   }
+  const qualityBlock = rubberQualityHtml(S.preset);
+  if (qualityBlock) blocks.push(qualityBlock);
   if (S.baseline) {
     blocks.push(`<div class="ans-card single">
       <h4>Ответ одной модели, без системы</h4>
       <div class="ans-text md">${mdToHtml(S.baseline.answer)}</div>
-      <div class="ans-meta">${esc(S.baseline.model || "")} · ${esc(nfmt(S.baseline.tokens || 0))} токенов · ${esc(String(S.baseline.seconds ?? "—"))} с</div>
+      <div class="ans-meta">${esc(nfmt(S.baseline.tokens || 0))} токенов · ${esc(String(S.baseline.seconds ?? "—"))} с</div>
     </div>`);
   }
   if (S.judge) {
-    const w = S.judge.winner === "system" ? "system" : S.judge.winner === "single" ? "single" : "tie";
+    const w = S.judge.winner === "system" ? "system" : S.judge.winner === "single" ? "single"
+      : S.judge.winner === "error" ? "error" : "tie";
     const label = w === "system" ? "Судья: лучше ответ системы"
-      : w === "single" ? "Судья: лучше ответ одной модели" : "Судья: ничья";
+      : w === "single" ? "Судья: лучше ответ одной модели"
+      : w === "error" ? "Судья: оценка не получена" : "Судья: ничья";
     blocks.push(`<div class="ans-card judge">
-      <h4>Оценка судьёй</h4>
+      <h4>Сравнение с одной моделью: вердикт судьи</h4>
       <div class="ans-winner ${w}">${esc(label)}</div>
       <div class="ans-text">${esc(S.judge.verdict)}</div>
-      <div class="ans-meta">судья: ${esc(S.judge.model || "")}${S.judge.tokens ? " · " + esc(nfmt(S.judge.tokens)) + " токенов" : ""}</div>
+      <div class="ans-meta">${S.judge.tokens ? esc(nfmt(S.judge.tokens)) + " токенов" : ""}</div>
     </div>`);
+  }
+  if (S.review) {
+    blocks.push(`<div class="ans-card judge"><h4>Проверка результата и журнала МАС</h4>
+      <div class="ans-text md">${mdToHtml(S.review.verdict)}</div>
+      </div>`);
   }
   host.innerHTML = blocks.length ? blocks.join("")
     : '<div class="empty">Ответ системы появится после запуска</div>';
@@ -795,47 +931,64 @@ function renderAnswer() {
   // Кнопки живут, пока есть бэкенд: сравнение и оценку можно перезапустить и поверх записанных.
   const live = !!S.backend;
   const bs = $("btn-baseline"), bj = $("btn-judge");
-  bs.disabled = !(live && S.answer);
-  bj.disabled = !(live && S.answer && S.baseline);
+  bs.disabled = S.evaluationBusy || !(live && S.answer);
+  bj.disabled = S.evaluationBusy || !(live && S.answer);
   bs.textContent = S.baseline ? "Сравнить заново" : "Сравнить с одной моделью";
-  bj.textContent = S.judge ? "Оценить заново" : "Оценить судьёй";
-  bs.title = live ? "Решить ту же задачу одной моделью без системы"
+  bj.textContent = S.review ? "Оценить заново" : "Оценить судьёй";
+  bs.title = live ? "Получить ответ одной модели и сравнить оба ответа судьёй"
                   : "Доступно в живом режиме: запустите gui/run.py";
-  bj.title = live ? "Независимый судья сравнит оба ответа"
+  bj.title = live ? "Проверить результат МАС и журнал работы агентов"
                   : "Доступно в живом режиме: запустите gui/run.py";
+  renderSyntheticExamples();
 }
 
 async function runBaseline() {
-  if (!S.backend || !S.answer) return;
+  if (!S.backend || !S.answer || S.evaluationBusy) return;
+  const preset = S.preset, answer = S.answer;
+  const epoch = S.evaluationEpoch;
+  const query = S.query || $("query").value;
+  S.evaluationBusy = true;
+  S.baseline = null;
   const btn = $("btn-baseline");
   S.judge = null;                       // прошлый вердикт относится к старому сравнению
+  if (preset) { preset.baseline = null; preset.judge = null; persistPreset(); }
+  renderAnswer();
   btn.disabled = true; btn.textContent = "Одна модель отвечает…";
   try {
     const r = await fetch("api/baseline", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: S.query || $("query").value, model: S.models.single }),
+      body: JSON.stringify({ query, model: S.models.single }),
     });
     const d = await readJson(r, "ответ одной модели");
     if (!d.ok) throw new Error(d.error);
+    if (S.preset !== preset || S.answer !== answer) return;
     S.baseline = d;
-  } catch (err) {
-    S.baseline = { answer: "Не удалось получить ответ: " + err.message, model: "—", tokens: 0, seconds: "—" };
-  } finally {
-    btn.textContent = "Сравнить с одной моделью";
-    if (S.preset) { S.preset.baseline = S.baseline; S.preset.judge = null; persistPreset(); }
+    if (preset) { preset.baseline = d; persistPreset(); }
     renderAnswer();
+    await runComparisonJudge();
+  } catch (err) {
+    if (S.preset === preset && S.answer === answer)
+      S.judge = { winner: "error", verdict: "Не удалось сравнить: " + err.message, model: "—" };
+  } finally {
+    if (S.evaluationEpoch === epoch) {
+      S.evaluationBusy = false;
+      btn.textContent = "Сравнить с одной моделью";
+      renderAnswer();
+    }
   }
 }
 
 // Прогресс судьи: он работает минутами и без обратной связи выглядит зависшим.
 // Устроен так же, как прогресс генерации конфигурации.
 function judgeProgress() {
+  const epoch = S.evaluationEpoch;
   const box = $("judge-progress");
   const fill = $("judge-progress-fill");
   const log = $("judge-progress-log");
   const t0 = Date.now();
   let pct = 6;
   const timer = setInterval(() => {
+    if (S.evaluationEpoch !== epoch) { clearInterval(timer); return; }
     $("judge-progress-time").textContent = Math.round((Date.now() - t0) / 1000) + " с";
   }, 250);
   box.classList.remove("hidden");
@@ -843,24 +996,28 @@ function judgeProgress() {
   fill.style.width = pct + "%";
   return {
     step(text, percent) {
+      if (S.evaluationEpoch !== epoch) return;
       $("judge-progress-step").textContent = text;
       if (percent != null) pct = percent;
       fill.style.width = pct + "%";
     },
     note(text) {
+      if (S.evaluationEpoch !== epoch) return;
       const line = document.createElement("div");
       line.textContent = text;
       log.appendChild(line);
       log.scrollTop = log.scrollHeight;
     },
-    bump(delta) { pct = Math.min(92, pct + delta); fill.style.width = pct + "%"; },
-    stop() { clearInterval(timer); box.classList.add("hidden"); },
+    bump(delta) { if (S.evaluationEpoch === epoch) { pct = Math.min(92, pct + delta); fill.style.width = pct + "%"; } },
+    stop() { clearInterval(timer); if (S.evaluationEpoch === epoch) box.classList.add("hidden"); },
   };
 }
 
-async function runJudge() {
+async function runComparisonJudge() {
   if (!S.backend || !S.answer || !S.baseline) return;
-  const btn = $("btn-judge");
+  const preset = S.preset, answer = S.answer;
+  const epoch = S.evaluationEpoch;
+  const btn = $("btn-baseline");
   btn.disabled = true; btn.textContent = "Судья сравнивает…";
   const ui = judgeProgress();
   let tokens = 0;
@@ -884,15 +1041,164 @@ async function runJudge() {
     if (!done) throw new Error("поток прервался");
     if (!done.ok) throw new Error(done.error || "судья не вернул вердикт");
     ui.step("Вердикт вынесен", 100);
-    S.judge = done;
+    if (S.preset === preset && S.answer === answer) S.judge = done;
   } catch (err) {
-    S.judge = { verdict: "Не удалось получить оценку: " + err.message, winner: "tie", model: "—" };
+    // Ошибка — не вердикт: показываем её отдельным статусом и не сохраняем в сценарий,
+    // чтобы сбой сети не превращался в «ничью» при экспорте и реплее.
+    if (S.preset === preset && S.answer === answer)
+      S.judge = { verdict: "Не удалось получить оценку: " + err.message, winner: "error", model: "—" };
   } finally {
     ui.stop();
-    btn.disabled = false;
-    btn.textContent = "Оценить заново";
-    if (S.preset) { S.preset.judge = S.judge; persistPreset(); }
-    renderAnswer();
+    if (S.evaluationEpoch === epoch) {
+      btn.disabled = false;
+      btn.textContent = "Оценить заново";
+      if (S.preset === preset && S.answer === answer && preset && S.judge?.winner !== "error") {
+        preset.judge = S.judge; persistPreset();
+      }
+      renderAnswer();
+    }
+  }
+}
+
+async function runJudge() {
+  if (!S.backend || !S.answer || S.evaluationBusy) return;
+  const preset = S.preset, answer = S.answer;
+  const epoch = S.evaluationEpoch;
+  const payload = { query: S.query || $("query").value, system_answer: answer.text,
+                    trace: preset?.trace || [], model: S.models.judge };
+  S.evaluationBusy = true;
+  S.review = null;
+  if (preset) { preset.review = null; persistPreset(); }
+  renderAnswer();
+  $("btn-judge").textContent = "Проверка результата и журнала…";
+  const ui = judgeProgress();
+  ui.step("Судья проверяет ответ и журнал МАС", 15);
+  try {
+    const response = await fetch("api/review", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const result = await readJson(response, "проверка результата МАС");
+    if (!result.ok) throw new Error(result.error);
+    if (S.preset !== preset || S.answer !== answer) return;
+    S.review = result;
+    if (preset) { preset.review = result; persistPreset(); }
+  } catch (err) {
+    if (S.preset === preset && S.answer === answer)
+      S.review = { verdict: "Не удалось получить оценку: " + err.message, model: "—" };
+  } finally {
+    ui.stop();
+    if (S.evaluationEpoch === epoch) {
+      S.evaluationBusy = false;
+      renderAnswer();
+    }
+  }
+}
+
+function normalizedSynthetic(entry) {
+  if (typeof entry === "string") return { query: entry, model: "" };
+  if (!entry || typeof entry !== "object") return null;
+  const normalized = { query: String(entry.query || ""), model: String(entry.model || "") };
+  if (entry.source === "published") normalized.source = "published";
+  return normalized;
+}
+
+function saveSyntheticExamples() {
+  if (!S.preset) return;
+  S.preset.syntheticExamples = S.syntheticExamples.slice();
+  persistPreset();
+}
+
+function renderSyntheticExamples() {
+  const host = $("synthetic-examples");
+  const button = $("btn-synthetic");
+  if (!host || !button) return;
+  const examples = (S.syntheticExamples || []).map(normalizedSynthetic)
+    .filter((item) => item && item.query.trim()).slice(0, 100);
+  S.syntheticExamples = examples;
+  host.innerHTML = examples.map((item, i) => `
+    <div class="synthetic-item">
+      <div class="synthetic-text">${esc(item.query)}</div>
+      <div class="synthetic-meta">
+        <span>${item.source === "published" ? "Проверка по опубликованной рецептуре" : "Новый тестовый запрос"}</span>
+        <span class="synthetic-controls">
+          <button type="button" data-action="use" data-i="${i}">Подставить</button>
+          <button type="button" data-action="remove" data-i="${i}">Удалить</button>
+        </span>
+      </div>
+    </div>`).join("");
+  host.querySelectorAll("button[data-action]").forEach((control) => {
+    control.addEventListener("click", () => {
+      const i = Number(control.dataset.i);
+      if (!Number.isInteger(i) || !S.syntheticExamples[i]) return;
+      if (control.dataset.action === "remove") {
+        S.syntheticExamples.splice(i, 1);
+        saveSyntheticExamples();
+        renderSyntheticExamples();
+        return;
+      }
+      const query = S.syntheticExamples[i].query;
+      $("query").value = query;
+      S.query = query;
+      S.preset.rubberValidation = null;
+      S.answer = null; S.baseline = null; S.judge = null; S.review = null;
+      $("synthetic-note").textContent = "Вариант подставлен. Запустите систему для нового теста.";
+      renderAnswer();
+      renderMode();
+    });
+  });
+  const ready = !!S.backend && !!S.preset && !!$("query").value.trim();
+  button.disabled = !ready;
+  button.title = ready
+    ? "Новые входные данные в пределах возможностей выбранной МАС"
+    : "Выберите сценарий и заполните запрос";
+}
+
+async function generateSyntheticExamples() {
+  const query = $("query").value.trim();
+  if (!S.backend || !S.preset || !query) return;
+  const preset = S.preset;
+  const button = $("btn-synthetic");
+  const note = $("synthetic-note");
+  button.disabled = true;
+  button.textContent = "Создаём новые входные данные…";
+  note.classList.remove("error");
+  note.textContent = "";
+  try {
+    const response = await fetch("api/synthetic_examples", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, count: Number($("synthetic-count").value) || 1,
+                             model: S.models.judge, config: preset.config,
+                             tools: preset.tools || [],
+                             existing_examples: S.syntheticExamples.map(item => item.query) }),
+    });
+    const data = await readJson(response, "синтетические примеры");
+    if (S.preset !== preset) return;
+    if (!response.ok || !data.ok) {
+      noteKeyNeeded(response.status);
+      throw new Error(data.error || `сервер ответил ${response.status}`);
+    }
+    const known = new Set(S.syntheticExamples.map((item) =>
+      (normalizedSynthetic(item)?.query || "").trim().replace(/\s+/g, " ").toLocaleLowerCase()));
+    let added = 0;
+    (data.examples || []).forEach((value) => {
+      const text = String(value || "").trim();
+      const key = text.replace(/\s+/g, " ").toLocaleLowerCase();
+      if (!text || known.has(key)) return;
+      known.add(key);
+      S.syntheticExamples.push({ query: text, model: data.model || S.models.judge });
+      added++;
+    });
+    saveSyntheticExamples();
+    note.textContent = added
+      ? `Добавлено: ${added}. Затрачено токенов: ${nfmt(data.tokens || 0)}.`
+      : "Модель не вернула новых уникальных вариантов.";
+  } catch (error) {
+    if (S.preset === preset) {
+      note.classList.add("error");
+      note.textContent = "Не удалось сгенерировать: " + (error.message || error);
+    }
+  } finally {
+    button.textContent = "Сгенерировать синтетический пример";
+    renderSyntheticExamples();
   }
 }
 
@@ -1037,7 +1343,8 @@ function renderEffort(p) {
     box.innerHTML = `<div class="empty">${esc(p.manualNote || "Разбор не запрашивался.")}</div>`;
     return;
   }
-  box.innerHTML = b.subtasks.map((t) => `
+  box.innerHTML = (p.manualNote ? `<div class="effort-note">${esc(p.manualNote)}</div>` : "")
+    + b.subtasks.map((t) => `
     <div class="effort-row">
       <b>${esc(t.name)}</b>
       <span class="h">${num(t.hours)} ч</span>
@@ -1048,7 +1355,7 @@ function renderEffort(p) {
        </div>`
     + `<div class="effort-note">Сумма по ${b.subtasks.length} подзадачам.`
     + ` Дни — это часы, делённые на восьмичасовой рабочий день.`
-    + ` Оценил ${esc(b.model || "")}.</div>`;
+    + `</div>`;
 }
 
 
@@ -1070,17 +1377,27 @@ function renderSources(p) {
 /* ─────────────────────────── Загрузка сценария ─────────────────────────── */
 function loadPreset(p) {
   pause();
+  stopLive();
+  S.evaluationEpoch++;
+  S.evaluationBusy = false;
+  $("judge-progress").classList.add("hidden");
   S.preset = p;
   S.agents = indexAgents(p);
   S.events = p.trace;
   const traceMs = p.trace.reduce((s, e) => s + e.ms, 0);
-  S.factor = traceMs ? parseTarget(p.auto) * 1000 / traceMs : 1;
+  const targetS = parseTarget(p.auto);   // 0, если в подписи нет времени — тогда часы идут по журналу
+  S.factor = traceMs && targetS ? targetS * 1000 / traceMs : 1;
 
   $("query").value = p.query;
   S.query = p.query;
   S.answer = p.answer ? { text: p.answer, meta: p.answerMeta || "" } : null;
   S.baseline = p.baseline || null;
   S.judge = p.judge || null;
+  S.review = p.review || null;
+  S.syntheticExamples = (Array.isArray(p.syntheticExamples) ? p.syntheticExamples : [])
+    .map(normalizedSynthetic).filter((item) => item && item.query.trim()).slice(0, 100);
+  $("synthetic-note").textContent = "";
+  $("synthetic-note").classList.remove("error");
   renderSources(p);
   renderAnswer();
   $("scenario-title").textContent = p.title;
@@ -1097,14 +1414,13 @@ function loadPreset(p) {
     // Подсказку у сценариев с разбором собираем заново, а не берём сохранённую:
     // в старых записях осталась неверная фраза про «без допущения о длине дня».
     manualRow.title = p.breakdown && p.breakdown.subtasks
-      ? `Сумма по ${p.breakdown.subtasks.length} подзадачам: ${hoursText(p.breakdown.total_hours)}.`
+      ? `${p.manualNote || ""} Сумма по ${p.breakdown.subtasks.length} подзадачам: ${hoursText(p.breakdown.total_hours)}.`
         + ` Дни — часы, делённые на восьмичасовой рабочий день.`
-        + (p.breakdown.model ? ` Оценил ${p.breakdown.model}.` : "")
       : p.manualNote
         || "Экспертная оценка: сколько заняла бы разработка такой же системы вручную — "
            + "постановка, подбор инструментов, написание и отладка агентов. Не замерялась.";
   }
-  $("stat-auto").innerHTML = `<b class="hl">${esc(p.auto)}</b>`;
+  $("stat-auto").innerHTML = `<b class="hl">${esc(displayMeta(p.auto)) || "Готов к запуску"}</b>`;
   const genRow = $("stat-gen-row");           // строки может не быть в старой разметке
   if (genRow) {
     genRow.classList.toggle("hidden", !p.gen);
@@ -1121,7 +1437,7 @@ function loadPreset(p) {
   if (S.custom && !scenarioList().some((x) => x.id === p.id)) $("preset-count").textContent = scenarioList().length;
   $("btn-run").disabled = !S.backend;
   $("btn-run").title = S.backend
-    ? "Исполнить систему по-настоящему"
+    ? "Запустить систему"
     : "Бэкенд недоступен: запустите gui/run.py";
   $("btn-generate").disabled = !S.backend;
   renderGraph();
@@ -1129,6 +1445,8 @@ function loadPreset(p) {
   renderEffort(p);
   resetRun();
   showRecordedRun(p);
+  loadRubberQuality(p);
+  renderMode();
 }
 
 
@@ -1151,6 +1469,32 @@ function exportScenario() {
   a.href = url; a.download = `${name}.json`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportIPR2() {
+  if (!S.preset) { alert("Сначала выберите сценарий."); return; }
+  const preset = S.preset;
+  const button = $("p-export-ipr2");
+  button.disabled = true;
+  try {
+    const r = await fetch("api/export-synapse", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({config: preset.config, kind: preset.kind,
+        workflow_id: preset.id || "workflow", workflow_name: preset.title || "Сценарий"}),
+    });
+    const data = await readJson(r, "экспорт в ИПР-2");
+    if (!data.ok) throw new Error(data.error || "Конвертация не выполнена");
+    const name = (preset.title || "сценарий").replace(/[^\wа-яёА-ЯЁ -]+/g, "").trim() || "сценарий";
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data.bundle, null, 2)], {type: "application/json"}));
+    const a = document.createElement("a");
+    a.href = url; a.download = `${name}_synapse_bundle.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    alert("Не удалось экспортировать в ИПР-2. Убедитесь, что сервер GUI запущен и обновлён.\n" + err.message);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function importScenario(text) {
@@ -1209,16 +1553,28 @@ function importScenario(text) {
   }
 }
 
+function recordedRunStats(preset) {
+  const trace = preset.trace || [];
+  // Older live runs stored the exact total only in the report caption.
+  const legacy = (preset.answerMeta || "").match(/·\s*([\d\s]+)\s+токенов/);
+  return {
+    tokens: preset.runStats?.tokens ?? (legacy ? Number(legacy[1].replace(/\s/g, ""))
+      : trace.reduce((sum, e) => sum + (e.tokens || 0), 0)),
+    elapsed: preset.runStats?.elapsed ?? trace.reduce((sum, e) => sum + (e.ms || 0), 0) * S.factor / 1000,
+  };
+}
+
 function showRecordedRun(preset) {
-  if (!preset.trace || !preset.trace.length) return;
+  if (!preset.runStats && !preset.trace?.length) return;
   const feed = $("feed");
   feed.innerHTML = "";
-  preset.trace.forEach((e) => pushMessage(e));
+  (preset.trace || []).forEach((e) => pushMessage(e));
   feed.scrollTop = 0;                       // журнал показываем с начала, а не с конца
 
-  S.idx = preset.trace.length;              // «Запустить» проиграет запись заново с нуля
-  S.tokens = preset.trace.reduce((sum, e) => sum + (e.tokens || 0), 0);
-  S.seconds = preset.trace.reduce((sum, e) => sum + e.ms, 0) * S.factor / 1000;
+  S.idx = (preset.trace || []).length;       // «Запустить» проиграет запись заново с нуля
+  const stats = recordedRunStats(preset);
+  S.tokens = stats.tokens;
+  S.seconds = stats.elapsed;
   $("m-tokens").textContent = nfmt(S.tokens);
   $("m-time").textContent = fmtTime(S.seconds);
   $("p-fill").style.width = "100%";
@@ -1247,11 +1603,19 @@ async function probeBackend() {
       single: S.backend.model,
       judge: S.backend.judge_model || S.backend.model,
     };
+    // Прежние сохранённые модели не должны перебивать новый выбор по умолчанию.
+    const savedModels = loadStored("fedotmas-models-v2", {});
+    for (const key of Object.keys(S.models)) {
+      if (S.backend.models.some(item => item.id === savedModels[key])) S.models[key] = savedModels[key];
+      if (!S.backend.models.some(item => item.id === S.models[key])) S.models[key] = S.backend.models[0].id;
+    }
     fillModelSelect("model-gen", "gen", S.backend.models, S.models.gen);
     fillModelSelect("model-run", "run", S.backend.models, S.models.run);
     fillModelSelect("model-single", "single", S.backend.models, S.models.single);
     fillModelSelect("model-judge", "judge", judgeChoices(), S.models.judge);
+    renderCodexStatus();
     renderKeyChip();
+    renderModelKeyAccess();
     restoreKey();
   } catch {
     /* бэкенд не отвечает — кнопки останутся заблокированными */
@@ -1259,21 +1623,37 @@ async function probeBackend() {
   renderMode();
 }
 
-// У судьи набор шире: его модель задаётся отдельно и в общий список может не входить
 function judgeChoices() {
-  const list = (S.backend?.models || []).slice();
-  const judge = S.backend?.judge_model;
-  if (judge && !list.some((m) => m.id === judge)) list.unshift({ id: judge, label: judge });
-  // В узкой колонке «google/gemini-2.5-pro» не помещается — вендора убираем, id остаётся значением
-  return list.map((m) => ({ id: m.id, label: (m.label || m.id).split("/").pop() }));
+  return S.backend?.models || [];
 }
 
 function fillModelSelect(id, key, models, selected) {
   const sel = $(id);
   if (!sel) return;
-  sel.innerHTML = (models || []).map((m) =>
-    `<option value="${esc(m.id)}"${m.id === selected ? " selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
-  sel.addEventListener("change", () => { S.models[key] = sel.value; });
+  // Каталог не зависит от авторизации: ключ нужен для запуска, не для выбора.
+  sel.innerHTML = [["Open-source · OpenRouter", "openrouter/"], ["Codex", "host/"]].map(([label, prefix]) =>
+    `<optgroup label="${label}">` + (models || []).filter(m => m.id.startsWith(prefix)).map(m =>
+      `<option value="${esc(m.id)}"${m.id === selected ? " selected" : ""}>${esc(m.label || m.id)}</option>`).join("") + "</optgroup>"
+  ).join("");
+  sel.addEventListener("change", () => {
+    S.models[key] = sel.value;
+    try { localStorage.setItem("fedotmas-models-v2", JSON.stringify(S.models)); } catch {}
+    renderMode();
+    if (key === "judge") renderSyntheticExamples();
+  });
+}
+
+function renderCodexStatus() {
+  const chip = $("codex-status");
+  if (!chip) return;
+  // Чип осмыслен, пока в списке есть хоть одна codex-модель: рядом с ней могут
+  // стоять модели OpenRouter, которым codex login не нужен.
+  const hasCodex = (S.backend?.models || []).some((m) => String(m.id || "").startsWith("host/"));
+  chip.classList.toggle("hidden", !hasCodex);
+  const ready = !!S.backend?.codex_authenticated;
+  chip.classList.toggle("key-ok", ready);
+  chip.textContent = ready ? "Codex · подписка активна" : "Codex · выполните codex login";
+  chip.title = S.backend?.codex_status || "Состояние Codex CLI";
 }
 
 /* ──────────────────────── Ключ провайдера ────────────────────────
@@ -1282,6 +1662,7 @@ function fillModelSelect(id, key, models, selected) {
  */
 function keyModal(show) {
   $("key-modal").classList.toggle("hidden", !show);
+  $("key-close").classList.remove("hidden");
   // Код доступа обычно приезжает в ссылке, но страница-предупреждение туннеля
   // может её обрезать — тогда даём ввести код руками, иначе вход в тупике.
   const needToken = !!S.backend?.public && !accessToken();
@@ -1292,12 +1673,51 @@ function keyModal(show) {
 function renderKeyChip() {
   const chip = $("btn-key");
   if (!chip) return;
-  const pub = !!S.backend?.public;
-  chip.classList.toggle("hidden", !pub);
+  chip.classList.add("hidden");
   const ok = !!S.backend?.user_key;
   chip.classList.toggle("key-ok", ok);
   $("btn-key-label").textContent = ok ? "Ключ принят" : "Ввести ключ";
   chip.title = ok ? "Ключ провайдера принят. Нажмите, чтобы сменить" : "Ввести ключ провайдера";
+}
+
+async function exportCode() {
+  if (!S.preset) { alert("Сначала выберите сценарий."); return; }
+  const preset = S.preset;
+  const button = $("p-export-code");
+  button.disabled = true;
+  try {
+    const response = await fetch("api/export-code", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({config: preset.config, kind: preset.kind,
+        model: S.models.run, tools: preset.tools || null,
+        custom_mcp: preset.customMcp || null}),
+    });
+    if (!response.ok) {
+      const data = await readJson(response, "экспорт кода");
+      throw new Error(data.detail || data.error || `сервер ответил ${response.status}`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const name = (preset.title || "mas").replace(/[^\wа-яёА-ЯЁ -]+/g, "").trim() || "mas";
+    link.href = url; link.download = `${name}_код_МАС.zip`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    alert("Не удалось скачать код МАС.\n" + err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderModelKeyAccess() {
+  const serverKey = !!S.backend?.openrouter_ready && !S.backend?.public && !S.backend?.user_key;
+  $("models-key").classList.toggle("hidden", serverKey || !S.backend);
+  $("models-key-info").textContent = !S.backend
+    ? "Нет связи с сервером. Обновите страницу и проверьте адрес стенда."
+    : serverKey
+    ? "OpenRouter подключён на сервере — вводить ключ здесь не нужно."
+    : "Для OpenRouter нужен ключ с доступом к выбранной модели.";
 }
 
 async function sendKey(key, remember) {
@@ -1327,9 +1747,14 @@ async function sendKey(key, remember) {
       if (remember) localStorage.setItem(LS_KEY, key);
       else localStorage.removeItem(LS_KEY);
     } catch {}
-    if (S.backend) S.backend.user_key = true;
+    if (S.backend) {
+      S.backend.user_key = true;
+      S.backend.openrouter_ready = key.startsWith("sk-or-");
+    }
     note.textContent = "";
     renderKeyChip();
+    renderModelKeyAccess();
+    renderMode();
     keyModal(false);
     return true;
   } catch (e) {
@@ -1344,10 +1769,9 @@ async function sendKey(key, remember) {
 /* Ключ мог остаться в браузере с прошлого раза, а сервер тем временем
  * перезапустили — тогда отдаём его молча, без формы. */
 async function restoreKey() {
-  if (!S.backend?.public || S.backend.user_key) return;
+  if (!S.backend || S.backend.openrouter_ready || S.backend.user_key) return;
   const saved = savedKey();
-  if (accessToken() && saved && await sendKey(saved, true)) return;
-  keyModal(true);
+  if (saved && (!S.backend.public || accessToken())) await sendKey(saved, true);
 }
 
 function initKeyForm() {
@@ -1386,14 +1810,22 @@ function noteKeyNeeded(status) {
 
 function renderMode() {
   const online = !!S.backend;
+  const ready = key => String(S.models[key]).startsWith("host/")
+    ? !!S.backend?.codex_authenticated : !!S.backend?.openrouter_ready;
+  const modelReady = ready("gen");
   // Отдельной плашки режима нет — режим всегда живой; о недоступном бэкенде
   // говорят заблокированные кнопки и подсказка на них.
-  $("btn-generate").disabled = !online;
-  $("btn-generate").title = online
+  $("btn-generate").disabled = !online || !modelReady;
+  $("btn-generate").title = online && !modelReady
+    ? "Настройте подключение в окне «Выбор модели»"
+    : online
     ? "Описать задачу и собрать под неё систему"
     : "Бэкенд недоступен: запустите gui/run.py и обновите страницу";
   // Запускать нечего, пока сценарий не создан
-  $("btn-run").disabled = !S.preset || (!online && !S.preset.trace.length);
+  $("btn-run").disabled = !S.preset || (!online && !S.preset.trace.length) || (online && !ready("run"));
+  if (online && !ready("run")) {
+    $("btn-run").title = "Настройте подключение в окне «Выбор модели»";
+  }
 }
 
 function liveMessage(kind, agent, text, tool) {
@@ -1432,10 +1864,16 @@ function stopLive() {
 async function liveRun() {
   if (!S.preset) return;
   stopLive();
+  const preset = S.preset;
+  S.answer = null; S.baseline = null; S.judge = null; S.review = null;
+  Object.assign(S.preset, { answer: null, answerMeta: null, runStats: null, rubberValidation: null,
+    auto: "—", baseline: null, judge: null, review: null, trace: [] });
+  renderAnswer();
   showTab("feed");
   $("feed").innerHTML = "";
   $("graph").querySelectorAll(".node").forEach((n) => n.classList.remove("active", "done"));
   S.tokens = 0;
+  $("m-tokens").textContent = "0";
   const t0 = performance.now();
   const total = $("graph").querySelectorAll(".node").length || 1;
   let finished = 0;
@@ -1444,9 +1882,10 @@ async function liveRun() {
     $("m-time").textContent = fmtTime((performance.now() - t0) / 1000);
   }, 200);
   setPlayIcon(true);
-  liveMessage("запуск", "runner", `Система запущена на реальных моделях (${S.models.run}). Первые ответы агентов появятся здесь.`);
+  liveMessage("запуск", "runner", "Система запущена. Первые ответы агентов появятся здесь.");
 
-  S.abort = new AbortController();
+  const controller = new AbortController();
+  S.abort = controller;
   try {
     const r = await fetch("api/run", {
       method: "POST",
@@ -1455,8 +1894,9 @@ async function liveRun() {
                              query: $("query").value, model: S.models.run,
                              tools: S.preset.tools || null,
                              custom_mcp: S.preset.customMcp || null }),
-      signal: S.abort.signal,
+      signal: controller.signal,
     });
+    if (S.preset !== preset || S.abort !== controller) return;
     // Единственный поток, где код ответа не проверялся: при 401 (нет токена доступа)
     // или 403 (запрос сочтён межсайтовым) тело — обычный JSON без строк «data:»,
     // цикл молча заканчивался, и человек видел «Система запущена…» и тишину.
@@ -1473,6 +1913,7 @@ async function liveRun() {
     let buf = "";
     for (;;) {
       const { value, done } = await reader.read();
+      if (S.preset !== preset || S.abort !== controller) return;
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       const chunks = buf.split("\n\n");
@@ -1502,7 +1943,6 @@ async function liveRun() {
           if (io.output) {
             const head = io.output.trim().split("\n")[0].slice(0, 160);
             liveMessage("результат", ev.agent, head || "(агент завершил работу)");
-            const last = trace[trace.length - 1];
             const entry = { agent: ev.agent, phase: "результат", text: head, tokens: 0,
                             ms: ev.ms || 1200, io };
             trace.push(entry);
@@ -1526,9 +1966,15 @@ async function liveRun() {
           trace.push({ agent: ev.agent, phase: routing ? "маршрутизация" : "инструмент", text,
                        tool: ev.tool, tokens: 0, ms: routing ? 1200 : 1400 });
         }
-        else if (ev.type === "tool_result" && ev.error) {
-          liveMessage("ошибка инструмента", ev.agent, ev.text, ev.tool);
-          trace.push({ agent: ev.agent, phase: "ошибка инструмента", text: ev.text, tool: ev.tool, tokens: 0, ms: 1200 });
+        else if (ev.type === "tool_result") {
+          if (ev.rubber_validation) {
+            S.preset.rubberValidation = ev.rubber_validation;
+            renderAnswer();
+          }
+          const phase = ev.error ? "ошибка инструмента" : "результат инструмента";
+          liveMessage(phase, ev.agent, ev.text, ev.tool);
+          trace.push({ agent: ev.agent, phase, text: ev.text, tool: ev.tool,
+                       error: !!ev.error, truncated: !!ev.truncated, tokens: 0, ms: 1200 });
         }
         else if (ev.type === "text") {
           S.tokens += ev.tokens || 0;
@@ -1541,58 +1987,49 @@ async function liveRun() {
           S.tokens += ev.tokens || 0;
           $("m-tokens").textContent = nfmt(S.tokens);
         } else if (ev.type === "done") {
-          $("m-tokens").textContent = nfmt(ev.tokens || S.tokens);
+          S.tokens = ev.tokens ?? S.tokens;
+          S.seconds = ev.elapsed;
+          S.preset.runStats = { tokens: S.tokens, elapsed: S.seconds, status: ev.status || "completed" };
+          $("m-tokens").textContent = nfmt(S.tokens);
           $("m-time").textContent = fmtTime(ev.elapsed);
           $("p-fill").style.width = "100%";
-          // Итог — артефакт последнего содержательного агента; отзыв критика ответом не является.
-          const criticRe = /критик|critic|валид|valid|провер|review|judge|качеств|контрол|аудит|реценз|quality/i;
-          const cfgAgents = S.preset.kind === "mas"
-            ? [S.preset.config.coordinator, ...(S.preset.config.workers || [])]
-            : (S.preset.config.agents || []);
-          const criticKeys = new Set(cfgAgents.filter((a) => criticRe.test(a.name))
-                                              .map((a) => a.output_key).filter(Boolean));
-          const keys = Object.keys(ev.state || {}).filter((k) => String(ev.state[k] || "").trim());
-          const useful = keys.filter((k) => !criticKeys.has(k));
-          const pool = useful.length ? useful : keys;
-          // Последний по порядку агент иногда отдаёт короткую сводку вместо расчёта —
-          // тогда берём самый содержательный артефакт, а не формально последний.
-          let last = pool.length ? String(ev.state[pool[pool.length - 1]] || "") : "";
-          const longest = pool.reduce((best, k) => {
-            const v = String(ev.state[k] || "");
-            return v.length > best.length ? v : best;
-          }, "");
-          if (longest.length > last.length * 2) last = longest;
+          const status = ev.status || "completed";
+          const completed = status === "completed";
+          const statusText = ({incomplete: "не завершено", limited: "достигнут лимит",
+            timed_out: "превышено время", failed: "ошибка"})[status] || "не завершено";
+          const last = String(ev.answer ?? "");
           S.answer = { text: last || "(система не вернула текстового результата)",
-                       meta: `${S.preset.kind === "mas" ? "MASConfig" : "MAWConfig"} · ${nfmt(ev.tokens || 0)} токенов · ${String(ev.elapsed).replace(".", ",")} с` };
+                       meta: `${S.preset.kind === "mas" ? "MASConfig" : "MAWConfig"} · ${nfmt(S.tokens)} токенов · ${String(ev.elapsed).replace(".", ",")} с${completed ? "" : " · " + statusText}` };
           S.query = $("query").value;
-          S.baseline = null; S.judge = null;
+          S.preset.query = S.query;
+          S.baseline = null; S.judge = null; S.review = null;
           renderAnswer();
           const prev = document.querySelector(".msg:last-child .msg-text");
           const duplicate = prev && last && prev.textContent.trim().startsWith(last.trim().slice(0, 60));
-          if (!duplicate) liveMessage("готово", "результат", last || "Система завершила работу.");
+          if (!duplicate || !completed) liveMessage(completed ? "готово" : statusText, "результат", last || "Система не вернула итоговый ответ.");
           else prev.closest(".msg").classList.add("final");
 
           // сценарий получает журнал, ответ и стоимость — дальше его можно проигрывать без сети
-          if (trace.length) {
-            trace[trace.length - 1].final = true;
-            S.preset.trace = trace;
-            S.preset.answer = S.answer.text;
-            S.preset.answerMeta = S.answer.meta;
-            S.preset.auto = `${fmtTime(ev.elapsed)} · ${(( ev.tokens || S.tokens) / 1000).toFixed(1).replace(".", ",")}к токенов`;
-            $("stat-auto").innerHTML = `<b class="hl">${esc(S.preset.auto)}</b>`;
-            persistPreset();
-          }
-          $("stat-auto").innerHTML = `<b class="hl">${esc(String(ev.elapsed).replace(".", ","))} с · ${esc(nfmt(ev.tokens))} токенов</b>`;
+          if (trace.length) trace[trace.length - 1].final = completed;
+          S.preset.trace = trace;
+          S.preset.answer = S.answer.text;
+          S.preset.answerMeta = S.answer.meta;
+          S.preset.auto = `${fmtTime(ev.elapsed)} · ${(S.tokens / 1000).toFixed(1).replace(".", ",")}к токенов`;
+          $("stat-auto").innerHTML = `<b class="hl">${esc(S.preset.auto)}</b>`;
+          persistPreset();
         } else if (ev.type === "error") {
           liveMessage("ошибка", "runner", ev.error);
         }
       }
     }
   } catch (err) {
-    if (err.name !== "AbortError") liveMessage("ошибка", "gui", String(err.message || err));
+    if (S.preset === preset && S.abort === controller && err.name !== "AbortError")
+      liveMessage("ошибка", "gui", String(err.message || err));
   } finally {
-    stopLive();
-    $("graph").querySelectorAll(".node.active").forEach((n) => { n.classList.remove("active"); n.classList.add("done"); });
+    if (S.preset === preset && S.abort === controller) {
+      stopLive();
+      $("graph").querySelectorAll(".node.active").forEach((n) => { n.classList.remove("active"); n.classList.add("done"); });
+    }
   }
 }
 
@@ -1800,7 +2237,6 @@ async function submitNewScenario() {
   const wantEffort = $("new-effort").checked;
   const tools = pickedTools();
   const customMcp = S.mcpCustom.slice();
-  const allTools = tools;
   if (!text) { $("new-note").textContent = "Опишите задачу — что нужно сделать."; return; }
   if (!S.backend) { $("new-note").textContent = "Нужен живой режим."; return; }
 
@@ -1832,7 +2268,7 @@ async function submitNewScenario() {
     let d = null;
     for await (const ev of sseEvents("api/generate_stream",
         { task: split.task, query: split.query, kind, model: S.models.gen, web,
-          tools: allTools, custom_mcp: customMcp })) {
+          tools, custom_mcp: customMcp })) {
       if (ev.type === "done") { d = ev; break; }
       if (ev.type === "agent_start" && GEN_STAGE_LABELS[ev.agent]) {
         ui.step(GEN_STAGE_LABELS[ev.agent], ev.agent.startsWith("pipeline") ? 55 : 30);
@@ -1866,7 +2302,7 @@ async function submitNewScenario() {
           manual = manualLabel(eff);
           manualNote = `Сумма по ${eff.subtasks.length} подзадачам: ${hoursText(eff.total_hours)}.`
             + ` Дни — часы, делённые на восьмичасовой рабочий день.`
-            + ` Оценил ${eff.model} при создании сценария.`;
+            + ` Оценка выполнена при создании сценария.`;
           ui.note(`Трудоёмкость вручную: ${manual} по ${eff.subtasks.length} подзадачам`);
         } else {
           manualNote = "Разложить задачу не удалось: " + (eff.error || "неизвестная ошибка");
@@ -1886,7 +2322,7 @@ async function submitNewScenario() {
       tools,
       manual, manualNote, breakdown,
       gen, auto: "—", genSteps: [], config: d.config, trace: [],
-      tools: allTools, customMcp,
+      customMcp,
       sources: parseSources($("new-sources").value)
         .concat(S.files.map((f) => ({ title: f.name, origin: "файл прикреплён к сценарию" }))),
     };
@@ -1935,11 +2371,26 @@ function scenarioList() {
 
 /** Стартовый вид без сценариев: показываем, с чего начать, вместо пустого графа. */
 function showEmptyState() {
-  S.preset = null; S.events = []; S.answer = null; S.baseline = null; S.judge = null;
+  pause();
+  stopLive();
+  S.evaluationEpoch++;
+  S.evaluationBusy = false;
+  $("judge-progress").classList.add("hidden");
+  S.preset = null; S.events = []; S.answer = null; S.baseline = null; S.judge = null; S.review = null;
+  S.agents = new Map();
+  S.query = "";
+  $("query").value = "";
+  S.syntheticExamples = [];
+  $("synthetic-note").textContent = "";
+  $("synthetic-note").classList.remove("error");
   $("scenario-title").textContent = "Сценариев пока нет";
   $("scenario-sub").textContent = "Нажмите «Добавить сценарий», опишите задачу — система соберётся под неё.";
   $("kind-badge").textContent = "";
   $("graph").innerHTML = "";
+  $("agent-cards").innerHTML = "";
+  $("tool-cards").innerHTML = "";
+  $("json").innerHTML = "";
+  $("json-label").textContent = "config.json";
   $("feed").innerHTML = '<div class="empty">Журнал появится после запуска системы</div>';
   $("answer").innerHTML = '<div class="empty">Ответ системы появится после запуска</div>';
   ["m-agents", "m-steps", "m-tools", "m-tokens"].forEach((id) => { $(id).textContent = "0"; });
@@ -1950,6 +2401,7 @@ function showEmptyState() {
   $("btn-run").disabled = true;
   $("btn-baseline").disabled = true;
   $("btn-judge").disabled = true;
+  renderSyntheticExamples();
   const gen = $("stat-gen-row"); if (gen) gen.classList.add("hidden");
   const data = $("data-block"); if (data) data.classList.add("hidden");
   renderEffort(null);
@@ -1988,11 +2440,17 @@ function removeScenario(id) {
   const wasActive = S.preset && S.preset.id === id;
   const before = S.custom.length;
   S.custom = S.custom.filter((p) => p.id !== id);
+  // Удалённый штатный контрольный прогон не добавляем заново при следующем входе.
+  if (S.custom.length !== before
+      && (window.STARTUP_PRESETS || []).some((p) => p.id === id && p.installOnExisting)
+      && !S.hidden.includes(id)) S.hidden.push(id);
   if (S.custom.length === before && !S.hidden.includes(id)) S.hidden.push(id);
   storeScenarios();
   renderPresetList();
   const list = scenarioList();
-  if (wasActive && list.length) loadPreset(list[0]);
+  // Удалили активный и он был последним — иначе интерфейс продолжит показывать
+  // и запускать уже не существующий сценарий (persistPreset уйдёт в никуда).
+  if (wasActive) { if (list.length) loadPreset(list[0]); else showEmptyState(); }
 }
 
 function addScenario(preset) {
@@ -2009,16 +2467,86 @@ const LS_RUN = "fedotmas-run";
 function initPresets() {
   S.custom = loadStored(LS_CUSTOM, []) || [];
   S.hidden = loadStored(LS_HIDDEN, []) || [];
-  // В автономной копии показывать нечего: запускать она не умеет, а список берётся
-  // из localStorage, которого у нового читателя нет. Подставляем записанные прогоны,
-  // вшитые в саму копию. На живом стенде флага нет и поведение прежнее.
-  if (window.OFFLINE_DEMO && !S.custom.length && Array.isArray(window.PRESETS)) {
-    S.custom = window.PRESETS.slice();
+  // Старый пример с рецептурой 55/45/55 остаётся в хранилище браузера,
+  // но больше не показывается рядом с подтверждённым контрольным прогоном.
+  const retiredRubberId = "rubber_property_prediction_maw_terra_5_agents_20260916";
+  let queryUpdated = false;
+  if (!S.hidden.includes(retiredRubberId)) {
+    S.hidden.push(retiredRubberId);
+    queryUpdated = true;
+  }
+  if (!S.custom.length && Array.isArray(window.STARTUP_PRESETS)) {
+    S.custom = window.STARTUP_PRESETS.slice();
+  }
+  // Обновление постановки встроенного сценария применяется к сохранённой копии
+  // один раз; дальнейшие правки пользователя сохраняются до следующей редакции.
+  // Новую запись эталонного прогона добавляем и в браузеры, где уже сохранены
+  // свои сценарии. Старые прогоны и пользовательские правки не перезаписываем.
+  for (const preset of window.STARTUP_PRESETS || []) {
+    if (preset.installOnExisting && !S.hidden.includes(preset.id)
+        && !S.custom.some((item) => item.id === preset.id)) {
+      S.custom.unshift(JSON.parse(JSON.stringify(preset)));
+      queryUpdated = true;
+    }
+  }
+  for (const preset of window.STARTUP_PRESETS || []) {
+    const saved = S.custom.find((item) => item.id === preset.id);
+    if (saved && preset.id === "rubber_heldout_reference_run_20260927"
+        && saved.title === "Шины · контрольная рецептура с MAPE") {
+      saved.title = preset.title;
+      queryUpdated = true;
+    }
+    if (saved && preset.id === "rubber_heldout_reference_run_20260927") {
+      const oldHeading = "Прогнозные значения и сравнение с опубликованными данными";
+      const newHeading = "Прогнозные значения и сравнение с фактом";
+      if (typeof saved.answer === "string" && saved.answer.includes(oldHeading)) {
+        saved.answer = saved.answer.replaceAll(oldHeading, newHeading);
+        queryUpdated = true;
+      }
+      for (const event of saved.trace || []) {
+        if (typeof event.text === "string" && event.text.includes(oldHeading)) {
+          event.text = event.text.replaceAll(oldHeading, newHeading);
+          queryUpdated = true;
+        }
+        if (typeof event.io?.output === "string" && event.io.output.includes(oldHeading)) {
+          event.io.output = event.io.output.replaceAll(oldHeading, newHeading);
+          queryUpdated = true;
+        }
+      }
+    }
+    if (saved && (saved.queryRevision || 0) < (preset.queryRevision || 0)) {
+      saved.query = preset.query;
+      saved.queryRevision = preset.queryRevision;
+      queryUpdated = true;
+    }
+    if (saved && (saved.effortRevision || 0) < (preset.effortRevision || 0)) {
+      saved.manual = preset.manual;
+      saved.manualNote = preset.manualNote;
+      saved.breakdown = JSON.parse(JSON.stringify(preset.breakdown));
+      saved.effortRevision = preset.effortRevision;
+      queryUpdated = true;
+    }
+    if (saved && (saved.syntheticRevision || 0) < (preset.syntheticRevision || 0)) {
+      const existing = Array.isArray(saved.syntheticExamples) ? saved.syntheticExamples : [];
+      saved.syntheticExamples = existing.concat((preset.syntheticExamples || [])
+        .filter((example) => !existing.some((item) => (item?.query || item) === example.query)));
+      saved.syntheticRevision = preset.syntheticRevision;
+      queryUpdated = true;
+    }
+  }
+  if (queryUpdated) storeScenarios();
+  // В автономной копии список берётся из localStorage, которого у нового читателя
+  // нет, а запускать она не умеет. Показываем всё, что вшито в саму копию:
+  // кейс-пресеты первыми, затем остальные записанные прогоны (без дублей по id).
+  // На живом стенде флага нет и поведение прежнее.
+  if (window.OFFLINE_DEMO && Array.isArray(window.PRESETS)) {
+    const have = new Set(S.custom.map((p) => p.id));
+    S.custom = S.custom.concat(window.PRESETS.filter((p) => !have.has(p.id)));
   }
   renderPresetList();
 }
 
-/** Сценарии живут только в пределах запуска сервера: перезапуск начинает показ с чистого листа. */
+/** Обновляем идентификатор сервера, сохраняя сценарии и статистику запусков. */
 function resetOnServerRestart(runId) {
   if (!runId) return;
   let stored = null;
@@ -2026,12 +2554,7 @@ function resetOnServerRestart(runId) {
   if (stored === runId) return;
   try {
     localStorage.setItem(LS_RUN, runId);
-    localStorage.removeItem(LS_CUSTOM);
-    localStorage.removeItem(LS_HIDDEN);
-  } catch { /* приватный режим — просто очищаем состояние в памяти */ }
-  S.custom = []; S.hidden = [];
-  renderPresetList();
-  showEmptyState();
+  } catch { /* приватный режим */ }
 }
 
 
@@ -2060,6 +2583,17 @@ function toggleInspectorWidth() {
   if (!full) { S.needFit = true; fitView(); }     // граф вернулся — пересчитываем камеру
 }
 
+function setQueryExpanded(expanded) {
+  const block = $("query-block");
+  const btn = $("btn-query-expand");
+  block.classList.toggle("query-expanded", expanded);
+  document.body.classList.toggle("query-fullscreen", expanded);
+  btn.setAttribute("aria-expanded", String(expanded));
+  btn.textContent = expanded ? "Свернуть" : "На весь экран";
+  btn.title = expanded ? "Свернуть постановку задачи (Esc)" : "Развернуть постановку задачи на весь экран";
+  (expanded ? $("query") : btn).focus({ preventScroll: true });
+}
+
 function showTab(name) {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("tab-active", x.dataset.tab === name));
   ["answer", "feed", "agents", "tools", "effort", "json"].forEach((n) => $("tab-" + n).classList.toggle("hidden", n !== name));
@@ -2078,20 +2612,57 @@ function init() {
   initMcpPicker();
   initFileSources();
   initKeyForm();
+  const modelModal = show => {
+    $("models-modal").classList.toggle("hidden", !show);
+    (show ? $("model-gen") : $("btn-models")).focus();
+  };
+  $("btn-models").addEventListener("click", () => modelModal(true));
+  $("models-close").addEventListener("click", () => modelModal(false));
+  $("models-done").addEventListener("click", () => modelModal(false));
+  $("models-key").addEventListener("click", () => { modelModal(false); keyModal(true); });
+  $("models-modal").addEventListener("click", e => { if (e.target === $("models-modal")) modelModal(false); });
+  $("models-modal").addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.stopPropagation(); modelModal(false); }
+    if (e.key === "Tab") {
+      const fields = [...$("models-modal").querySelectorAll("button,select")];
+      const first = fields[0], last = fields[fields.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  $("btn-query-expand").addEventListener("click", () => {
+    setQueryExpanded(!$("query-block").classList.contains("query-expanded"));
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && $("query-block").classList.contains("query-expanded") && $("new-modal").classList.contains("hidden")) {
+      setQueryExpanded(false);
+    }
+  });
 
   $("btn-run").addEventListener("click", () => {
+    if ($("query-block").classList.contains("query-expanded")) setQueryExpanded(false);
     if (S.backend) { S.abort ? stopLive() : liveRun(); return; }
     S.playing ? pause() : play();                 // без бэкенда доступно только воспроизведение записи
   });
   $("btn-generate").addEventListener("click", () => {
+    if ($("query-block").classList.contains("query-expanded")) setQueryExpanded(false);
     openNewScenario($("query").value.trim());      // текст из поля запроса подставляем как постановку
   });
   $("btn-expand").addEventListener("click", toggleInspectorWidth);
   $("btn-baseline").addEventListener("click", runBaseline);
   $("btn-judge").addEventListener("click", runJudge);
+  $("btn-synthetic").addEventListener("click", generateSyntheticExamples);
+  $("query").addEventListener("input", renderSyntheticExamples);
   $("p-play").addEventListener("click", () => (S.playing ? pause() : play()));
   $("p-restart").addEventListener("click", resetRun);
+  $("p-speed").addEventListener("click", () => {
+    S.speed = S.speed >= 3 ? 1 : S.speed + 1;   // ×1 → ×2 → ×3 → ×1
+    $("p-speed").textContent = "×" + S.speed;
+  });
   $("p-export").addEventListener("click", exportScenario);
+  $("p-export-ipr2").addEventListener("click", exportIPR2);
+  $("p-export-code").addEventListener("click", exportCode);
   $("btn-import").addEventListener("click", () => $("import-file").click());
   $("import-file").addEventListener("change", (e) => {
     const file = e.target.files && e.target.files[0];
@@ -2126,7 +2697,17 @@ function init() {
   });
 
   showEmptyState();
-  probeBackend();
+  probeBackend().finally(() => {
+    // Deep-link для расшаренных копий: ?scenario=<id> открывает нужный сценарий,
+    // ?autoplay=1 сразу запускает воспроизведение записи (только без бэкенда —
+    // живой запуск по ссылке стартовать нельзя).
+    const params = new URLSearchParams(location.search);
+    const wanted = params.get("scenario");
+    const list = scenarioList();
+    const first = (wanted && list.find((p) => p.id === wanted)) || list[0];
+    if (first) loadPreset(first);
+    if (first && params.get("autoplay") === "1" && !S.backend && first.trace.length) play();
+  });
 }
 
 document.addEventListener("DOMContentLoaded", init);

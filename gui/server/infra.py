@@ -28,6 +28,14 @@ def ensure_searxng(url: str) -> bool:
     """Поднимает остановленный контейнер SearXNG, если он есть на машине."""
     if searxng_alive(url):
         return True
+    import os
+
+    # Вызов идёт на импорте server.config: сломанный контейнер задерживал бы
+    # каждый старт сервера на десятки секунд. GUI_SEARXNG_AUTOSTART=0 отключает
+    # попытку подъёма — стенд стартует сразу, просто без веб-поиска.
+    if os.getenv("GUI_SEARXNG_AUTOSTART", "1") == "0":
+        _log.info("Автозапуск SearXNG отключён (GUI_SEARXNG_AUTOSTART=0)")
+        return False
     import subprocess
 
     for cmd in (["docker", "start", "searxng-core"],):

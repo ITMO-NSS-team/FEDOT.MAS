@@ -23,6 +23,30 @@ from .agent_names import AgentNames
 from .config import SSE_HEARTBEAT, WORKFLOW_PREFIXES
 
 
+def rubber_validation_result(value, depth=0):
+    """Extract structured predictor diagnostics through MCP response wrappers."""
+    if depth > 6:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    if isinstance(value, dict):
+        if value.get("status") == "prediction_completed" and isinstance(value.get("recipe_validation"), dict):
+            return value["recipe_validation"]
+        children = value.values()
+    elif isinstance(value, list):
+        children = value
+    else:
+        return None
+    for child in children:
+        found = rubber_validation_result(child, depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
 class StreamPlugin(BasePlugin):
     """Пробрасывает события выполнения в очередь — интерфейс читает её как SSE.
 
@@ -112,12 +136,16 @@ class StreamPlugin(BasePlugin):
             target = args.get("agent_name") or args.get("agent") or ""
             self._put({"type": "tool", "agent": author, "tool": fc.name,
                        "target": self.names.name(str(target)),
-                       "args": self.names.text(str(args)[:120])})
+                       "args": self.names.text(str(args)[:4000])})
         for fr in event.get_function_responses():
-            resp = str(fr.response)[:160] if fr.response is not None else ""
+            raw_response = str(fr.response) if fr.response is not None else ""
+            resp = raw_response[:12000]
             is_error = isinstance(fr.response, dict) and fr.response.get("isError") is True
             self._put({"type": "tool_result", "agent": author, "tool": self.names.name(fr.name),
-                       "error": bool(is_error), "text": self.names.text(resp)})
+                       "error": bool(is_error), "text": self.names.text(resp),
+                       "rubber_validation": (rubber_validation_result(fr.response)
+                                             if not is_error and "predict_rubber_properties" in fr.name else None),
+                       "truncated": len(raw_response) > len(resp)})
 
         text = ""
         content = getattr(event, "content", None)

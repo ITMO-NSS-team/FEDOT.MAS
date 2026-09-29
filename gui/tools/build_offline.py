@@ -40,22 +40,31 @@ def read(name: str) -> str:
 def main() -> None:
     page = read("index.html")
     styles = read("styles.css")
-    presets = read("presets.js")
-    app = read("app.js")
 
     # внешние файлы заменяем встроенными блоками
     page = page.replace('<link rel="stylesheet" href="styles.css">',
                         "<style>\n" + styles + "\n</style>")
-    # Заглушка бэкенда идёт перед app.js: она подменяет fetch до первого запроса,
-    # поэтому кнопки, форма сценария и вкладки работают без сервера.
-    mock = read("mock_backend.js")
-    # Сценарии, созданные через форму, живут в localStorage: без выгрузки они в копию не попадут
-    extra = read("presets_custom.js") if (STATIC / "presets_custom.js").exists() else ""
-    page = page.replace('<script src="presets.js"></script>\n<script src="app.js"></script>',
-                        "<script>\n" + inline(presets) + "\n</script>\n"
-                        + ("<script>\n" + inline(extra) + "\n</script>\n" if extra else "")
-                        + "<script>\n" + inline(mock) + "\n</script>\n"
-                        "<script>\n" + inline(app) + "\n</script>")
+
+    # Инлайним каждый <script src="..."> из index.html по порядку — включая
+    # кейс-пресеты (*_preset.js), которых сборщик раньше не знал. Суффикс ?v=N
+    # нужен только против кеша браузера, при чтении файла его отбрасываем.
+    import re
+
+    def _inline_tag(m: re.Match) -> str:
+        name = m.group(1).split("?", 1)[0]
+        blocks = ""
+        if name == "app.js":
+            # Заглушка бэкенда идёт перед app.js: она подменяет fetch до первого
+            # запроса, поэтому кнопки, форма сценария и вкладки работают без сервера.
+            blocks += "<script>\n" + inline(read("mock_backend.js")) + "\n</script>\n"
+        blocks += "<script>\n" + inline(read(name)) + "\n</script>"
+        if name == "presets.js" and (STATIC / "presets_custom.js").exists():
+            # Сценарии, созданные через форму, живут в localStorage:
+            # без выгрузки они в копию не попадут
+            blocks += "\n<script>\n" + inline(read("presets_custom.js")) + "\n</script>"
+        return blocks
+
+    page = re.sub(r'<script src="([^"]+)"></script>', _inline_tag, page)
 
     stamp = dt.datetime.now().strftime("%d.%m.%Y %H:%M")
     page = page.replace("</head>",

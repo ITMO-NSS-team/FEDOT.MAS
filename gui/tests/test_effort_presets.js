@@ -1,0 +1,70 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const staticDir = path.join(__dirname, "../static");
+const context = {window: {}};
+vm.createContext(context);
+for (const file of ["rubber_preset.js", "technology_card_preset.js"]) {
+  vm.runInContext(fs.readFileSync(path.join(staticDir, file), "utf8"), context);
+}
+for (const p of context.window.STARTUP_PRESETS) {
+  const b = p.breakdown;
+  assert.equal(b.subtasks.length, 6);
+  assert.equal(b.total_hours, b.subtasks.reduce((sum, t) => sum + t.hours, 0));
+  assert.equal(b.total_days, b.total_hours / 8);
+  assert.equal(b.total_hours, p.kind === "mas" ? 24 : 28);
+  assert.match(p.manualNote, /Время не измерялось/);
+  assert.equal(p.effortRevision, 1);
+}
+const app = fs.readFileSync(path.join(staticDir, "app.js"), "utf8");
+const box = {innerHTML: ""};
+context.$ = () => box;
+context.esc = String;
+context.num = String;
+context.hoursText = h => `${h} чел.-ч`;
+context.daysText = d => `${d} дня`;
+vm.runInContext(app.slice(app.indexOf("function renderEffort(p) {"),
+                         app.indexOf("/* ─────────────────────────── Источники данных")), context);
+for (const p of context.window.STARTUP_PRESETS) {
+  context.renderEffort(p);
+  assert.equal((box.innerHTML.match(/class="effort-row"/g) || []).length, 6);
+  assert.match(box.innerHTML, /Время не измерялось/);
+  assert.ok(box.innerHTML.includes(`${p.breakdown.total_hours} чел.-ч`));
+}
+const migration = app.slice(app.indexOf("  const retiredRubberId ="),
+                           app.indexOf("  // В автономной копии список"));
+context.S = {hidden: [], custom: context.window.STARTUP_PRESETS.map(p => ({
+  id: p.id, query: "user input", queryRevision: p.kind === "mas" ? 1 : p.queryRevision,
+  brief: p.kind === "mas" ? p.brief : "user brief",
+  manual: "old", config: {untouched: true},
+}))};
+let stores = 0;
+context.storeScenarios = () => stores++;
+vm.runInContext(migration, context);
+assert.equal(stores, 1);
+for (const saved of context.S.custom) {
+  if (saved.id === "custom_technology_card_audit_terra") {
+    assert.equal(saved.queryRevision, 2);
+    assert.doesNotMatch(saved.query, /Данные обозначь как демонстрационные/);
+    assert.equal(saved.brief, context.window.STARTUP_PRESETS.find(p => p.id === saved.id).brief);
+  } else {
+    assert.equal(saved.query, "user input");
+    assert.equal(saved.brief, "user brief");
+  }
+  assert.equal(saved.config.untouched, true);
+  assert.equal(saved.effortRevision, 1);
+  assert.equal(saved.breakdown.subtasks.length, 6);
+}
+const tire = context.S.custom.find(p => p.syntheticRevision === 1);
+assert.equal(tire.syntheticExamples.length, 1);
+assert.equal(tire.syntheticExamples[0].source, "published");
+assert.match(tire.syntheticExamples[0].query, /NR SMR-20 — 50 phr; SBR-1502 — 50 phr; технический углерод N220 — 60 phr/);
+assert.match(tire.syntheticExamples[0].query, /MAPE этого запуска/);
+// Re-running initialization must not overwrite later user changes.
+context.S.custom[0].manual = "user estimate";
+vm.runInContext(`{ ${migration} }`, context);
+assert.equal(stores, 1);
+assert.equal(context.S.custom[0].manual, "user estimate");
+assert.equal(tire.syntheticExamples.length, 1);
+console.log("Effort totals, assumptions and saved-scenario migration: OK");

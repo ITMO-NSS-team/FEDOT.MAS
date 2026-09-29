@@ -1,0 +1,12 @@
+[project]
+name = "fedotmas-protollm-example"
+version = "0.1.0"
+description = "Review a FEDOT.MAS report using the ProtoLLM connector"
+requires-python = ">=3.12,<3.13"
+dependencies = ["protollm"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+protollm = { git = "https://github.com/aimclub/protollm.git", rev = "c61708b0031c7fa668862ec805541daaef436397" }

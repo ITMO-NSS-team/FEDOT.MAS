@@ -17,6 +17,7 @@ HF_TOKEN=hf_...          # Hugging Face token (required to download GAIA)
 OPENAI_API_KEY=...       # key/base URL used by the meta-agent
 OPENAI_BASE_URL=...
 OPENROUTER_API_KEY=sk-or-... # used by GAIA worker agents
+FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS=16384 # raise for large generated MAW configs
 SEARXNG_URL=http://localhost:8888  # if SearXNG runs on a non-default port
 ```
 
@@ -49,6 +50,12 @@ Or directly:
 ```sh
 uv run python benchmarks/gaia/run_gaia.py --difficulty 1 --split "validation[:10]"
 ```
+
+For a local text task, pass `--task-file PATH`; the complete UTF-8 file is included
+as the task and its resolved path is also supplied to workers for file-based tools.
+Custom tasks do not require Hugging Face credentials. Large generated configurations
+may need a higher `FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS` value than the default
+`8192`; increase it when the meta-agent reports output truncation.
 
 ### Arguments
 

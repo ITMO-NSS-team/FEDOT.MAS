@@ -1,12 +1,13 @@
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
 import socket
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -17,42 +18,56 @@ from dotenv import load_dotenv
 from fedotmas import MAW, ModelConfig
 from fedotmas._settings import get_meta_model
 from fedotmas.common.logging import get_logger
+from fedotmas.maw._validators import _find_terminal_node
+from fedotmas.maw.handoffs import (
+    ABSTENTION_STATE_KEY,
+    is_explicit_abstention,
+    is_unresolved_answer,
+    unresolved_execution_issues,
+)
+from fedotmas.maw.models import MAWConfig
+from fedotmas.mcp import MCPServerConfig, StdioMCPServer, resolve_mcp_registry
 from fedotmas.plugins import (
     BrowserFallbackPolicyPlugin,
+    CodeAgentBudgetPlugin,
     LangfusePlugin,
     LoggingPlugin,
+    ResearchTelemetry,
     ToolErrorCircuitBreakerPlugin,
-    UnknownToolRecoveryPlugin,
     ToolErrorCircuitOpen,
     ToolResultTruncationPlugin,
+    UnknownToolRecoveryPlugin,
     WebSearchLimitExceeded,
     WebSearchLimitPlugin,
 )
+from fedotmas.plugins._code_agent_budget import (
+    GAIA_TASK_FILE_PATH_STATE_KEY,
+    TASK_DEADLINE_STATE_KEY,
+)
 from tenacity import (
     RetryError,
-    retry,
-    retry_if_not_exception_type,
-    stop_after_attempt,
-    wait_exponential,
 )
 from tqdm import tqdm
 
-from benchmarks.gaia.data import GaiaBenchmark
+from benchmarks.gaia.data import BenchmarkTask, GaiaBenchmark
 
 load_dotenv()
 
 RUN_ID = uuid.uuid4()
 _log = get_logger("fedotmas.benchmarks.gaia")
-DEFAULT_GAIA_MCP_SERVERS = [
-    "websearch-searxng",
+GAIA_BASE_MCP_SERVERS = [
+    "websearch-tavily",
     "web-scraping",
-    "sandbox-light",
+    "browser-agent",
+    "download",
+    "youtube-transcript",
     "document",
     "media",
+    "research-controller",
 ]
-DEFAULT_GAIA_WORKER_MODEL = "openai/gpt-5-mini"
-DEFAULT_MEDIA_MODEL = "openai/gpt-5-mini"
-DEFAULT_DOCUMENT_VISION_MODEL = "openai/gpt-5-mini"
+DEFAULT_GAIA_WORKER_MODEL = "openai/gpt-6-luna"
+DEFAULT_MEDIA_MODEL = "openai/gpt-6-luna"
+DEFAULT_DOCUMENT_VISION_MODEL = "openai/gpt-6-luna"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GAIA_WEB_SCRAPING_TOOL_NAMES = {
     "goto",
@@ -64,6 +79,9 @@ GAIA_WEB_SCRAPING_TOOL_NAMES = {
     "screenshot",
     "status",
 }
+GAIA_DOCUMENT_RESULT_TOOL_NAMES = (
+    GAIA_WEB_SCRAPING_TOOL_NAMES - {"screenshot", "status"}
+) | {"read_document", "extract_zip", "list_zip_contents"}
 PROVIDER_ERROR_PATTERNS = (
     "Provider returned error",
     "provider_name",
@@ -73,6 +91,38 @@ PROVIDER_ERROR_PATTERNS = (
 
 class ProviderErrorCooldown(RuntimeError):
     """Raised when the model provider asks us to back off."""
+
+
+class CompletedPipelinePostProcessingError(RuntimeError):
+    """A completed pipeline had an error after producing its terminal output."""
+
+    def __init__(self, cause: Exception, artifact: dict[str, Any]) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.artifact = artifact
+
+
+def _is_custom_task(task: Any) -> bool:
+    return (getattr(task, "metadata", None) or {}).get("source") == "custom_task_file"
+
+
+def _task_from_file(task_path: Path) -> BenchmarkTask:
+    resolved_path = task_path.resolve()
+    return BenchmarkTask(
+        task_id="custom_exact_optimization",
+        question=resolved_path.read_text(encoding="utf-8"),
+        file_path=str(resolved_path),
+        file_name=resolved_path.name,
+        ground_truth="",
+        difficulty="0",
+        metadata={"source": "custom_task_file"},
+    )
+
+
+def _log_selected_models(meta_model: ModelConfig, worker_model: ModelConfig) -> None:
+    _log.info(
+        "Meta model:   {}\nWorker model: {}", meta_model.model, worker_model.model
+    )
 
 
 @dataclass(frozen=True)
@@ -126,36 +176,21 @@ def extract_solution(text: str) -> str:
     return text.strip()
 
 
-def extract_answer_from_state(state: dict[str, Any]) -> str:
-    """Extract final answer from session state.
+def extract_answer_from_state(
+    state: dict[str, Any], output_key: str | None = None
+) -> str:
+    """Extract only the named terminal output; never scan intermediate state."""
+    if output_key is None:
+        return ""
+    value = state.get(output_key)
+    if value is None:
+        return ""
+    return extract_solution(str(value))
 
-    First looks for <solution> tags in any non-query state value.
-    Falls back to the last non-null, non-user_query value.
-    """
-    # Search all values for <solution> tags (last match wins)
-    solution = None
-    for key, value in state.items():
-        if key == "user_query":
-            continue
-        if value is None:
-            continue
-        text = str(value)
-        found = extract_solution(text)
-        if found != text.strip():  # tags were found
-            solution = found
 
-    if solution is not None:
-        return solution
-
-    # Fall back: last non-null, non-user_query value
-    for key in reversed(list(state.keys())):
-        if key == "user_query":
-            continue
-        value = state[key]
-        if value is not None and str(value).strip():
-            return str(value).strip()
-
-    return ""
+def extract_terminal_answer(state: dict[str, Any], output_key: str) -> str:
+    """Extract only the configured terminal agent's output."""
+    return extract_answer_from_state(state, output_key)
 
 
 def normalize_answer(answer: str) -> str:
@@ -173,6 +208,77 @@ def normalize_answer(answer: str) -> str:
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
         text = text[1:-1].strip()
     return text
+
+
+def _has_unresolved_answer_lineage(issues: list[dict[str, Any]], terminal: Any) -> bool:
+    """Only block diagnostics that directly name a declared answer dependency."""
+    answer_fields = {
+        "answer",
+        "verified_answer",
+        "candidate",
+        "solution",
+        "result",
+        "value",
+    }
+
+    def has_answer_field(paths: list[str]) -> bool:
+        return any(
+            segment.removesuffix("[]").casefold() in answer_fields
+            for path in paths
+            for segment in path.split(".")
+        )
+
+    requirements = getattr(terminal, "input_requirements", []) or []
+    for requirement in requirements:
+        if not has_answer_field(
+            requirement.required_fields + requirement.identity_fields
+        ):
+            continue
+        for issue in issues:
+            if issue.get("resolved") is True:
+                continue
+            if (
+                issue.get("source_key") == requirement.source_key
+                or issue.get("output_key") == requirement.source_key
+            ) and issue.get("kind") in {
+                "incomplete_handoff",
+                "incomplete_artifact",
+                "entity_continuity_mismatch",
+            }:
+                return True
+    return False
+
+
+def _matches_declared_answer_format(answer: str, task: Any) -> bool:
+    metadata = getattr(task, "metadata", None) or {}
+    specification = (
+        metadata.get("answer_format") if isinstance(metadata, dict) else None
+    )
+    if specification is None:
+        return True
+    if isinstance(specification, dict):
+        if isinstance(specification.get("pattern"), str):
+            return re.fullmatch(specification["pattern"], answer) is not None
+        if isinstance(specification.get("enum"), list):
+            return answer in {str(value) for value in specification["enum"]}
+        kind = str(specification.get("type", "")).casefold()
+    else:
+        kind = str(specification).casefold().strip()
+    if kind in {"integer", "int", "digits"}:
+        return re.fullmatch(r"[+-]?\d+", answer) is not None
+    if kind in {"number", "numeric", "float"}:
+        return re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", answer) is not None
+    if kind in {"json", "json object", "json array"}:
+        try:
+            parsed = json.loads(answer)
+        except json.JSONDecodeError:
+            return False
+        return (
+            kind == "json"
+            or (kind == "json object" and isinstance(parsed, dict))
+            or (kind == "json array" and isinstance(parsed, list))
+        )
+    return bool(answer.strip())
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -193,6 +299,10 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _gaia_max_agent_llm_turns() -> int:
+    return _env_int("FEDOTMAS_GAIA_MAX_AGENT_LLM_TURNS", 20)
+
+
 def _env_list(name: str) -> list[str] | None:
     value = os.getenv(name)
     if not value:
@@ -203,11 +313,62 @@ def _env_list(name: str) -> list[str] | None:
 
 def _gaia_mcp_servers() -> list[str] | str:
     value = os.getenv("FEDOTMAS_GAIA_MCP_SERVERS")
-    if value is None:
-        return DEFAULT_GAIA_MCP_SERVERS
-    if value.strip().lower() == "all":
-        return "all"
-    return [name.strip() for name in value.split(",") if name.strip()]
+    if value is not None and value.strip().lower() == "all":
+        e2b_servers = {"sandbox", "code-agent"}
+        all_servers = list(resolve_mcp_registry("all"))
+        servers = [
+            name
+            for name in all_servers
+            if name != "websearch-searxng"
+            and (os.getenv("E2B_API_KEY") or name not in e2b_servers)
+        ]
+        if "websearch-tavily" not in servers:
+            servers.insert(0, "websearch-tavily")
+        if "sandbox-light" not in servers:
+            servers.append("sandbox-light")
+        return servers
+    if value is not None:
+        servers = [name.strip() for name in value.split(",") if name.strip()]
+        if "websearch-searxng" in servers:
+            servers = [name for name in servers if name != "websearch-searxng"]
+            if "websearch-tavily" not in servers:
+                servers.insert(0, "websearch-tavily")
+        if not os.getenv("E2B_API_KEY"):
+            servers = [
+                "sandbox-light" if name == "sandbox" else name
+                for name in servers
+                if name != "code-agent"
+            ]
+        return servers
+
+    servers = list(GAIA_BASE_MCP_SERVERS)
+    sandbox = "sandbox" if os.getenv("E2B_API_KEY") else "sandbox-light"
+    insertion_index = servers.index("youtube-transcript") + 1
+    servers.insert(insertion_index, sandbox)
+    if os.getenv("E2B_API_KEY"):
+        servers.append("code-agent")
+    return servers
+
+
+def _gaia_mcp_registry(
+    worker_model: ModelConfig,
+) -> dict[str, MCPServerConfig]:
+    """Pass the resolved GAIA worker settings to nested agents."""
+    registry = dict(resolve_mcp_registry(_gaia_mcp_servers()))
+    if not os.getenv("E2B_API_KEY"):
+        registry.pop("code-agent", None)
+    for name in ("browser-agent", "code-agent"):
+        server = registry.get(name)
+        if isinstance(server, StdioMCPServer):
+            env = {**server.env, "FEDOTMAS_GAIA_WORKER_MODEL": worker_model.model}
+            if name == "code-agent":
+                env["CODE_AGENT_MCP_TIMEOUT_SECONDS"] = str(server.timeout)
+            if worker_model.api_key:
+                env["FEDOTMAS_GAIA_WORKER_API_KEY"] = worker_model.api_key
+            if worker_model.api_base:
+                env["FEDOTMAS_GAIA_WORKER_BASE_URL"] = worker_model.api_base
+            registry[name] = replace(server, env=env)
+    return registry
 
 
 def _gaia_provider_extra_body() -> dict[str, Any] | None:
@@ -343,7 +504,7 @@ def _unwrap_exception(error: BaseException) -> BaseException:
     if isinstance(error, RetryError):
         try:
             retry_exception = error.last_attempt.exception()
-        except Exception:
+        except Exception:  # noqa: BLE001 - error summaries must survive broken retry wrappers
             retry_exception = None
         if isinstance(retry_exception, BaseException):
             return _unwrap_exception(retry_exception)
@@ -351,11 +512,16 @@ def _unwrap_exception(error: BaseException) -> BaseException:
     if isinstance(error, BaseExceptionGroup) and error.exceptions:
         return _unwrap_exception(error.exceptions[-1])
 
+    cause = getattr(error, "cause", None)
+    if isinstance(cause, BaseException):
+        return _unwrap_exception(cause)
+
     cause = error.__cause__ or error.__context__
     if cause is not None and type(error).__name__ in {
         "RuntimeError",
         "Exception",
         "ProviderErrorCooldown",
+        "PipelineExecutionError",
     }:
         return _unwrap_exception(cause)
 
@@ -470,7 +636,7 @@ async def preflight_model_endpoint(model: ModelConfig) -> None:
         try:
             await asyncio.to_thread(_check_models_endpoint, model, timeout=timeout)
             return
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - retry endpoint failures uniformly
             last_error = exc
             if attempt < attempts:
                 await asyncio.sleep(min(2**attempt, 10))
@@ -491,7 +657,8 @@ async def preflight_startup_models() -> None:
         if key in checked:
             continue
         checked.add(key)
-        _log.info("Preflight model healthcheck | {}={}", name, model.model)
+        if name != "FEDOTMAS_GAIA_WORKER_MODEL":
+            _log.info("Preflight model healthcheck | {}={}", name, model.model)
         try:
             await preflight_model_endpoint(model)
         except Exception as exc:
@@ -500,36 +667,72 @@ async def preflight_startup_models() -> None:
             ) from exc
 
 
-def build_plugins(task, enable_langfuse: bool) -> list:
+def build_plugins(
+    task,
+    enable_langfuse: bool,
+    *,
+    code_agent_mcp_timeout: int = 180,
+    task_timeout_seconds: int | None = None,
+) -> list:
+    telemetry = ResearchTelemetry()
     plugins = [
         LoggingPlugin(),
-        BrowserFallbackPolicyPlugin(),
-        ToolResultTruncationPlugin(
-            max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 60000),
-        ),
-        WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 10),
-            hard_fail=True,
-        ),
-        WebSearchLimitPlugin(
-            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 12),
-            tool_names=GAIA_WEB_SCRAPING_TOOL_NAMES,
-            count_unique_urls=True,
-            same_url_exempt_tool_names={"eval", "evaluate", "links", "status"},
-            reject_empty_urls=True,
-            hard_fail=True,
-            name="fedotmas_gaia_web_tool_limit",
-        ),
+        telemetry,
         ToolErrorCircuitBreakerPlugin(
             max_errors_per_agent=_env_int("FEDOTMAS_GAIA_MAX_TOOL_ERRORS", 6),
             max_same_tool_error_type=_env_int(
                 "FEDOTMAS_GAIA_MAX_SAME_TOOL_ERROR_TYPE", 2
             ),
+            telemetry=telemetry,
         ),
-        # After the breaker on purpose: ADK stops at the first plugin that
-        # returns a value, so recovering first would hide unresolved names from
-        # the breaker's counters.  The thresholds therefore win here -- one
-        # recovery, then abort, rather than the three a plain run allows.
+        CodeAgentBudgetPlugin(
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_CODE_AGENT_CALL_LIMIT", 3),
+            total_seconds_per_agent=_env_int(
+                "FEDOTMAS_GAIA_CODE_AGENT_TOTAL_SECONDS", 360
+            ),
+            max_seconds_per_call=_code_agent_max_execution_seconds(
+                code_agent_mcp_timeout
+            ),
+            task_timeout_seconds=task_timeout_seconds
+            or _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 600),
+            deadline_reserve_seconds=_env_int(
+                "FEDOTMAS_GAIA_CODE_AGENT_DEADLINE_RESERVE_SECONDS", 90
+            ),
+            telemetry=telemetry,
+        ),
+        BrowserFallbackPolicyPlugin(),
+        ToolResultTruncationPlugin(
+            max_string_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 6000),
+            max_total_chars=_env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 6000),
+            aggregate_tool_names={"*"},
+            max_agent_total_chars=_env_int(
+                "FEDOTMAS_GAIA_AGENT_EVIDENCE_CHAR_BUDGET", 24000
+            ),
+            name="fedotmas_gaia_agent_context_budget",
+        ),
+        WebSearchLimitPlugin(
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_SEARCH_LIMIT", 40),
+            telemetry=telemetry,
+        ),
+        WebSearchLimitPlugin(
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_WEB_TOOL_LIMIT", 40),
+            tool_names=GAIA_WEB_SCRAPING_TOOL_NAMES,
+            count_unique_urls=True,
+            same_url_exempt_tool_names={"eval", "evaluate", "links", "status"},
+            reject_empty_urls=True,
+            telemetry=telemetry,
+            budget_kind="scraping",
+            name="fedotmas_gaia_web_tool_limit",
+        ),
+        WebSearchLimitPlugin(
+            max_calls_per_agent=_env_int("FEDOTMAS_GAIA_BROWSER_AGENT_LIMIT", 3),
+            tool_names={"complete_browser_task"},
+            telemetry=telemetry,
+            budget_kind="browser_agent",
+            name="fedotmas_gaia_browser_agent_limit",
+        ),
+        # Keep recovery after the breaker so unresolved names still pass through
+        # the local circuit's error accounting.
         UnknownToolRecoveryPlugin(),
     ]
     if enable_langfuse:
@@ -547,10 +750,30 @@ def build_plugins(task, enable_langfuse: bool) -> list:
     return plugins
 
 
+def _code_agent_max_execution_seconds(mcp_timeout: int) -> int:
+    configured = _env_int("CODE_AGENT_MAX_EXECUTION_SECONDS", 120)
+    safe_max = max(1, mcp_timeout - 30)
+    if configured > safe_max:
+        _log.warning(
+            "CODE_AGENT_MAX_EXECUTION_SECONDS={} exceeds code-agent MCP timeout {}s "
+            "minus 30s cleanup headroom; effective max is {}s",
+            configured,
+            mcp_timeout,
+            safe_max,
+        )
+    return min(configured, safe_max)
+
+
+def _code_agent_e2b_lifetime_seconds(max_execution: int, mcp_timeout: int) -> int:
+    return min(max_execution + 30, mcp_timeout - 1)
+
+
 def compute_metrics_by_level(results: list) -> dict:
     difficulty_stats: dict[int, dict] = {}
 
     for result in results:
+        if result["is_correct"] is None:
+            continue
         difficulty = int(result["difficulty"])
         is_correct = result["is_correct"]
 
@@ -597,15 +820,65 @@ def compute_token_summary(results: list) -> dict:
     total_meta_completion = 0
     total_pipeline_prompt = 0
     total_pipeline_completion = 0
+    browser_usage = {
+        field: 0
+        for field in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "llm_invocations",
+            "steps",
+            "usage_missing",
+        )
+    }
+    code_agent_usage = {
+        field: 0
+        for field in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "llm_invocations",
+            "steps",
+            "usage_missing",
+        )
+    }
+    code_agent_usage["cost_usd"] = 0.0
 
     for result in results:
-        if "error" in result:
-            continue
+        for metrics in result.get("research_telemetry", {}).values():
+            for field in browser_usage:
+                browser_usage[field] += metrics.get(f"browser_agent_{field}", 0)
+            for field in code_agent_usage:
+                code_agent_usage[field] += metrics.get(f"code_agent_{field}", 0)
         tokens = result.get("tokens", {})
         total_meta_prompt += tokens.get("meta_prompt", 0)
         total_meta_completion += tokens.get("meta_completion", 0)
         total_pipeline_prompt += tokens.get("pipeline_prompt", 0)
         total_pipeline_completion += tokens.get("pipeline_completion", 0)
+
+    outer_worker_tokens = {
+        "prompt_tokens": total_pipeline_prompt,
+        "completion_tokens": total_pipeline_completion,
+        "total_tokens": total_pipeline_prompt + total_pipeline_completion,
+    }
+    nested_code_tokens = {
+        "prompt_tokens": code_agent_usage["prompt_tokens"],
+        "completion_tokens": code_agent_usage["completion_tokens"],
+        "total_tokens": code_agent_usage["total_tokens"],
+    }
+    nested_browser_tokens = {
+        "prompt_tokens": browser_usage["prompt_tokens"],
+        "completion_tokens": browser_usage["completion_tokens"],
+        "total_tokens": browser_usage["total_tokens"],
+    }
+    combined_tokens = {
+        field: (
+            outer_worker_tokens[field]
+            + nested_browser_tokens[field]
+            + nested_code_tokens[field]
+        )
+        for field in outer_worker_tokens
+    }
 
     return {
         "meta_agent": {
@@ -618,14 +891,32 @@ def compute_token_summary(results: list) -> dict:
             "completion_tokens": total_pipeline_completion,
             "total_tokens": total_pipeline_prompt + total_pipeline_completion,
         },
+        "browser_agent": browser_usage,
+        "code_agent": code_agent_usage,
+        "outer_worker_tokens": outer_worker_tokens,
+        "browser_agent_tokens": nested_browser_tokens,
+        "code_agent_tokens": nested_code_tokens,
+        "combined_tokens": combined_tokens,
         "grand_total": {
-            "prompt_tokens": total_meta_prompt + total_pipeline_prompt,
-            "completion_tokens": total_meta_completion + total_pipeline_completion,
+            "prompt_tokens": (
+                total_meta_prompt
+                + total_pipeline_prompt
+                + browser_usage["prompt_tokens"]
+                + code_agent_usage["prompt_tokens"]
+            ),
+            "completion_tokens": (
+                total_meta_completion
+                + total_pipeline_completion
+                + browser_usage["completion_tokens"]
+                + code_agent_usage["completion_tokens"]
+            ),
             "total_tokens": (
                 total_meta_prompt
                 + total_meta_completion
                 + total_pipeline_prompt
                 + total_pipeline_completion
+                + browser_usage["total_tokens"]
+                + code_agent_usage["total_tokens"]
             ),
         },
     }
@@ -645,9 +936,12 @@ def print_score_by_level(metrics_by_level: dict) -> None:
             )
 
     overall = metrics_by_level["overall"]
-    print(
-        f"Overall:   {overall['accuracy']:.2f}%  ({overall['correct']}/{overall['total_tasks']})"
-    )
+    if overall["total_tasks"]:
+        print(
+            f"Overall:   {overall['accuracy']:.2f}%  ({overall['correct']}/{overall['total_tasks']})"
+        )
+    else:
+        print("Overall:   N/A (no scored tasks)")
     print("=" * 50)
 
 
@@ -664,29 +958,108 @@ def print_token_summary(token_summary: dict) -> None:
     print(
         f"Pipeline:    {pipe['total_tokens']:>10,}  (prompt: {pipe['prompt_tokens']:,}, completion: {pipe['completion_tokens']:,})"
     )
+    combined = token_summary.get("combined_tokens")
+    if combined:
+        code = token_summary.get("code_agent_tokens", {})
+        print(
+            f"Code-agent:  {code.get('total_tokens', 0):>10,}  "
+            f"(nested tokens; combined worker: {combined['total_tokens']:,})"
+        )
     print(
         f"Grand total: {grand['total_tokens']:>10,}  (prompt: {grand['prompt_tokens']:,}, completion: {grand['completion_tokens']:,})"
     )
     print("=" * 50)
 
 
-@retry(
-    # Default 2 attempts: a single transient worker-model/API timeout no longer
-    # loses the whole task. Wall-clock and budget exhaustion now salvage partial
-    # state instead of raising, so retries mostly catch genuine transient errors.
-    stop=stop_after_attempt(_env_int("FEDOTMAS_GAIA_TASK_ATTEMPTS", 2)),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    retry=retry_if_not_exception_type(ProviderErrorCooldown),
-)
 async def process_task(
     task,
     gaia_benchmark: GaiaBenchmark,
     task_log_dir: Path,
     *,
     enable_langfuse: bool,
+    frozen_config: MAWConfig | None = None,
+    frozen_config_source: str | None = None,
+    frozen_config_sha256: str | None = None,
 ) -> dict:
-    """Process a single GAIA task using FEDOT.MAS MAW."""
-    instruction = (
+    """Process a task, keeping diagnostics for every execution attempt."""
+    max_attempts = max(1, _env_int("FEDOTMAS_GAIA_TASK_ATTEMPTS", 2))
+    attempt_results: list[dict[str, Any]] = []
+    for attempt_number in range(1, max_attempts + 1):
+        try:
+            result = await _process_task_attempt(
+                task,
+                gaia_benchmark,
+                task_log_dir,
+                enable_langfuse=enable_langfuse,
+                attempt_number=attempt_number,
+                frozen_config=frozen_config,
+                frozen_config_source=frozen_config_source,
+                frozen_config_sha256=frozen_config_sha256,
+            )
+        except CompletedPipelinePostProcessingError as exc:
+            attempt_results.append(exc.artifact)
+            cause = root_cause_summary(exc)
+            result = {
+                "task_id": task.task_id,
+                "question": task.question,
+                "response": exc.artifact.get("response", ""),
+                "ground_truth": task.ground_truth,
+                "difficulty": task.difficulty,
+                "is_correct": None if _is_custom_task(task) else False,
+                "error": str(exc.cause),
+                **cause,
+                **_attempt_diagnostics(attempt_results),
+            }
+            _copy_attempt_fields(result, exc.artifact)
+            await _write_task_result(
+                task_log_dir, result, leaderboard_answer=result["response"]
+            )
+            return result
+        except Exception as exc:
+            attempt_record = _read_attempt_record(task_log_dir, attempt_number)
+            attempt_results.append(attempt_record)
+            if isinstance(exc, ProviderErrorCooldown) or attempt_number == max_attempts:
+                cause = root_cause_summary(exc)
+                result = {
+                    "task_id": task.task_id,
+                    "question": task.question,
+                    "response": "",
+                    "ground_truth": task.ground_truth,
+                    "difficulty": task.difficulty,
+                    "is_correct": (None if _is_custom_task(task) else False),
+                    "error": str(exc),
+                    **cause,
+                    **_attempt_diagnostics(attempt_results),
+                }
+                _copy_attempt_fields(result, attempt_record)
+                await _write_task_result(task_log_dir, result, leaderboard_answer="")
+                raise
+            await asyncio.sleep(min(2 ** (attempt_number + 1), 10))
+        else:
+            attempt_results.append(result)
+            result["attempts"] = _attempt_summaries(attempt_results)
+            result.update(_attempt_diagnostics(attempt_results))
+            await _write_task_result(
+                task_log_dir, result, leaderboard_answer=result["response"]
+            )
+            return result
+
+    raise AssertionError("unreachable")
+
+
+async def _process_task_attempt(
+    task,
+    gaia_benchmark: GaiaBenchmark,
+    task_log_dir: Path,
+    *,
+    enable_langfuse: bool,
+    attempt_number: int,
+    frozen_config: MAWConfig | None = None,
+    frozen_config_source: str | None = None,
+    frozen_config_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Run one attempt and write its complete result or failure diagnostics."""
+    final_answer_contract = (
         "Encapsulate your final answer within <solution> and </solution> tags.\n"
         "For example: The answer to the question is <solution>42</solution>.\n\n"
         "CRITICAL — the text inside <solution></solution> must be ONLY the bare answer, "
@@ -708,106 +1081,585 @@ async def process_task(
         "read to get the missing evidence first.\n\n"
     )
 
-    query = instruction
-    if task.file_path:
+    query = ""
+    if _is_custom_task(task):
         query += (
-            "Use available document, media, or sandbox tools to inspect the local file "
-            "directly. Do not claim you cannot access it before trying an appropriate "
-            "tool.\n"
+            "Solve the task fully specified in the supplied local file, including "
+            "its exactness and answer-format requirements. Treat the original file "
+            "as the source of truth; do not copy its contents into pipeline state. "
+            "Let the meta-agent choose the architecture. For computation over this "
+            "file, downstream code-agent workers must pass the host path via "
+            "solve_with_code(files=[path]); task and context are instructions, not "
+            "data transport.\n"
         )
-        query += f"File path: {task.file_path}\n"
+    elif task.file_path:
+        query += (
+            "The source file is available at the host path below. For "
+            "computation over it, pass that exact path to solve_with_code(files=[path]); "
+            "do not copy its contents into task, context, or an intermediate handoff. "
+            "The code-agent stages files automatically. Each call uses an independent "
+            "fresh sandbox, so pass the file again on any later call. Document tools may "
+            "read or retrieve file content when that is the actual task.\n"
+        )
+    if task.file_path:
+        query += f"Host file path: {task.file_path}\n"
     if task.file_name:
         query += f"File name: {task.file_name}\n"
-    query += f"Question: {task.question}"
+    if not _is_custom_task(task):
+        query += f"Question: {task.question}"
 
-    meta_model = _gaia_meta_model()
-    worker_model = _gaia_worker_model()
-
-    maw = MAW(
-        meta_model=meta_model,
-        mcp_servers=_gaia_mcp_servers(),
-        worker_models=[worker_model],
-        plugins=build_plugins(task, enable_langfuse),
-        max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
-        two_stage=False,
-    )
-    task_timeout = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 600)
+    maw = None
+    telemetry = None
+    state: dict[str, Any] = {}
+    answer = ""
+    terminal_output_ready = False
     try:
-        # The pipeline salvages and returns partial state on its own execution
-        # timeout (see run_pipeline), so most slow tasks still yield an answer.
-        # The outer wait_for is only a hard backstop for meta-generation hangs;
+        meta_model = _gaia_meta_model()
+        worker_model = _gaia_worker_model()
+        task_timeout = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 600)
+        backstop = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_BACKSTOP_SECONDS", 180)
+        mcp_registry = _gaia_mcp_registry(worker_model)
+        code_agent_server = mcp_registry.get("code-agent")
+        code_agent_mcp_timeout = int(getattr(code_agent_server, "timeout", 180))
+        code_agent_max = _code_agent_max_execution_seconds(code_agent_mcp_timeout)
+        code_agent_default = min(
+            _env_int("CODE_AGENT_DEFAULT_MAX_EXECUTION_SECONDS", 60),
+            code_agent_max,
+        )
+        code_agent_calls = _env_int("FEDOTMAS_GAIA_CODE_AGENT_CALL_LIMIT", 3)
+        code_agent_total = _env_int("FEDOTMAS_GAIA_CODE_AGENT_TOTAL_SECONDS", 360)
+        code_agent_reserve = _env_int(
+            "FEDOTMAS_GAIA_CODE_AGENT_DEADLINE_RESERVE_SECONDS", 90
+        )
+        _log.info(
+            "Effective run limits | task_timeout={}s backstop={}s worker_turns={} "
+            "meta_output_tokens={} tool_result_cap={} chars evidence_budget={} chars "
+            "code_agent_calls_per_agent={} code_agent_total_per_agent={}s "
+            "code_agent_max_per_call={}s default={}s code_agent_mcp_transport={}s "
+            "code_agent_e2b_lifetime={}s finalization_reserve={}s sandbox_lifetime={}s",
+            task_timeout,
+            backstop,
+            _gaia_max_agent_llm_turns(),
+            _env_int("FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS", 8192),
+            _env_int("FEDOTMAS_GAIA_MAX_TOOL_RESULT_CHARS", 6000),
+            _env_int("FEDOTMAS_GAIA_AGENT_EVIDENCE_CHAR_BUDGET", 24000),
+            code_agent_calls,
+            code_agent_total,
+            code_agent_max,
+            code_agent_default,
+            code_agent_mcp_timeout,
+            _code_agent_e2b_lifetime_seconds(code_agent_max, code_agent_mcp_timeout),
+            code_agent_reserve,
+            _env_int("FEDOTMAS_SANDBOX_TIMEOUT_SECONDS", 1800),
+        )
+        plugins = build_plugins(
+            task,
+            enable_langfuse,
+            code_agent_mcp_timeout=code_agent_mcp_timeout,
+            task_timeout_seconds=task_timeout,
+        )
+        telemetry = next(
+            (plugin for plugin in plugins if isinstance(plugin, ResearchTelemetry)),
+            None,
+        )
+        maw = MAW(
+            meta_model=meta_model,
+            mcp_servers=mcp_registry,
+            worker_models=[worker_model],
+            plugins=plugins,
+            max_retries=_env_int("FEDOTMAS_GAIA_MAW_MAX_RETRIES", 1),
+            max_agent_llm_turns=_gaia_max_agent_llm_turns(),
+            two_stage=False,
+        )
+        # The pipeline retains partial state with an explicit timed_out status.
+        # The outer wait_for is a hard backstop for meta-generation hangs;
         # it is set well above the execution budget so the inner timeout fires
         # first and partial state is preserved.
-        state = await asyncio.wait_for(
-            maw.run(query, timeout=task_timeout),
-            timeout=task_timeout
-            + _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_BACKSTOP_SECONDS", 180),
+        outer_task_deadline = time.monotonic() + task_timeout
+        run_kwargs = {
+            "initial_state": {
+                TASK_DEADLINE_STATE_KEY: outer_task_deadline,
+                GAIA_TASK_FILE_PATH_STATE_KEY: task.file_path,
+            },
+            "timeout": task_timeout,
+            "final_answer_contract": final_answer_contract,
+        }
+        if frozen_config is None:
+            execution = maw.run(query, **run_kwargs)
+        else:
+            execution = maw.build_and_run(frozen_config, query, **run_kwargs)
+        try:
+            state = await asyncio.wait_for(
+                execution,
+                timeout=task_timeout
+                + _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_BACKSTOP_SECONDS", 180),
+            )
+        finally:
+            if frozen_config is not None:
+                finalize = getattr(maw, "_finalize_langfuse", None)
+                if finalize is not None:
+                    finalize()
+        pipeline_result = maw.last_result
+        pipeline_status = getattr(pipeline_result, "status", "completed")
+        config = getattr(maw, "generated_config", None)
+        if config is None:
+            raise ValueError("MAW has no generated configuration")
+        final_agent = getattr(config, "final_answer_agent", None)
+        if final_agent is None:
+            terminal_node = _find_terminal_node(config.pipeline)
+            final_agent = (
+                terminal_node.agent_name if terminal_node.type == "agent" else None
+            )
+        if not final_agent:
+            raise ValueError(
+                "Cannot infer final_answer_agent: the pipeline must end in one agent"
+            )
+        agents = {agent.name: agent for agent in config.agents}
+        terminal = agents.get(final_agent)
+        if terminal is None:
+            raise ValueError(
+                f"Configured terminal agent '{final_agent}' is missing from config"
+            )
+        terminal_value = state.get(terminal.output_key)
+        completion = state.get(ABSTENTION_STATE_KEY)
+        terminal_abstained = is_explicit_abstention(terminal_value) or (
+            isinstance(completion, dict) and completion.get("status") == "abstained"
         )
+        terminal_unresolved = is_unresolved_answer(terminal_value)
+        answer = normalize_answer(extract_terminal_answer(state, terminal.output_key))
+        execution_issues = unresolved_execution_issues(state)
+        pipeline_diagnostics = _pipeline_diagnostics(state)
+        if pipeline_status in {"failed", "timed_out"}:
+            raise RuntimeError(
+                f"MAW execution ended with status '{pipeline_status}'; "
+                "partial state is retained for diagnostics"
+            )
+        if terminal_abstained:
+            answer = ""
+            raise RuntimeError("Configured terminal agent explicitly abstained")
+        if terminal_unresolved:
+            answer = ""
+            raise RuntimeError(
+                "Configured terminal agent returned an explicit unresolved/non-answer result"
+            )
+        if not answer:
+            raise ValueError(
+                f"Configured terminal output '{terminal.output_key}' is missing"
+            )
+        if (
+            pipeline_status == "incomplete"
+            and not extract_solution(str(terminal_value)).strip()
+        ):
+            raise RuntimeError(
+                "Incomplete pipeline has no extractable concrete terminal answer"
+            )
+        if pipeline_status == "incomplete" and _has_unresolved_answer_lineage(
+            execution_issues, terminal
+        ):
+            answer = ""
+            raise RuntimeError(
+                "Incomplete pipeline has unresolved semantic answer lineage"
+            )
+        if pipeline_status == "incomplete" and not _matches_declared_answer_format(
+            answer, task
+        ):
+            answer = ""
+            raise RuntimeError(
+                "Incomplete pipeline terminal answer does not satisfy the declared answer_format"
+            )
+        if pipeline_status != "completed":
+            _log.warning(
+                "Accepting terminal answer despite non-completed pipeline status | "
+                "task_id={} status={} unresolved_execution_issues={!r} "
+                "execution_diagnostics={!r}",
+                task.task_id,
+                pipeline_status,
+                execution_issues,
+                pipeline_diagnostics,
+            )
+        terminal_output_ready = True
+        is_correct = (
+            None
+            if _is_custom_task(task)
+            else gaia_benchmark.is_correct_answer(answer, task.ground_truth)
+        )
+
+        result = {
+            "task_id": task.task_id,
+            "question": task.question,
+            "response": answer,
+            "ground_truth": task.ground_truth,
+            "difficulty": task.difficulty,
+            "is_correct": is_correct,
+            "attempt": attempt_number,
+            "attempt_status": "succeeded",
+            "pipeline_status": pipeline_status,
+            "session_state": {k: str(v) for k, v in state.items()},
+            "maw_config": _generated_config(maw),
+            **_config_provenance(
+                frozen_config, frozen_config_source, frozen_config_sha256
+            ),
+            "tokens": _token_usage(maw, pipeline_result),
+            "elapsed": maw.elapsed,
+            "research_telemetry": telemetry.snapshot() if telemetry else {},
+            "unresolved_execution_issues": execution_issues,
+            "pipeline_diagnostics": pipeline_diagnostics,
+        }
+        await _write_attempt(task_log_dir, attempt_number, result)
+        return result
     except Exception as exc:
+        partial_result = getattr(exc, "result", None)
+        partial_state = getattr(partial_result, "state", None)
+        if not state and isinstance(partial_state, dict):
+            state = partial_state
+        if not state and maw is not None:
+            maw_partial = getattr(maw, "last_result", None)
+            maw_state = getattr(maw_partial, "state", None)
+            if isinstance(maw_state, dict):
+                state = maw_state
+        pipeline_status = getattr(partial_result, "status", None)
+        if pipeline_status is None:
+            pipeline_status = getattr(getattr(maw, "last_result", None), "status", None)
+        if pipeline_status is None:
+            pipeline_status = "timed_out" if isinstance(exc, TimeoutError) else "failed"
+        artifact = {
+            "task_id": task.task_id,
+            "question": task.question,
+            "difficulty": task.difficulty,
+            "attempt": attempt_number,
+            "response": answer,
+            "attempt_status": (
+                "incomplete"
+                if pipeline_status in {"timed_out", "limited", "incomplete"}
+                else "failed"
+            ),
+            "pipeline_status": pipeline_status,
+            "error": str(exc),
+            **root_cause_summary(exc),
+            "session_state": {k: str(v) for k, v in state.items()},
+            "maw_config": _generated_config(maw),
+            **_config_provenance(
+                frozen_config, frozen_config_source, frozen_config_sha256
+            ),
+            "tokens": _token_usage(
+                maw,
+                getattr(maw, "last_result", None)
+                if maw is not None
+                else partial_result,
+            ),
+            "elapsed": getattr(maw, "elapsed", 0.0) if maw is not None else 0.0,
+            "research_telemetry": telemetry.snapshot() if telemetry else {},
+            "unresolved_execution_issues": unresolved_execution_issues(state),
+            "pipeline_diagnostics": _pipeline_diagnostics(state),
+        }
+        if pipeline_status == "incomplete":
+            _log.warning(
+                "GAIA pipeline incomplete | task_id={} unresolved_execution_issues={!r}",
+                task.task_id,
+                artifact["unresolved_execution_issues"],
+            )
+        if terminal_output_ready:
+            artifact["attempt_status"] = "postprocessing_failed"
+            try:
+                await _write_attempt(task_log_dir, attempt_number, artifact)
+            except Exception as artifact_error:  # noqa: BLE001 - preserve completed run
+                artifact["artifact_write_error"] = str(artifact_error)
+                _log.error(
+                    "Could not persist completed pipeline diagnostics: {}",
+                    artifact_error,
+                )
+            raise CompletedPipelinePostProcessingError(exc, artifact) from exc
+        await _write_attempt(task_log_dir, attempt_number, artifact)
         if _is_provider_error(exc):
             raise ProviderErrorCooldown(str(exc)) from exc
         raise
 
-    answer = normalize_answer(extract_answer_from_state(state))
-    if not answer:
-        raise ValueError("MAW produced no non-empty answer")
-    is_correct = gaia_benchmark.is_correct_answer(answer, task.ground_truth)
 
-    pipeline_result = maw.last_result
+def _generated_config(maw: MAW | None) -> dict[str, Any] | None:
+    config = getattr(maw, "generated_config", None) if maw is not None else None
+    return config.model_dump(mode="json") if config is not None else None
 
-    result = {
-        "task_id": task.task_id,
-        "question": task.question,
-        "response": answer,
-        "ground_truth": task.ground_truth,
-        "difficulty": task.difficulty,
-        "is_correct": is_correct,
-        "session_state": {k: str(v) for k, v in state.items()},
-        "tokens": {
-            "meta_prompt": maw.meta_prompt_tokens,
-            "meta_completion": maw.meta_completion_tokens,
-            "pipeline_prompt": pipeline_result.total_prompt_tokens
-            if pipeline_result
-            else 0,
-            "pipeline_completion": pipeline_result.total_completion_tokens
-            if pipeline_result
-            else 0,
-            "total_prompt": maw.total_prompt_tokens,
-            "total_completion": maw.total_completion_tokens,
-        },
-        "elapsed": maw.elapsed,
+
+def _config_provenance(
+    config: MAWConfig | None, source: str | None, sha256: str | None
+) -> dict[str, str]:
+    if config is None:
+        return {"config_mode": "generated"}
+    return {
+        "config_mode": "frozen",
+        "frozen_config_source": source or "",
+        "frozen_config_sha256": sha256 or "",
     }
 
-    # Save per-task result
+
+def _load_frozen_config(path: str | Path) -> tuple[MAWConfig, str]:
+    source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(f"Frozen MAW config file not found: {source}")
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid JSON in frozen MAW config {source}: {exc}") from exc
+    if isinstance(payload, dict) and "maw_config" in payload:
+        payload = payload["maw_config"]
+    elif isinstance(payload, dict) and "agents" not in payload:
+        raise ValueError(f"Frozen MAW config is missing maw_config in {source}")
+    if payload is None:
+        raise ValueError(f"Frozen MAW config is missing or null in {source}")
+    try:
+        config = MAWConfig.model_validate(payload)
+    except Exception as exc:
+        raise ValueError(f"Invalid MAWConfig in {source}: {exc}") from exc
+    canonical = json.dumps(
+        config.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return config, hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _token_usage(maw: MAW | None, pipeline_result: Any) -> dict[str, int]:
+    def count(value: Any) -> int:
+        return int(value) if isinstance(value, (int, float)) else 0
+
+    meta_prompt = count(getattr(maw, "meta_prompt_tokens", 0))
+    meta_completion = count(getattr(maw, "meta_completion_tokens", 0))
+    pipeline_prompt = count(getattr(pipeline_result, "total_prompt_tokens", 0))
+    pipeline_completion = count(getattr(pipeline_result, "total_completion_tokens", 0))
+    return {
+        "meta_prompt": meta_prompt,
+        "meta_completion": meta_completion,
+        "pipeline_prompt": pipeline_prompt,
+        "pipeline_completion": pipeline_completion,
+        "total_prompt": meta_prompt + pipeline_prompt,
+        "total_completion": meta_completion + pipeline_completion,
+    }
+
+
+def _pipeline_diagnostics(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in state.items()
+        if key.startswith(("_fedotmas_", "__fedotmas_"))
+    }
+
+
+async def _write_attempt(
+    task_log_dir: Path, attempt_number: int, artifact: dict[str, Any]
+) -> None:
+    relative_path = f"attempts/attempt_{attempt_number:02d}.json"
+    artifact["attempt_artifact"] = relative_path
+    path = task_log_dir / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(
+        path.write_text,
+        json.dumps(artifact, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+
+
+def _read_attempt_record(task_log_dir: Path, attempt_number: int) -> dict[str, Any]:
+    path = task_log_dir / "attempts" / f"attempt_{attempt_number:02d}.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {
+        "attempt": attempt_number,
+        "attempt_status": "failed",
+        "attempt_artifact": str(path.relative_to(task_log_dir)),
+        "error": "Attempt failed before diagnostics could be written.",
+        "tokens": {},
+        "research_telemetry": {},
+    }
+
+
+def _attempt_summaries(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    fields = (
+        "attempt",
+        "attempt_status",
+        "error",
+        "root_cause",
+        "last_exception",
+        "attempt_artifact",
+        "tokens",
+        "research_telemetry",
+    )
+    summaries = []
+    for record in records:
+        summary = {key: record[key] for key in fields if key in record}
+        if "research_telemetry" in summary:
+            summary["research_telemetry"] = _public_research_telemetry(
+                summary["research_telemetry"]
+            )
+        summaries.append(summary)
+    return summaries
+
+
+def _attempt_diagnostics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    token_keys = (
+        "meta_prompt",
+        "meta_completion",
+        "pipeline_prompt",
+        "pipeline_completion",
+        "total_prompt",
+        "total_completion",
+    )
+    tokens = {key: 0 for key in token_keys}
+    telemetry: dict[str, dict[str, int | float]] = {}
+    elapsed = 0.0
+    unique_queries: dict[str, set[str]] = {}
+    discovered_urls: dict[str, set[str]] = {}
+    inspected_urls: dict[str, set[str]] = {}
+    cardinality_keys = {"unique_queries", "urls_discovered", "urls_inspected"}
+    for record in records:
+        if isinstance(record.get("elapsed"), (int, float)):
+            elapsed += record["elapsed"]
+        for key, value in record.get("tokens", {}).items():
+            if key in tokens and isinstance(value, (int, float)):
+                tokens[key] += int(value)
+        for agent, metrics in record.get("research_telemetry", {}).items():
+            if not isinstance(metrics, dict):
+                continue
+            target = telemetry.setdefault(agent, {})
+            for key, value in metrics.items():
+                if key.startswith("_"):
+                    continue
+                if key in cardinality_keys:
+                    continue
+                if isinstance(value, (int, float)):
+                    target[key] = target.get(key, 0) + value
+            for key, target_sets in (
+                ("_query_fingerprints", unique_queries),
+                ("_discovered_urls", discovered_urls),
+                ("_inspected_urls", inspected_urls),
+            ):
+                values = metrics.get(key)
+                if isinstance(values, list):
+                    target_sets.setdefault(agent, set()).update(
+                        value for value in values if isinstance(value, str)
+                    )
+            for metric, sources in (
+                ("unique_queries", unique_queries),
+                ("urls_discovered", discovered_urls),
+                ("urls_inspected", inspected_urls),
+            ):
+                if agent in sources:
+                    target[metric] = len(sources[agent])
+    return {
+        "tokens": tokens,
+        "research_telemetry": telemetry,
+        "attempts": _attempt_summaries(records),
+        "elapsed": elapsed,
+    }
+
+
+def _public_research_telemetry(
+    telemetry: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    return {
+        agent: {key: value for key, value in metrics.items() if not key.startswith("_")}
+        for agent, metrics in telemetry.items()
+        if isinstance(metrics, dict)
+    }
+
+
+def _copy_attempt_fields(destination: dict[str, Any], record: dict[str, Any]) -> None:
+    for key in (
+        "session_state",
+        "maw_config",
+        "config_mode",
+        "frozen_config_source",
+        "frozen_config_sha256",
+        "attempt_status",
+        "pipeline_status",
+        "unresolved_execution_issues",
+        "error",
+    ):
+        if key in record:
+            destination[key] = record[key]
+
+
+async def _write_task_result(
+    task_log_dir: Path, result: dict[str, Any], *, leaderboard_answer: str
+) -> None:
     task_log_dir.mkdir(parents=True, exist_ok=True)
-    with open(task_log_dir / "result.json", "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False, default=str)
+    await asyncio.to_thread(
+        (task_log_dir / "result.json").write_text,
+        json.dumps(result, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    await asyncio.to_thread(
+        (task_log_dir / "leaderboard.json").write_text,
+        json.dumps(
+            {"task_id": result["task_id"], "model_answer": leaderboard_answer},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
-    leaderboard = {"task_id": task.task_id, "model_answer": answer}
-    with open(task_log_dir / "leaderboard.json", "w", encoding="utf-8") as f:
-        json.dump(leaderboard, f, indent=2)
 
-    return result
-
-
-async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any:
+async def run_gaia(
+    difficulty: str,
+    split: str,
+    *,
+    enable_langfuse: bool,
+    task_ids: list[str] | None = None,
+    task_file: str | None = None,
+    frozen_config_path: str | None = None,
+) -> Any:
     """Run GAIA benchmark using FEDOT.MAS MAW."""
+    if frozen_config_path and not task_file:
+        raise ValueError("--frozen-config can only be used with --task-file")
+    frozen_config = None
+    frozen_config_sha256 = None
+    if frozen_config_path:
+        frozen_config, frozen_config_sha256 = _load_frozen_config(frozen_config_path)
+        _log.info(
+            "MAW config mode: frozen | source={} sha256={}",
+            frozen_config_path,
+            frozen_config_sha256,
+        )
+    else:
+        _log.info("MAW config mode: generated")
     base_log_dir = Path(__file__).resolve().parent / "gaia_logs" / f"run_{RUN_ID}"
     base_log_dir.mkdir(parents=True, exist_ok=True)
 
     _log.info("Logs will be saved to: {}", base_log_dir)
-    _log.info("Loading GAIA benchmark (difficulty={}, split={})", difficulty, split)
+    meta_model = _gaia_meta_model()
+    worker_model = _gaia_worker_model()
+    _log_selected_models(meta_model, worker_model)
     await preflight_startup_models()
 
     gaia = GaiaBenchmark({"difficulty": difficulty, "split": split})
-    gaia.download()
+    if task_file:
+        task_path = Path(task_file)
+        tasks = [_task_from_file(task_path)]
+        _log.info("Loading custom task from {}", task_path)
+    else:
+        _log.info("Loading GAIA benchmark (difficulty={}, split={})", difficulty, split)
+        gaia.download()
+        tasks = list(gaia)
+
+    if task_ids:
+        wanted = set(task_ids)
+        tasks = [task for task in tasks if task.task_id in wanted]
+
+        found = {task.task_id for task in tasks}
+        missing = wanted - found
+        if missing:
+            raise ValueError(
+                f"GAIA task IDs not found in split {split!r}: {sorted(missing)}"
+            )
 
     results = []
     provider_cooldown = ProviderCooldown(
         _env_int("FEDOTMAS_GAIA_PROVIDER_ERROR_COOLDOWN_SECONDS", 300)
     )
 
-    for task in tqdm(gaia, desc="Processing GAIA tasks"):
+    for task in tqdm(tasks, desc="Processing GAIA tasks"):
         await provider_cooldown.wait_if_active()
         task_log_dir = base_log_dir / f"task_{task.task_id}"
         try:
@@ -816,16 +1668,26 @@ async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any
                 gaia,
                 task_log_dir,
                 enable_langfuse=enable_langfuse,
+                frozen_config=frozen_config,
+                frozen_config_source=frozen_config_path,
+                frozen_config_sha256=frozen_config_sha256,
             )
-            status = "CORRECT" if result["is_correct"] else "WRONG"
-            _log.info(
-                "[{}] task={} answer='{}' gt='{}'",
-                status,
-                task.task_id,
-                result["response"][:60],
-                task.ground_truth,
-            )
-        except Exception as e:
+            if _is_custom_task(task):
+                _log.info(
+                    "[CUSTOM] task={} answer='{}'",
+                    task.task_id,
+                    result["response"][:60],
+                )
+            else:
+                status = "CORRECT" if result["is_correct"] else "WRONG"
+                _log.info(
+                    "[{}] task={} answer='{}' gt='{}'",
+                    status,
+                    task.task_id,
+                    result["response"][:60],
+                    task.ground_truth,
+                )
+        except Exception as e:  # noqa: BLE001 - retain an artifact for every task failure
             cause = root_cause_summary(e)
             if isinstance(e, ProviderErrorCooldown) or _is_provider_error(e):
                 provider_cooldown.activate(str(e))
@@ -844,19 +1706,38 @@ async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any
                 "response": "",
                 "ground_truth": task.ground_truth,
                 "difficulty": task.difficulty,
-                "is_correct": False,
+                "is_correct": None if _is_custom_task(task) else False,
                 "error": str(e),
                 **cause,
             }
+            partial_path = task_log_dir / "result.json"
+            if partial_path.exists():
+                partial = json.loads(partial_path.read_text(encoding="utf-8"))
+                for key in (
+                    "maw_config",
+                    "config_mode",
+                    "frozen_config_source",
+                    "frozen_config_sha256",
+                    "session_state",
+                    "tokens",
+                    "research_telemetry",
+                    "attempts",
+                    "elapsed",
+                    "unresolved_execution_issues",
+                ):
+                    if key in partial:
+                        result[key] = partial[key]
             task_log_dir.mkdir(parents=True, exist_ok=True)
-            with open(task_log_dir / "result.json", "w", encoding="utf-8") as f:
-                json.dump(result, f, indent=2, ensure_ascii=False, default=str)
-            with open(task_log_dir / "leaderboard.json", "w", encoding="utf-8") as f:
-                json.dump(
-                    {"task_id": task.task_id, "model_answer": ""},
-                    f,
-                    indent=2,
-                )
+            await asyncio.to_thread(
+                (task_log_dir / "result.json").write_text,
+                json.dumps(result, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+            await asyncio.to_thread(
+                (task_log_dir / "leaderboard.json").write_text,
+                json.dumps({"task_id": task.task_id, "model_answer": ""}, indent=2),
+                encoding="utf-8",
+            )
 
         results.append(result)
 
@@ -869,14 +1750,19 @@ async def run_gaia(difficulty: str, split: str, *, enable_langfuse: bool) -> Any
             "split": split,
             "num_tasks": len(results),
             "langfuse_enabled": enable_langfuse,
+            "task_file": task_file,
+            "config_mode": "frozen" if frozen_config is not None else "generated",
         },
         "metrics": metrics_by_level,
         "token_summary": token_summary,
         "results": results,
     }
 
-    with open(base_log_dir / "results.json", "w") as f:
-        json.dump(output_data, f, indent=2, ensure_ascii=False, default=str)
+    await asyncio.to_thread(
+        (base_log_dir / "results.json").write_text,
+        json.dumps(output_data, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
 
     print_score_by_level(metrics_by_level)
     print_token_summary(token_summary)
@@ -897,14 +1783,33 @@ def main():
         "--split",
         type=str,
         default="validation",
-        help="Dataset split (default: validation[:1])",
+        help="Dataset split (default: validation)",
     )
     parser.add_argument(
         "--no-langfuse",
         action="store_true",
         help="Disable Langfuse tracing for this GAIA run.",
     )
+    parser.add_argument(
+        "--task-id",
+        action="append",
+        default=None,
+        help="Run only this GAIA task_id. Can be specified multiple times.",
+    )
+    parser.add_argument(
+        "--task-file",
+        type=str,
+        help="Run one local UTF-8 text task instead of loading GAIA.",
+    )
+    parser.add_argument(
+        "--frozen-config",
+        type=str,
+        help="Replay a validated MAW config (requires --task-file).",
+    )
     args = parser.parse_args()
+
+    if args.frozen_config and not args.task_file:
+        parser.error("--frozen-config requires --task-file")
 
     enable_langfuse = _env_flag("GAIA_ENABLE_LANGFUSE", True) and not args.no_langfuse
     asyncio.run(
@@ -912,6 +1817,9 @@ def main():
             difficulty=args.difficulty,
             split=args.split,
             enable_langfuse=enable_langfuse,
+            task_ids=args.task_id,
+            task_file=args.task_file,
+            frozen_config_path=args.frozen_config,
         )
     )
 

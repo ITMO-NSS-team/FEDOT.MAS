@@ -1,0 +1,192 @@
+{
+  "agents": [
+    {
+      "name": "task_reader",
+      "instruction": "Read the local task file at /Users/daniel/Documents/nss_lab/TOWERS_FEDOT/FEDOT.MAS/tower_task.txt using the document tool (read_document / find_document). Extract and report, verbatim where possible: (1) the exact question or deliverable being asked, (2) any exactness requirements (precision, rounding, units, casing, ordering), (3) the exact required answer format or submission template, and (4) any constraints on how the answer must be produced. Do NOT solve the task. Return a JSON object with fields: task_statement, exactness_requirements, answer_format, constraints, and any referenced data files or paths mentioned in the task. Preserve literal markup and any required tags exactly.",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "output_key": "task_spec",
+      "tools": [
+        "document"
+      ],
+      "max_output_tokens": null,
+      "max_llm_turns": null,
+      "output_contract": {
+        "description": "Structured extraction of the task's requirements and answer format.",
+        "required_fields": [
+          "task_statement",
+          "exactness_requirements",
+          "answer_format"
+        ],
+        "identity_fields": [
+          "task_statement"
+        ]
+      },
+      "input_requirements": [],
+      "research_mode": "inspection_only",
+      "research_policy": "independent"
+    },
+    {
+      "name": "solver",
+      "instruction": "Solve the task described in {task_spec?}. The original task file is the source of truth and is located at /Users/daniel/Documents/nss_lab/TOWERS_FEDOT/FEDOT.MAS/tower_task.txt. Use the code-agent tool via solve_with_code(files=[\"/Users/daniel/Documents/nss_lab/TOWERS_FEDOT/FEDOT.MAS/tower_task.txt\"]) to parse the file and perform any required computation, filtering, or analysis programmatically. Do NOT copy file contents into the task or context fields — pass the host path via files. Honor every exactness requirement and the exact answer format specified in {task_spec?}. Return a JSON object with fields: answer (the exact formatted answer), method (how it was computed), and evidence (key intermediate values or checks).",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "output_key": "solution",
+      "tools": [
+        "code-agent"
+      ],
+      "max_output_tokens": null,
+      "max_llm_turns": null,
+      "output_contract": {
+        "description": "Computed solution with the exact formatted answer.",
+        "required_fields": [
+          "answer",
+          "method"
+        ],
+        "identity_fields": [
+          "answer",
+          "task_statement"
+        ]
+      },
+      "input_requirements": [
+        {
+          "source_key": "task_spec",
+          "required_fields": [
+            "task_statement",
+            "exactness_requirements",
+            "answer_format"
+          ],
+          "identity_fields": [
+            "task_statement"
+          ],
+          "purpose": "Follow the exact task statement, exactness requirements, and required answer format when computing the solution."
+        }
+      ],
+      "research_mode": "mixed",
+      "research_policy": "evidence_first"
+    },
+    {
+      "name": "verifier",
+      "instruction": "Verify the solution in {solution?} against the requirements in {task_spec?}. First determine the requested value/entity type and its expected namespace, unit, precision, and format from {task_spec?}. Check whether the answer in {solution?} matches that interpretation and satisfies every exactness requirement and the exact answer format. Independently re-derive or re-check the critical computation using the code-agent tool via solve_with_code(files=[\"/Users/daniel/Documents/nss_lab/TOWERS_FEDOT/FEDOT.MAS/tower_task.txt\"]) when a numeric or structured check is needed. Report any mismatch, and if the answer is wrong, provide the corrected answer. Return a JSON object with fields: verified_answer, decision (accept/reject), and notes on any discrepancy.",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "output_key": "verified_result",
+      "tools": [
+        "code-agent"
+      ],
+      "max_output_tokens": null,
+      "max_llm_turns": null,
+      "output_contract": {
+        "description": "Verified or corrected answer with a decision.",
+        "required_fields": [
+          "verified_answer",
+          "decision"
+        ],
+        "identity_fields": [
+          "verified_answer",
+          "answer",
+          "task_statement"
+        ]
+      },
+      "input_requirements": [
+        {
+          "source_key": "solution",
+          "required_fields": [
+            "answer",
+            "method"
+          ],
+          "identity_fields": [
+            "answer"
+          ],
+          "purpose": "Verify the computed answer and method."
+        },
+        {
+          "source_key": "task_spec",
+          "required_fields": [
+            "task_statement",
+            "exactness_requirements",
+            "answer_format"
+          ],
+          "identity_fields": [
+            "task_statement"
+          ],
+          "purpose": "Confirm the answer matches the required interpretation and format."
+        }
+      ],
+      "research_mode": "mixed",
+      "research_policy": "targeted_recovery"
+    },
+    {
+      "name": "answerer",
+      "instruction": "Produce the final caller-facing answer using the verified result {verified_result?} and the required format from {task_spec?}. Output exactly the answer in the format specified by the task, with no extra commentary, and satisfy every exactness requirement.",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "output_key": "final_answer",
+      "tools": [],
+      "max_output_tokens": null,
+      "max_llm_turns": null,
+      "output_contract": {
+        "description": "Terminal caller-facing answer in the required format.",
+        "required_fields": [
+          "final_answer"
+        ],
+        "identity_fields": [
+          "final_answer"
+        ]
+      },
+      "input_requirements": [
+        {
+          "source_key": "verified_result",
+          "required_fields": [
+            "verified_answer",
+            "decision"
+          ],
+          "identity_fields": [
+            "verified_answer"
+          ],
+          "purpose": "Use the verified answer as the basis for the final response."
+        },
+        {
+          "source_key": "task_spec",
+          "required_fields": [
+            "answer_format"
+          ],
+          "identity_fields": [
+            "task_statement"
+          ],
+          "purpose": "Apply the exact required answer format."
+        }
+      ],
+      "research_mode": "mixed",
+      "research_policy": "evidence_first"
+    }
+  ],
+  "pipeline": {
+    "type": "sequential",
+    "agent_name": null,
+    "children": [
+      {
+        "type": "agent",
+        "agent_name": "task_reader",
+        "children": [],
+        "max_iterations": null
+      },
+      {
+        "type": "agent",
+        "agent_name": "solver",
+        "children": [],
+        "max_iterations": null
+      },
+      {
+        "type": "agent",
+        "agent_name": "verifier",
+        "children": [],
+        "max_iterations": null
+      },
+      {
+        "type": "agent",
+        "agent_name": "answerer",
+        "children": [],
+        "max_iterations": null
+      }
+    ],
+    "max_iterations": null
+  },
+  "final_answer_agent": "answerer"
+}

@@ -3,7 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from fedotmas.mcp._config import DEFAULT_MCP_TIMEOUT_S, StdioMCPServer
+from fedotmas.mcp import discovery
 from fedotmas.mcp.discovery import discover_local_servers
+
+
+def test_uv_next_to_active_interpreter_is_used_without_path(tmp_path, monkeypatch):
+    """GUI may run a venv interpreter directly, without activating its Scripts path."""
+    uv_name = "uv.exe" if discovery.os.name == "nt" else "uv"
+    uv = tmp_path / uv_name
+    uv.touch()
+    monkeypatch.setattr(discovery.sys, "executable", str(tmp_path / "python.exe"))
+    monkeypatch.setattr("shutil.which", lambda command: None)
+    monkeypatch.setattr(discovery, "_UV_BIN", None)
+
+    assert discovery._get_uv_bin() == str(uv)
 
 
 def _write_toml(tmp_path: Path, name: str, content: str) -> None:
@@ -37,6 +50,13 @@ mcp.timeout = 120
         assert srv.timeout == 120
         assert srv.description == "Headless browser"
         assert srv.tags == ("web",)
+
+    def test_sandbox_description_explains_agent_local_persistence(self):
+        root = Path(__file__).resolve().parents[4]
+        sandbox = discover_local_servers(root / "mcp-servers")["sandbox"]
+
+        assert "local to one agent/tool session" in sandbox.description
+        assert "Pass semantic results through pipeline state" in sandbox.description
 
     def test_command_without_args(self, tmp_path):
         _write_toml(
@@ -126,7 +146,16 @@ mcp-classic = "mcp_classic:main"
 
     def test_default_when_unset(self, tmp_path, monkeypatch):
         monkeypatch.delenv("FEDOTMAS_MCP_TIMEOUT_S", raising=False)
-        assert self._scan(tmp_path).timeout == DEFAULT_MCP_TIMEOUT_S
+        server = self._scan(tmp_path)
+        assert server.timeout == DEFAULT_MCP_TIMEOUT_S
+        assert server.args[:5] == (
+            "run",
+            "--directory",
+            str(tmp_path / "classic"),
+            "python",
+            "-c",
+        )
+        assert server.args[-1] == "mcp_classic:main"
 
     def test_env_overrides_default(self, tmp_path, monkeypatch):
         monkeypatch.setenv("FEDOTMAS_MCP_TIMEOUT_S", "600")

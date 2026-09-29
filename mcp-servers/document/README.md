@@ -6,7 +6,8 @@ Extract text from documents and archives using [MarkItDown](https://github.com/m
 
 | Tool | Description |
 |------|-------------|
-| `read_document` | Read a document and extract text as markdown (PDF, DOCX, PPTX, XLSX, CSV, HTML, etc.) |
+| `read_document` | Read a document and extract text as markdown (PDF, DOCX, PPTX, XLS, XLSX, CSV, JSON, XML, HTML, etc.) with `start_line`/`max_lines` or the returned `next_start_char` cursor |
+| `find_document` | Find text in a large document and return matching line numbers with context |
 | `list_zip_contents` | List contents of a ZIP archive without extracting |
 | `extract_zip` | Extract a ZIP archive to the local filesystem |
 

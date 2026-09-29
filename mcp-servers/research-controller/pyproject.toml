@@ -1,0 +1,37 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.10.3,<0.11" ]
+
+[project]
+name = "mcp-research-controller"
+version = "0.1.0"
+description = "Stateful research loop controller MCP server"
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [ "fastmcp>=2.14.5" ]
+scripts.mcp-research-controller = "mcp_research_controller.server:main"
+
+[dependency-groups]
+dev = [ "pytest", "pytest-asyncio" ]
+
+[tool.pytest]
+ini_options.asyncio_mode = "auto"
+
+[tool.fedotmas]
+mcp.name = "research-controller"
+mcp.description = """
+Lightweight state and next-action guidance for long-horizon research. Assign it to
+research agents as part of their procedure before expensive searches, after repeated
+searches or failures, and before synthesis or handoff. Pass the returned
+research_state JSON snapshot to each operation and store each updated snapshot in
+FEDOT session state; send only new query and failure events. The controller returns
+structured actions (continue_search, change_strategy, synthesize, strategy_blocked)
+from get_next_action after state is updated with update_research_state, with compact
+telemetry. It does not search, browse, scrape, or verify sources.
+"""
+mcp.tags = [ "research", "planning", "state" ]

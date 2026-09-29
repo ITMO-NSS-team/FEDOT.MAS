@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
-from pydantic import BaseModel
-
 from fedotmas._settings import ModelConfig, resolve_model_config
-from fedotmas.common.llm import _ERROR_PAYLOAD_LEN, _ProxyClient, make_llm
+from fedotmas.common.codex_cli import CodexCliLlm
+from fedotmas.common.llm import (
+    _ERROR_PAYLOAD_LEN,
+    LLMRequestTimeout,
+    _invalid_tool_argument_names,
+    _ProxyClient,
+    llm_request_deadline,
+    make_llm,
+)
 from fedotmas.mas.builder import build_routing_system
 from fedotmas.mas.models import MASConfig
+from google.adk.models.lite_llm import LiteLlm, _function_declaration_to_tool_param
+from pydantic import BaseModel
 
 
 class _ErrorResponse(BaseModel):
@@ -53,7 +62,27 @@ def _response(finish_reason: str = "stop"):
     return response
 
 
+def _tool_response(arguments: str):
+    response = _response("tool_calls")
+    response.model_dump.return_value["choices"][0]["message"] = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "example_tool", "arguments": arguments},
+            }
+        ],
+    }
+    return response
+
+
 class TestMakeLlm:
+    def test_creates_codex_cli_llm_for_host_model(self):
+        llm = make_llm(ModelConfig(model="host/gpt-5.6-terra"))
+        assert isinstance(llm, CodexCliLlm)
+        assert llm.model == "host/gpt-5.6-terra"
+
     def test_creates_litellm_with_model(self):
         cfg = ModelConfig(model="openrouter/meta-llama/llama-3-70b")
         llm = make_llm(cfg)
@@ -299,3 +328,246 @@ class TestProxyClientErrors:
             + _ERROR_PAYLOAD_LEN
             + len("... (truncated)")
         )
+
+
+class TestProxyClientToolArgumentValidation:
+    def test_text_completion_with_no_tool_calls_is_valid(self):
+        assert (
+            _invalid_tool_argument_names(
+                {"choices": [{"message": {"role": "assistant", "tool_calls": None}}]}
+            )
+            == []
+        )
+
+    def test_empty_tool_calls_are_valid(self):
+        assert (
+            _invalid_tool_argument_names(
+                {"choices": [{"message": {"role": "assistant", "tool_calls": []}}]}
+            )
+            == []
+        )
+
+    def test_missing_or_empty_choices_are_valid(self):
+        assert _invalid_tool_argument_names({"choices": None}) == []
+        assert _invalid_tool_argument_names({"choices": []}) == []
+        assert _invalid_tool_argument_names({}) == []
+
+    def test_valid_and_invalid_tool_arguments_are_distinguished(self):
+        assert _invalid_tool_argument_names(_tool_response('{"value": 1}')) == []
+        assert _invalid_tool_argument_names(_tool_response("{")) == ["example_tool"]
+
+    async def test_retries_malformed_tool_arguments_then_returns_valid_response(self):
+        client = _client_with_response(_tool_response('{"broken":'))
+        valid = _tool_response('{"value": 1}')
+        client._client.chat.completions.create.side_effect = [
+            _tool_response('{"broken":'),
+            valid,
+        ]
+
+        result = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert (
+            result.choices[0].message.tool_calls[0].function.arguments == '{"value": 1}'
+        )
+        assert client._client.chat.completions.create.await_count == 2
+        retry = client._client.chat.completions.create.await_args_list[1].kwargs
+        assert retry["messages"][-1]["content"].startswith("The previous tool-call")
+        assert "max_tokens" not in retry
+
+    async def test_explicit_output_limit_is_preserved(self):
+        client = _client_with_response(_response())
+        await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], [], max_tokens=1234
+        )
+        assert (
+            client._client.chat.completions.create.await_args.kwargs["max_tokens"]
+            == 1234
+        )
+
+    async def test_usage_from_malformed_argument_retry_is_aggregated(self):
+        malformed = _tool_response("{")
+        malformed.model_dump.return_value["usage"] = {
+            "prompt_tokens": 11,
+            "completion_tokens": 5,
+            "total_tokens": 16,
+        }
+        valid = _tool_response('{"ok": true}')
+        valid.model_dump.return_value["usage"] = {
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
+            "total_tokens": 10,
+        }
+        client = _client_with_response(malformed)
+        client._client.chat.completions.create.side_effect = [malformed, valid]
+
+        response = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert response.usage.prompt_tokens == 18
+        assert response.usage.completion_tokens == 8
+        assert response.usage.total_tokens == 26
+
+    async def test_usage_survives_transport_error_during_retry(self):
+        malformed = _tool_response("{")
+        malformed.model_dump.return_value["usage"] = {
+            "prompt_tokens": 11,
+            "completion_tokens": 5,
+            "total_tokens": 16,
+        }
+        transport_error = RuntimeError("transport retry failed")
+        client = _client_with_response(malformed)
+        client._client.chat.completions.create.side_effect = [
+            malformed,
+            transport_error,
+        ]
+
+        with pytest.raises(RuntimeError, match="transport retry failed") as raised:
+            await client.acompletion(
+                "openai/test", [{"role": "user", "content": "x"}], []
+            )
+
+        assert raised.value.prompt_tokens == 11
+        assert raised.value.completion_tokens == 5
+
+    async def test_repeated_malformed_tool_arguments_fail_clearly(self):
+        client = _client_with_response(_tool_response("{"))
+        client._client.chat.completions.create.side_effect = [_tool_response("{")] * 3
+
+        with pytest.raises(RuntimeError, match="malformed JSON tool arguments"):
+            await client.acompletion(
+                "openai/test", [{"role": "user", "content": "x"}], []
+            )
+
+        assert client._client.chat.completions.create.await_count == 3
+
+    async def test_valid_tool_arguments_are_returned_unchanged(self):
+        client = _client_with_response(_tool_response('{"value": 1}'))
+
+        result = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert (
+            result.choices[0].message.tool_calls[0].function.arguments == '{"value": 1}'
+        )
+        assert client._client.chat.completions.create.await_count == 1
+
+    async def test_text_completion_with_no_tool_calls_returns_normally(self):
+        response = _response()
+        response.model_dump.return_value["choices"][0]["message"] = {
+            "role": "assistant",
+            "content": "done",
+            "tool_calls": None,
+        }
+        client = _client_with_response(response)
+
+        result = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], []
+        )
+
+        assert result.choices[0].message.content == "done"
+
+
+def _timeout_client(monkeypatch, seconds="0.02"):
+    monkeypatch.setenv("FEDOTMAS_LLM_REQUEST_TIMEOUT_S", seconds)
+    return _client_with_response(_response())
+
+
+class TestProxyClientRequestTimeout:
+    async def test_hung_initial_request_times_out_with_stable_code(self, monkeypatch):
+        client = _timeout_client(monkeypatch)
+
+        async def hang(**kwargs):
+            await asyncio.sleep(1)
+
+        client._client.chat.completions.create.side_effect = hang
+        started = time.monotonic()
+        with pytest.raises(LLMRequestTimeout, match="LLM_REQUEST_TIMEOUT") as raised:
+            await client.acompletion("openai/test", [{"role": "user", "content": "x"}], [])
+        assert time.monotonic() - started < 0.5
+        assert raised.value.code == "LLM_REQUEST_TIMEOUT"
+        assert client._client.chat.completions.create.await_count == 2
+
+    async def test_timeout_then_one_retry_succeeds(self, monkeypatch):
+        client = _timeout_client(monkeypatch)
+        valid = _response()
+
+        async def timeout_once(**kwargs):
+            if client._client.chat.completions.create.await_count == 1:
+                await asyncio.sleep(1)
+            return valid
+
+        client._client.chat.completions.create.side_effect = timeout_once
+        result = await client.acompletion("openai/test", [{"role": "user", "content": "x"}], [])
+        assert result.choices[0].message.content == "done"
+        assert client._client.chat.completions.create.await_count == 2
+
+    async def test_two_timeouts_raise_after_one_retry(self, monkeypatch):
+        client = _timeout_client(monkeypatch, "0.01")
+
+        async def hang(**kwargs):
+            await asyncio.sleep(1)
+
+        client._client.chat.completions.create.side_effect = hang
+        with pytest.raises(LLMRequestTimeout, match="LLM_REQUEST_TIMEOUT"):
+            await client.acompletion("openai/test", [{"role": "user", "content": "x"}], [])
+        assert client._client.chat.completions.create.await_count == 2
+
+    async def test_malformed_argument_retry_is_bounded_and_keeps_usage(self, monkeypatch):
+        client = _timeout_client(monkeypatch, "0.01")
+        malformed = _tool_response("{")
+        malformed.model_dump.return_value["usage"] = {
+            "prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16,
+        }
+
+        async def responses(**kwargs):
+            if client._client.chat.completions.create.await_count == 1:
+                return malformed
+            await asyncio.sleep(1)
+
+        client._client.chat.completions.create.side_effect = responses
+        with pytest.raises(LLMRequestTimeout) as raised:
+            await client.acompletion("openai/test", [{"role": "user", "content": "x"}], [])
+        assert client._client.chat.completions.create.await_count == 3
+        assert raised.value.prompt_tokens == 11
+        assert raised.value.completion_tokens == 5
+
+    def test_invalid_timeout_setting_uses_default(self, monkeypatch):
+        for value in ("invalid", "0", "-1", "inf", "nan"):
+            client = _timeout_client(monkeypatch, value)
+            assert client._request_timeout == 120
+
+    async def test_fast_request_behavior_is_unchanged(self, monkeypatch):
+        client = _timeout_client(monkeypatch)
+        result = await client.acompletion("openai/test", [{"role": "user", "content": "x"}], [])
+        assert result.choices[0].message.content == "done"
+        request_kwargs = client._client.chat.completions.create.await_args.kwargs
+        assert request_kwargs["timeout"] == pytest.approx(0.02)
+
+    async def test_task_deadline_caps_request_timeout(self, monkeypatch):
+        client = _timeout_client(monkeypatch, "10")
+        with llm_request_deadline(time.monotonic() + 0.05):
+            await client.acompletion(
+                "openai/test", [{"role": "user", "content": "x"}], []
+            )
+        request_timeout = client._client.chat.completions.create.await_args.kwargs[
+            "timeout"
+        ]
+        assert request_timeout < 0.05
+
+    async def test_stream_chunk_wait_is_bounded(self, monkeypatch):
+        client = _timeout_client(monkeypatch, "0.01")
+
+        class HangingStream:
+            async def __anext__(self):
+                await asyncio.sleep(1)
+
+        client._client.chat.completions.create.return_value = HangingStream()
+        stream = await client.acompletion(
+            "openai/test", [{"role": "user", "content": "x"}], [], stream=True
+        )
+        with pytest.raises(LLMRequestTimeout, match="LLM_REQUEST_TIMEOUT"):
+            await anext(stream)

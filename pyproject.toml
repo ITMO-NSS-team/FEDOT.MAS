@@ -10,16 +10,19 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
+  "datasets>=5.0.1",
   "fedotmas",
   "langfuse>=4.3.1",
 ]
 
 [dependency-groups]
 dev = [
+  "aiosqlite>=0.21",
   "prek>=0.3.3",
   "pytest>=8",
   "pytest-asyncio>=0.25",
   "ruff>=0.15.1",
+  "sqlalchemy[asyncio]>=2,<3",
   "ty>=0.0.17",
 ]
 docs = [
@@ -43,6 +46,7 @@ exclude = [ "**/tests/**" ]
 [tool.pytest]
 ini_options.asyncio_mode = "auto"
 ini_options.testpaths = [
+  "tests",
   "packages/fedotmas/tests",
 ]
 

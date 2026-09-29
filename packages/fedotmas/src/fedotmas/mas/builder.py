@@ -4,6 +4,7 @@ from typing import Literal
 
 from google.adk.agents import LlmAgent
 from google.adk.agents.base_agent import BaseAgent
+from google.genai import types
 
 from fedotmas._settings import ModelConfig
 from fedotmas.common.logging import get_logger
@@ -51,6 +52,7 @@ def build_routing_system(
         worker_models,
         autonomous=autonomous,
         sub_agents=workers,
+        include_contents="none",
     )
 
     _log.info(
@@ -70,6 +72,7 @@ def _build_routing_agent(
     mode: Literal["chat", "task", "single_turn"] | None = None,
     sub_agents: list[BaseAgent] | None = None,
     disallow_transfer_to_parent: bool = False,
+    include_contents: Literal["default", "none"] = "default",
 ) -> LlmAgent:
     tools: list = []
     for tool_name in cfg.tools:
@@ -86,8 +89,13 @@ def _build_routing_agent(
         if autonomous
         else cfg.instruction,
         output_key=cfg.output_key,
+        generate_content_config=(
+            types.GenerateContentConfig(max_output_tokens=cfg.max_output_tokens)
+            if cfg.max_output_tokens is not None else None
+        ),
         tools=tools,
         mode=mode,
         sub_agents=sub_agents or [],
         disallow_transfer_to_parent=disallow_transfer_to_parent,
+        include_contents=include_contents,
     )

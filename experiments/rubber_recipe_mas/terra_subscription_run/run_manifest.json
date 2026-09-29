@@ -1,0 +1,95 @@
+{
+  "status": "completed",
+  "workflow": "fedotmas.MAS master-orchestrator",
+  "transport": "Codex host-native subscription",
+  "native_provider_api_run": false,
+  "model": "gpt-5.6-terra",
+  "provider_label_in_config": "host/gpt-5.6-terra",
+  "reasoning_effort": "xhigh",
+  "call_count": 6,
+  "latency_seconds": null,
+  "latency_note": "The host-native run did not expose comparable per-call latency; no value was inferred from filesystem timestamps.",
+  "character_counts": {
+    "formulation_output": 1288,
+    "chemistry_review": 2346,
+    "prediction_audit": 1261,
+    "recipe_prediction": 2525
+  },
+  "numerical_engine": {
+    "mcp_server": "rubber-recipe-predictor",
+    "tool_name": "predict_rubber_recipe",
+    "source_rows": 20,
+    "model_type": "degree-2 polynomial ridge surface",
+    "candidate_status": "constraints_satisfied"
+  },
+  "call_sequence": [
+    {
+      "sequence": 1,
+      "agent_name": "rubber_recipe_master",
+      "kind": "routing",
+      "model": "host/gpt-5.6-terra",
+      "output": "001_routing.json"
+    },
+    {
+      "sequence": 2,
+      "agent_name": "rubber_recipe_master",
+      "kind": "tool",
+      "server": "rubber-recipe-predictor",
+      "tool_name": "predict_rubber_recipe",
+      "arguments": {
+        "thermal_conductivity_min_w_mk": 0.45,
+        "oil_swelling_max_pct_1006h": 20.0,
+        "water_swelling_max_pct_1006h": 28.0,
+        "specific_gravity_max": 1.23,
+        "nr_min_phr": 25,
+        "nr_max_phr": 75,
+        "n220_min_phr": 20,
+        "n220_max_phr": 80,
+        "search_step_phr": 1,
+        "center_nr_phr": 50
+      },
+      "output": "model_prediction.json"
+    },
+    {
+      "sequence": 3,
+      "agent_name": "formulation_specialist",
+      "kind": "worker",
+      "model": "host/gpt-5.6-terra",
+      "request_template": "Используй только результат численного инструмента: {tool_result}. Оформи рецепт со всеми ингредиентами в phr, проверь NR+SBR=100 phr, границы NR/N220 и положение кандидата в открытом домене; не меняй числа предиктора.",
+      "output_key": "formulation_output",
+      "output": "formulation_output.md"
+    },
+    {
+      "sequence": 4,
+      "agent_name": "rubber_chemistry_reviewer",
+      "kind": "worker",
+      "model": "host/gpt-5.6-terra",
+      "request_template": "Проверь химико-технологическую осмысленность кандидата по результату инструмента: {tool_result}. Опиши роли компонентов, стадии смешения и лабораторной вулканизации, а также ограничения применимости; не подменяй прогноз экспертной догадкой.",
+      "output_key": "chemistry_review",
+      "output": "chemistry_review.md"
+    },
+    {
+      "sequence": 5,
+      "agent_name": "prediction_auditor",
+      "kind": "worker",
+      "model": "host/gpt-5.6-terra",
+      "request_template": "Проведи независимый аудит численного результата: {tool_result}. Сопоставь прогнозы, ограничения и LOOCV RMSE, различи точечное и робастное выполнение, отметь риски оцифровки, малой выборки и отсутствия внешней валидации.",
+      "output_key": "prediction_audit",
+      "output": "prediction_audit.md"
+    },
+    {
+      "sequence": 6,
+      "agent_name": "rubber_recipe_master",
+      "kind": "synthesis",
+      "model": "host/gpt-5.6-terra",
+      "inputs": [
+        "formulation_output",
+        "chemistry_review",
+        "prediction_audit"
+      ],
+      "output_key": "recipe_prediction",
+      "output": "recipe_prediction.md"
+    }
+  ],
+  "disclaimer": "The exact subscription model was invoked by the Codex host. Saved responses are replayed through the real FEDOT.MAS/ADK tree for GUI inspection; this is not a provider API integration."
+}

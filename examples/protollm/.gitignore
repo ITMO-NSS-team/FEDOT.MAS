@@ -1,0 +1,2 @@
+# Keep this example reproducible despite the repository-wide uv.lock exclusion.
+!uv.lock

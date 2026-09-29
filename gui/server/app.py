@@ -13,35 +13,80 @@ import io
 import json
 import os
 import re
+import sys
 import tempfile
 import time
 import uuid
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fedotmas import MAS, MAW, MASConfig, MAWConfig
+from fedotmas.common.codex_cli import codex_login_status, find_codex_cli
 from fedotmas.common.logging import get_logger
+from fedotmas.export import to_synapse_bundle
 from fedotmas.mcp import get_server_descriptions, resolve_mcp_registry
+from fedotmas.optimize import LLMJudge
 from fedotmas.plugins import LoggingPlugin, UnknownToolRecoveryPlugin
 
 from . import security
 from .agent_names import AgentNames, latinize_mas
-from .config import (AGENT_MAX_OUTPUT_TOKENS, DEFAULT_MODEL, GENERATE_ATTEMPTS, JUDGE_MODEL, MODELS,
-                     PUBLIC_MODE, RU_HINT, SAFE_TOOLS, SCRAPING, SERVER_RUN_ID,
-                     SMITHERY_API_KEY, SMITHERY_DETAIL, SMITHERY_SEARCH, STATIC_DIR,
-                     WEB_SEARCH)
-from .judge import _judge_impl
-from .llm import client as _client
-from .normalize import (_ensure_calculator, _ensure_data_tools, _ensure_dependent_after_parallel,
-                        _ensure_lookup_tools, _ensure_web_tool, _mcp_registry_for,
-                        _tools_hint, _with_data_source, sanitize_config)
-from .prompts import (BREAKDOWN_PROMPT, EFFORT_PROMPT, PREPARE_PROMPT, RETRY_HINT,
-                      TOOL_DESCRIPTIONS)
-from .schemas import (BaselineIn, EffortIn, ExportIn, GenerateIn, JudgeIn,
-                      PrepareIn, RunIn)
+from .code_export import build_code_archive
+from .config import (
+    AGENT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MODEL,
+    GENERATE_ATTEMPTS,
+    JUDGE_MODEL,
+    MODELS,
+    PUBLIC_MODE,
+    RU_HINT,
+    SAFE_TOOLS,
+    SCRAPING,
+    SERVER_RUN_ID,
+    SMITHERY_API_KEY,
+    SMITHERY_DETAIL,
+    SMITHERY_SEARCH,
+    STATIC_DIR,
+    WEB_SEARCH,
+)
+from .judge import _judge_impl, _review_impl
+from .llm import complete
+from .results import prepare_output_key, result_payload
+from .normalize import (
+    cap_run_tokens,
+    _ensure_calculator,
+    _ensure_data_tools,
+    _ensure_dependent_after_parallel,
+    _ensure_lookup_tools,
+    _ensure_web_tool,
+    _mcp_registry_for,
+    _tools_hint,
+    _with_data_source,
+    sanitize_config,
+)
+from .prompts import (
+    BREAKDOWN_PROMPT,
+    EFFORT_PROMPT,
+    MAW_TEAM_SIZE_PROMPT,
+    PREPARE_PROMPT,
+    RETRY_HINT,
+    TOOL_DESCRIPTIONS,
+)
+from .schemas import (
+    ReviewIn,
+    BaselineIn,
+    EffortIn,
+    ExportIn,
+    SynapseExportIn,
+    CodeExportIn,
+    GenerateIn,
+    JudgeIn,
+    PrepareIn,
+    RunIn,
+    SyntheticExamplesIn,
+)
 from .streaming import StreamPlugin, sse_stream
 
 _log = get_logger("gui.live")
@@ -62,6 +107,7 @@ def _allowed_tools(asked: list[str] | None) -> list[str]:
         _log.warning("Запрошены недоступные инструменты, отброшены: {}", dropped)
     return allowed
 
+
 app = FastAPI(title="FEDOT.MAS GUI live")
 security.install(app)
 app.post("/api/key")(security.set_key)
@@ -70,39 +116,57 @@ app.post("/api/key")(security.set_key)
 @app.get("/api/status")
 async def status() -> dict:
     registry = resolve_mcp_registry("all") or {}
+    codex_allowed = security.model_allowed("host/test")
+    codex_authenticated, codex_note = (
+        await codex_login_status()
+        if codex_allowed
+        else (False, "Недоступен в публичном режиме")
+    )
     return {
         "live": True,
         "model": DEFAULT_MODEL,
-        "models": MODELS,
+        "models": [model for model in MODELS if security.model_allowed(model["id"])],
         "judge_model": JUDGE_MODEL,
         "safe_tools": SAFE_TOOLS,
         # подписи для списка инструментов в окне создания сценария
-        "tools": [{"id": t, "note": TOOL_DESCRIPTIONS.get(t, "").split(" — ")[-1]}
-                  for t in SAFE_TOOLS],
+        "tools": [
+            {"id": t, "note": TOOL_DESCRIPTIONS.get(t, "").split(" — ")[-1]}
+            for t in SAFE_TOOLS
+        ],
         "web_search": WEB_SEARCH,
         "scraping": SCRAPING,
         "mcp_servers": sorted(registry),
         "run_id": SERVER_RUN_ID,
-        "has_key": bool(os.getenv("OPENAI_API_KEY")),
+        "has_key": bool(os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")),
+        "openrouter_ready": bool(os.getenv("OPENROUTER_API_KEY")),
+        "codex_cli": codex_allowed and bool(find_codex_cli()),
+        "codex_authenticated": codex_authenticated,
+        "codex_status": codex_note,
         "base_url": os.getenv("OPENAI_BASE_URL", ""),
         "public": PUBLIC_MODE,
         "user_key": security.user_key_set(),
     }
 
 
-
 async def _generate_impl(body: GenerateIn, queue: asyncio.Queue) -> dict:
     """Собственно генерация конфигурации; события мета-агента уходят в очередь."""
     model = body.model or DEFAULT_MODEL
+    security.ensure_model_allowed(model)
     tools = _allowed_tools(body.tools)
     stream = StreamPlugin(queue)
     servers, custom_names = _mcp_registry_for(tools, body.custom_mcp)
     cls = MAS if body.kind == "mas" else MAW
-    system = cls(meta_model=model, worker_models=[model],
-                 mcp_servers=servers,
-                 plugins=[LoggingPlugin(), UnknownToolRecoveryPlugin(), stream])
+    system = cls(
+        meta_model=model,
+        worker_models=[model],
+        mcp_servers=servers,
+        plugins=[LoggingPlugin(), UnknownToolRecoveryPlugin(), stream],
+    )
 
-    task = body.task + (RU_HINT if body.russian else "")
+    # Это дополнение получает непосредственно meta-agent FEDOT.MAS. Оно действует
+    # и для вызовов /api/generate, которые обходят предварительный /api/prepare.
+    team_size = MAW_TEAM_SIZE_PROMPT if body.kind == "maw" else ""
+    task = body.task + team_size + (RU_HINT if body.russian else "")
     t0 = time.monotonic()
     config = None
     last_error: Exception | None = None
@@ -115,20 +179,30 @@ async def _generate_impl(body: GenerateIn, queue: asyncio.Queue) -> dict:
             break
         except Exception as exc:
             last_error = exc
-            _log.warning("Попытка {}/{} генерации не удалась | {}: {}",
-                         attempt + 1, GENERATE_ATTEMPTS, type(exc).__name__, exc)
+            _log.warning(
+                "Попытка {}/{} генерации не удалась | {}: {}",
+                attempt + 1,
+                GENERATE_ATTEMPTS,
+                type(exc).__name__,
+                exc,
+            )
     if config is None:
         return {"ok": False, "error": f"{type(last_error).__name__}: {last_error}"}
 
-    config = sanitize_config(config, body.kind, custom_names)
-    if body.web and WEB_SEARCH:
+    config = sanitize_config(config, body.kind, custom_names, available_tools=servers)
+    if body.web and WEB_SEARCH and "websearch-searxng" in servers:
         _ensure_web_tool(config, body.kind)
-    _ensure_data_tools(config, body.kind, f"{body.task} {body.query or ''}")
+    if {"download", "document", "sandbox-light"} <= servers.keys():
+        _ensure_data_tools(config, body.kind, f"{body.task} {body.query or ''}")
     _ensure_dependent_after_parallel(config, body.kind)
-    _ensure_calculator(config, body.kind)
-    _ensure_lookup_tools(config, body.kind, f"{body.task} {body.query or ''}")
-    for agent in getattr(config, "agents", []) or []:
-        agent.max_output_tokens = AGENT_MAX_OUTPUT_TOKENS
+    if "sandbox-light" in servers:
+        _ensure_calculator(config, body.kind)
+    if {"websearch-searxng", "web-scraping"} <= servers.keys():
+        _ensure_lookup_tools(config, body.kind, f"{body.task} {body.query or ''}")
+    config = sanitize_config(config, body.kind, custom_names, available_tools=servers)
+    # Кап на выход нужен всем агентам обеих схем: у MASConfig нет .agents,
+    # его агенты — координатор и workers.
+    cap_run_tokens(config, AGENT_MAX_OUTPUT_TOKENS)
 
     return {
         "ok": True,
@@ -153,9 +227,12 @@ async def generate_stream(body: GenerateIn) -> StreamingResponse:
         try:
             queue.put_nowait({"type": "done", **(await _generate_impl(body, queue))})
         except Exception as exc:
-            queue.put_nowait({"type": "done", "ok": False, "error": f"{type(exc).__name__}: {exc}"})
+            queue.put_nowait(
+                {"type": "done", "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            )
         finally:
             queue.put_nowait(None)
+
     return sse_stream(queue, execute)
 
 
@@ -163,69 +240,112 @@ async def generate_stream(body: GenerateIn) -> StreamingResponse:
 async def run(body: RunIn) -> StreamingResponse:
     tools = _allowed_tools(body.tools)
     model = body.model or DEFAULT_MODEL
+    security.ensure_model_allowed(model)
     servers, custom_names = _mcp_registry_for(tools, body.custom_mcp)
     queue: asyncio.Queue = asyncio.Queue()
     is_mas = body.kind == "mas"
     cls = MAS if is_mas else MAW
     config = MASConfig(**body.config) if is_mas else MAWConfig(**body.config)
-    config = sanitize_config(config, body.kind, custom_names)   # может прийти из файла
+    for agent in (config.coordinator, *config.workers) if is_mas else config.agents:
+        security.ensure_model_allowed(body.model or agent.model or model)
+    config = sanitize_config(
+        config, body.kind, custom_names, available_tools=servers
+    )  # может прийти из файла
+    cap_run_tokens(config, AGENT_MAX_OUTPUT_TOKENS)
     # Исполнители MAS становятся инструментами координатора, а OpenAI не принимает
     # кириллицу в имени инструмента. Сценарий и экран сохраняют русские имена: под
     # латинскими идёт только запуск, поток переводит их обратно.
     names = latinize_mas(config) if is_mas else AgentNames()
+    output_key = prepare_output_key(config)
     stream = StreamPlugin(queue, names)
     # Свой список плагинов ЗАМЕНЯЕТ умолчания FEDOT.MAS, а среди них есть
     # UnknownToolRecoveryPlugin: без него выдуманное моделью имя инструмента роняет
     # весь прогон вместе с результатами уже отработавших шагов.
-    system = cls(worker_models=[model], mcp_servers=servers,
-                 plugins=[LoggingPlugin(), UnknownToolRecoveryPlugin(), stream])
+    system = cls(
+        worker_models=[model],
+        mcp_servers=servers,
+        plugins=[LoggingPlugin(), UnknownToolRecoveryPlugin(), stream],
+    )
 
     # У агента в конфигурации своя модель, и она сильнее worker_models: без явной
     # перезаписи выбор модели запуска не влиял бы на сохранённые сценарии.
     if body.model:
-        picked = (getattr(config, "agents", None)
-                  or [config.coordinator] + list(config.workers))
+        picked = getattr(config, "agents", None) or [config.coordinator] + list(
+            config.workers
+        )
         for agent in picked:
             agent.model = model
-
 
     async def execute() -> None:
         t0 = time.monotonic()
         try:
             result = await system.build_and_run(config, body.query)
-            state = dict(result if isinstance(result, dict) else getattr(result, "state", {}))
+            state = dict(
+                result if isinstance(result, dict) else getattr(result, "state", {})
+            )
             last = system.last_result
-            queue.put_nowait({
-                "type": "done",
-                "elapsed": round(getattr(last, "elapsed", time.monotonic() - t0), 1),
-                "tokens": (getattr(last, "total_prompt_tokens", 0) or 0)
-                + (getattr(last, "total_completion_tokens", 0) or 0),
-                # ответ уходит в сравнение и судье целиком: обрезка искажала бы оценку
-                "state": {k: names.text(str(v)[:40000]) for k, v in state.items()
-                          if k != "user_query"},
-            })
+            completion = result_payload(
+                state, output_key, getattr(last, "status", "completed")
+            )
+            completion["answer"] = names.text(completion["answer"])
+            queue.put_nowait(
+                {
+                    "type": "done",
+                    **completion,
+                    "elapsed": round(
+                        getattr(last, "elapsed", time.monotonic() - t0), 1
+                    ),
+                    "tokens": (getattr(last, "total_prompt_tokens", 0) or 0)
+                    + (getattr(last, "total_completion_tokens", 0) or 0),
+                    # ответ уходит в сравнение и судье целиком: обрезка искажала бы оценку
+                    "state": {
+                        k: names.text(str(v)[:40000])
+                        for k, v in state.items()
+                        if k != "user_query"
+                    },
+                }
+            )
         except Exception as exc:
-            queue.put_nowait({"type": "error", "error": names.text(f"{type(exc).__name__}: {exc}")})
+            queue.put_nowait(
+                {"type": "error", "error": names.text(f"{type(exc).__name__}: {exc}")}
+            )
         finally:
             queue.put_nowait(None)
+
     return sse_stream(queue, execute)
 
 
 @app.post("/api/prepare")
 async def prepare(body: PrepareIn) -> dict:
     """Делит свободный текст пользователя на постановку для мета-агента и запрос для запуска."""
-    client, model = _client(body.model or DEFAULT_MODEL)
-    hint = ("пайплайн агентов с параллельными ветками и циклами"
-            if body.kind == "maw" else "координатор, маршрутизирующий задачи специалистам")
+    model = body.model or DEFAULT_MODEL
+    hint = (
+        "пайплайн агентов с параллельными ветками и циклами"
+        if body.kind == "maw"
+        else "координатор, маршрутизирующий задачи специалистам"
+    )
     try:
-        resp = await client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            messages=[{"role": "user", "content": PREPARE_PROMPT.format(
-                text=body.text, kind=body.kind, kind_hint=hint,
-                tools_hint=_tools_hint(body.web, body.tools))}],
+        resp = await complete(
+            model,
+            [
+                {
+                    "role": "user",
+                    "content": PREPARE_PROMPT.format(
+                        text=body.text,
+                        kind=body.kind,
+                        kind_hint=hint,
+                        tools_hint=_tools_hint(body.web, body.tools),
+                    ),
+                }
+            ],
+            json_schema={
+                "type": "object",
+                "properties": {"task": {"type": "string"}, "query": {"type": "string"}},
+                "required": ["task", "query"],
+                "additionalProperties": False,
+            },
         )
-        data = json.loads(resp.choices[0].message.content or "{}")
+        data = json.loads(resp.text or "{}")
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -239,24 +359,26 @@ async def prepare(body: PrepareIn) -> dict:
 @app.post("/api/baseline")
 async def baseline(body: BaselineIn) -> dict:
     """Тот же запрос, но решает одна модель без мультиагентной системы."""
-    client, model = _client(body.model or DEFAULT_MODEL)
+    model = body.model or DEFAULT_MODEL
     t0 = time.monotonic()
     try:
-        resp = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "Ты эксперт-аналитик. Отвечай по-русски, по существу и структурировано."},
+        resp = await complete(
+            model,
+            [
+                {
+                    "role": "system",
+                    "content": "Ты эксперт-аналитик. Отвечай по-русски, по существу и структурировано.",
+                },
                 {"role": "user", "content": body.query},
             ],
         )
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    usage = resp.usage
     return {
         "ok": True,
-        "answer": resp.choices[0].message.content or "",
+        "answer": resp.text,
         "model": model,
-        "tokens": (getattr(usage, "prompt_tokens", 0) or 0) + (getattr(usage, "completion_tokens", 0) or 0),
+        "tokens": resp.prompt_tokens + resp.completion_tokens,
         "seconds": round(time.monotonic() - t0, 1),
     }
 
@@ -264,34 +386,59 @@ async def baseline(body: BaselineIn) -> dict:
 @app.post("/api/effort")
 async def effort(body: EffortIn) -> dict:
     """Оценка трудоёмкости ручной разработки такой же системы — считает LLM по составу конфигурации."""
-    client, model = _client(body.model or DEFAULT_MODEL)
+    model = body.model or DEFAULT_MODEL
     agents = []
     for agent in (body.config or {}).get("agents") or []:
-        agents.append(f"- {agent.get('name')}: инструменты {', '.join(agent.get('tools') or []) or 'нет'}")
-    if not agents and body.config:                 # у MASConfig состав описан иначе
+        agents.append(
+            f"- {agent.get('name')}: инструменты {', '.join(agent.get('tools') or []) or 'нет'}"
+        )
+    if not agents and body.config:  # у MASConfig состав описан иначе
         coord = (body.config.get("coordinator") or {}).get("name")
         agents = [f"- координатор {coord}"] + [
             f"- {w.get('name')}: инструменты {', '.join(w.get('tools') or []) or 'нет'}"
-            for w in body.config.get("workers") or []]
-    pipeline = json.dumps((body.config or {}).get("pipeline"), ensure_ascii=False)[:1500]
-    summary = "\n".join(agents) + ("\n\nПайплайн: " + pipeline if pipeline != "null" else "")
+            for w in body.config.get("workers") or []
+        ]
+    pipeline = json.dumps((body.config or {}).get("pipeline"), ensure_ascii=False)[
+        :1500
+    ]
+    summary = "\n".join(agents) + (
+        "\n\nПайплайн: " + pipeline if pipeline != "null" else ""
+    )
 
     try:
-        resp = await client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            messages=[{"role": "user", "content": EFFORT_PROMPT.format(
-                task=body.task[:4000], config=summary or "состав неизвестен")}],
+        resp = await complete(
+            model,
+            [
+                {
+                    "role": "user",
+                    "content": EFFORT_PROMPT.format(
+                        task=body.task[:4000], config=summary or "состав неизвестен"
+                    ),
+                }
+            ],
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "estimate": {"type": "string"},
+                    "detail": {"type": "string"},
+                },
+                "required": ["estimate", "detail"],
+                "additionalProperties": False,
+            },
         )
-        data = json.loads(resp.choices[0].message.content or "{}")
+        data = json.loads(resp.text or "{}")
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     estimate = (data.get("estimate") or "").strip()[:24]
     if not estimate:
         return {"ok": False, "error": "модель не вернула оценку"}
-    return {"ok": True, "estimate": estimate,
-            "detail": (data.get("detail") or "").strip(), "model": model}
+    return {
+        "ok": True,
+        "estimate": estimate,
+        "detail": (data.get("detail") or "").strip(),
+        "model": model,
+    }
 
 
 @app.post("/api/export-presets")
@@ -306,10 +453,109 @@ async def export_presets(body: ExportIn) -> dict:
     target.write_text(
         "/* Свои сценарии, выгруженные из браузера: записи прогонов для автономной копии. */\n"
         "window.PRESETS = (window.PRESETS || []).concat(\n" + payload + "\n);\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     _log.info("Сценарии выгружены | штук={} файл={}", len(body.presets), target.name)
-    return {"ok": True, "count": len(body.presets), "file": target.name,
-            "bytes": target.stat().st_size}
+    return {
+        "ok": True,
+        "count": len(body.presets),
+        "file": target.name,
+        "bytes": target.stat().st_size,
+    }
+
+
+@app.post("/api/export-synapse")
+async def export_synapse(body: SynapseExportIn) -> dict:
+    """Конвертация выбранной конфигурации без исполнения и записи на сервере."""
+    try:
+        if body.kind == "mas" or "coordinator" in body.config:
+            mas = MASConfig.model_validate(body.config)
+            source = [mas.coordinator, *mas.workers]
+            used_keys = {a.output_key for a in source if a.output_key}
+            agents = []
+            for i, agent in enumerate(source):
+                data = agent.model_dump(exclude={"description"})
+                if not data["output_key"]:
+                    key = f"export_result_{i}"
+                    while key in used_keys:
+                        key += "_"
+                    used_keys.add(key)
+                    data["output_key"] = key
+                agents.append(data)
+            config = MAWConfig.model_validate(
+                {
+                    "agents": agents,
+                    "pipeline": {
+                        "type": "sequential",
+                        "children": [
+                            {"type": "agent", "agent_name": a.name} for a in source
+                        ],
+                    },
+                }
+            )
+        elif body.kind == "maw":
+            config = MAWConfig.model_validate(body.config)
+        else:
+            raise ValueError("Неизвестный тип конфигурации")
+        export = to_synapse_bundle(
+            config, workflow_id=body.workflow_id, workflow_name=body.workflow_name
+        )
+        return {
+            "ok": True,
+            "bundle": export.bundle,
+            "linearized_branches": export.linearized_branches,
+            "degraded_loops": export.degraded_loops,
+            "unresolved_tools": export.unresolved_tools,
+            "tools_checked": False,
+        }
+    except (ValueError, KeyError) as exc:
+        return {"ok": False, "error": f"Ошибка конвертации: {exc}"}
+
+
+@app.post("/api/export-code")
+async def export_code(body: CodeExportIn) -> Response:
+    """Download executable source and configuration without running the system."""
+    try:
+        data = build_code_archive(
+            body, tools=_allowed_tools(body.tools), default_model=DEFAULT_MODEL
+        )
+    except (ValueError, KeyError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Ошибка экспорта кода: {exc}"
+        ) from exc
+    return Response(
+        data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="fedotmas-source.zip"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.get("/api/rubber-quality")
+def rubber_quality() -> dict:
+    """Current predictor quality, independent of any particular MAS run."""
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from experiments.rubber_recipe_mas.open_data_predictor import (
+        TARGETS,
+        heldout_tire_example,
+        load_rows,
+        loocv_metrics,
+    )
+
+    rows = load_rows()
+    return {
+        "ok": True,
+        "method": "LOOCV",
+        "samples": len(rows),
+        "mape_pct": {
+            target: loocv_metrics(rows, target)["mape_pct"] for target in TARGETS
+        },
+        "baseline_example": heldout_tire_example(rows),
+    }
 
 
 @app.post("/api/effort_breakdown")
@@ -319,20 +565,47 @@ async def effort_breakdown(body: EffortIn) -> dict:
     Общая оценка «≈ N чел.-дней» ничего не объясняет; разбор показывает, из чего
     складывается ручная трудоёмкость и что именно берёт на себя система.
     """
-    client, model = _client(body.model or DEFAULT_MODEL)
+    model = body.model or DEFAULT_MODEL
     agents = []
     for agent in (body.config or {}).get("agents") or []:
-        agents.append(f"- {agent.get('name')}: {', '.join(agent.get('tools') or []) or 'без инструментов'}")
+        agents.append(
+            f"- {agent.get('name')}: {', '.join(agent.get('tools') or []) or 'без инструментов'}"
+        )
     summary = "\n".join(agents) or "состав неизвестен"
 
     try:
-        resp = await client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            messages=[{"role": "user", "content": BREAKDOWN_PROMPT.format(
-                task=body.task[:6000], config=summary)}],
+        resp = await complete(
+            model,
+            [
+                {
+                    "role": "user",
+                    "content": BREAKDOWN_PROMPT.format(
+                        task=body.task[:6000], config=summary
+                    ),
+                }
+            ],
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "subtasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "hours": {"type": "number"},
+                                "note": {"type": "string"},
+                            },
+                            "required": ["name", "hours", "note"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["subtasks"],
+                "additionalProperties": False,
+            },
         )
-        data = json.loads(resp.choices[0].message.content or "{}")
+        data = json.loads(resp.text or "{}")
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -345,16 +618,26 @@ async def effort_breakdown(body: EffortIn) -> dict:
         name = str(raw.get("name") or "").strip()
         if not name or hours <= 0:
             continue
-        items.append({"name": name[:160], "hours": round(hours, 2),
-                      "note": str(raw.get("note") or "").strip()[:300]})
+        items.append(
+            {
+                "name": name[:160],
+                "hours": round(hours, 2),
+                "note": str(raw.get("note") or "").strip()[:300],
+            }
+        )
     if not items:
         return {"ok": False, "error": "не удалось разложить задачу на подзадачи"}
 
     total = round(sum(i["hours"] for i in items), 2)
     # Человеко-дни считаем по восьмичасовому рабочему дню — так их и подписывает
     # интерфейс. Сумма часов остаётся главной цифрой, дни — это перевод для наглядности.
-    return {"ok": True, "subtasks": items, "total_hours": total,
-            "total_days": round(total / 8, 1), "model": model}
+    return {
+        "ok": True,
+        "subtasks": items,
+        "total_hours": total,
+        "total_days": round(total / 8, 1),
+        "model": model,
+    }
 
 
 # Файл как источник данных. Ссылку агент скачивает сам, а лежащий на компьютере
@@ -395,7 +678,7 @@ def _normalize_csv(name: str, data: bytes) -> tuple[bytes, str]:
     except csv.Error:
         return data, ""
     if not rows or max(len(r) for r in rows) < 2:
-        return data, ""          # одна колонка — значит «;» был частью текста, не трогаем
+        return data, ""  # одна колонка — значит «;» был частью текста, не трогаем
 
     fixed_cells = 0
     for row in rows:
@@ -404,12 +687,13 @@ def _normalize_csv(name: str, data: bytes) -> tuple[bytes, str]:
                 row[i] = cell.strip().replace(",", ".")
                 fixed_cells += 1
     if not fixed_cells:
-        return data, ""          # чинить нечего: дробей с запятой нет
+        return data, ""  # чинить нечего: дробей с запятой нет
 
     out = io.StringIO()
     csv.writer(out, lineterminator="\n").writerows(rows)
     return out.getvalue().encode("utf-8"), (
-        f"дробные числа приведены к точке ({fixed_cells} шт.), разделитель — запятая")
+        f"дробные числа приведены к точке ({fixed_cells} шт.), разделитель — запятая"
+    )
 
 
 @app.post("/api/upload")
@@ -417,27 +701,49 @@ async def upload(request: Request, file: UploadFile = File(...)) -> dict:
     """Принимает файл-источник и возвращает путь, по которому его прочитает агент."""
     if "document" not in SAFE_TOOLS:
         # Без инструмента чтения файл бесполезен: в публичном режиме он отключён.
-        return {"ok": False, "error": "чтение файлов на этом стенде отключено "
-                                      "(инструмент document недоступен)"}
+        return {
+            "ok": False,
+            "error": "чтение файлов на этом стенде отключено "
+            "(инструмент document недоступен)",
+        }
     # Длину проверяем до чтения: Starlette спулит файл на диск целиком, и предел,
     # применённый после, ограничивал бы только то, что осядет в каталоге загрузок.
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > UPLOAD_MAX_BYTES * 2:
-        return {"ok": False, "error": f"файл больше {UPLOAD_MAX_BYTES // 1024 // 1024} МБ"}
+        return {
+            "ok": False,
+            "error": f"файл больше {UPLOAD_MAX_BYTES // 1024 // 1024} МБ",
+        }
     data = await file.read(UPLOAD_MAX_BYTES + 1)
     if len(data) > UPLOAD_MAX_BYTES:
-        return {"ok": False, "error": f"файл больше {UPLOAD_MAX_BYTES // 1024 // 1024} МБ"}
+        return {
+            "ok": False,
+            "error": f"файл больше {UPLOAD_MAX_BYTES // 1024 // 1024} МБ",
+        }
     if not data:
         return {"ok": False, "error": "файл пустой"}
     # Имя чистим целиком: в заголовке может приехать и «../», и что угодно ещё.
     # Длину режем — иначе слишком длинное имя роняет запись с OSError и отдаёт 500.
-    safe = re.sub(r"[^\w.\- ]+", "_", Path(file.filename or "файл").name).strip()[:120] or "файл"
+    safe = (
+        re.sub(r"[^\w.\- ]+", "_", Path(file.filename or "файл").name).strip()[:120]
+        or "файл"
+    )
     target = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe}"
     data, note = _normalize_csv(safe, data)
     target.write_bytes(data)
-    _log.info("Принят файл-источник | имя={} размер={} КБ{}", safe, len(data) // 1024,
-              f" | {note}" if note else "")
-    return {"ok": True, "name": safe, "path": str(target), "size": len(data), "note": note}
+    _log.info(
+        "Принят файл-источник | имя={} размер={} КБ{}",
+        safe,
+        len(data) // 1024,
+        f" | {note}" if note else "",
+    )
+    return {
+        "ok": True,
+        "name": safe,
+        "path": str(target),
+        "size": len(data),
+        "note": note,
+    }
 
 
 @app.get("/api/mcp_catalog")
@@ -452,14 +758,16 @@ async def mcp_catalog() -> dict:
     descriptions = get_server_descriptions(registry)
     items = []
     for name, cfg in sorted(registry.items()):
-        items.append({
-            "name": name,
-            "description": descriptions.get(name, ""),
-            "tags": list(getattr(cfg, "tags", ()) or ()),
-            "transport": "http" if hasattr(cfg, "url") else "stdio",
-            "enabled": name in SAFE_TOOLS,
-            "note": TOOL_DESCRIPTIONS.get(name, ""),
-        })
+        items.append(
+            {
+                "name": name,
+                "description": descriptions.get(name, ""),
+                "tags": list(getattr(cfg, "tags", ()) or ()),
+                "transport": "http" if hasattr(cfg, "url") else "stdio",
+                "enabled": name in SAFE_TOOLS,
+                "note": TOOL_DESCRIPTIONS.get(name, ""),
+            }
+        )
     return {"ok": True, "servers": items, "enabled": SAFE_TOOLS}
 
 
@@ -481,17 +789,29 @@ async def mcp_search(q: str = "", limit: int = 8) -> dict:
         import httpx
 
         async with httpx.AsyncClient(timeout=12.0) as client:
-            resp = await client.get(SMITHERY_SEARCH,
-                                    params={"q": query, "pageSize": max(limit * 2, 10)})
+            resp = await client.get(
+                SMITHERY_SEARCH, params={"q": query, "pageSize": max(limit * 2, 10)}
+            )
             resp.raise_for_status()
-            found = [s for s in resp.json().get("servers", []) if s.get("isDeployed")][:limit]
+            found = [s for s in resp.json().get("servers", []) if s.get("isDeployed")][
+                :limit
+            ]
             details = await asyncio.gather(
-                *[client.get(SMITHERY_DETAIL.format(name=quote(s["qualifiedName"], safe="")))
-                  for s in found],
-                return_exceptions=True)
+                *[
+                    client.get(
+                        SMITHERY_DETAIL.format(name=quote(s["qualifiedName"], safe=""))
+                    )
+                    for s in found
+                ],
+                return_exceptions=True,
+            )
     except Exception as exc:
         _log.warning("Поиск в реестре Smithery не удался: {}", str(exc)[:200])
-        return {"ok": False, "error": f"реестр не ответил: {type(exc).__name__}", "servers": []}
+        return {
+            "ok": False,
+            "error": f"реестр не ответил: {type(exc).__name__}",
+            "servers": [],
+        }
 
     servers = []
     for meta, detail in zip(found, details):
@@ -503,15 +823,19 @@ async def mcp_search(q: str = "", limit: int = 8) -> dict:
             continue
         if not url:
             continue
-        servers.append({
-            "name": _slugify_mcp(meta["qualifiedName"]),
-            "title": meta.get("displayName") or meta["qualifiedName"],
-            "description": (meta.get("description") or "")[:220],
-            "url": url,
-            "uses": meta.get("useCount") or 0,
-            "verified": bool(meta.get("verified")),
-        })
-    _log.info("Реестр Smithery: по запросу «{}» подошло {} серверов", query[:60], len(servers))
+        servers.append(
+            {
+                "name": _slugify_mcp(meta["qualifiedName"]),
+                "title": meta.get("displayName") or meta["qualifiedName"],
+                "description": (meta.get("description") or "")[:220],
+                "url": url,
+                "uses": meta.get("useCount") or 0,
+                "verified": bool(meta.get("verified")),
+            }
+        )
+    _log.info(
+        "Реестр Smithery: по запросу «{}» подошло {} серверов", query[:60], len(servers)
+    )
     return {"ok": True, "servers": servers, "needs_key": not SMITHERY_API_KEY}
 
 
@@ -524,6 +848,69 @@ async def judge(body: JudgeIn) -> dict:
     return await _judge_impl(body)
 
 
+@app.post("/api/review")
+async def review(body: ReviewIn) -> dict:
+    return await _review_impl(body)
+
+
+@app.post("/api/synthetic_examples")
+async def synthetic_examples(body: SyntheticExamplesIn) -> dict:
+    """Генерирует новые входные данные в области применимости существующей МАС."""
+    model = body.model or JUDGE_MODEL
+    security.ensure_model_allowed(model)
+    quality_judge = LLMJudge(model=model)
+    if not body.config:
+        return {"ok": False, "error": "Сначала создайте или выберите МАС."}
+    tool_names = set(body.tools)
+    for agent in body.config.get("agents", []) + body.config.get("workers", []):
+        tool_names.update(agent.get("tools") or [])
+    tool_names.update((body.config.get("coordinator") or {}).get("tools") or [])
+    constraints = {}
+    if "rubber-recipe-predictor" in tool_names:
+        constraints["rubber_recipe"] = {
+            "variable_phr": {
+                "NR SMR-20": [0, 100],
+                "SBR-1502": [0, 100],
+                "N220": [20, 80],
+            },
+            "balance": "NR SMR-20 + SBR-1502 = 100 phr",
+            "fixed_phr": {
+                "оксид цинка": 5,
+                "стеариновая кислота": 2,
+                "TMQ": 1.5,
+                "6PPD": 1.5,
+                "технологическое масло": 5,
+                "сера": 5,
+                "TMTD": 2,
+                "регенерат": 5,
+            },
+            "properties": "теплопроводность, набухание в масле и воде за 1006 ч, относительная плотность",
+        }
+    if "technology-card-audit" in tool_names:
+        constraints["technology_card"] = {
+            "fixed_card_id": "demo://earthworks/бурение_котлованов",
+            "variable": "upper_multiplier > 1, lower_divisor > 1",
+            "fixed": "Нормы карты и шесть демонстрационных исторических записей не изменяются.",
+        }
+    try:
+        examples = await quality_judge.generate_synthetic_examples(
+            body.query,
+            count=body.count,
+            system_config=body.config,
+            input_constraints=constraints,
+            existing_examples=body.existing_examples,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    prompt_tokens, completion_tokens = quality_judge.token_usage
+    return {
+        "ok": True,
+        "examples": examples,
+        "model": model,
+        "tokens": prompt_tokens + completion_tokens,
+    }
+
+
 @app.post("/api/judge_stream")
 async def judge_stream(body: JudgeIn) -> StreamingResponse:
     """То же сравнение, но с потоком событий: судья работает минутами, и без обратной
@@ -534,10 +921,12 @@ async def judge_stream(body: JudgeIn) -> StreamingResponse:
         try:
             queue.put_nowait({"type": "done", **(await _judge_impl(body, queue))})
         except Exception as exc:
-            queue.put_nowait({"type": "done", "ok": False,
-                              "error": f"{type(exc).__name__}: {exc}"})
+            queue.put_nowait(
+                {"type": "done", "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            )
         finally:
             queue.put_nowait(None)
+
     return sse_stream(queue, execute)
 
 

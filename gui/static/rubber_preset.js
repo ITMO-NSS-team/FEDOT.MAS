@@ -1,0 +1,150 @@
+/* Пятиагентный MAW-пример; численные данные сохранены из реального MCP-прогона. */
+(function () {
+  "use strict";
+
+  const model = "host/gpt-5.6-terra";
+  const query = `Создай мультиагентную систему (МАС) для прогнозной оценки свойств протекторной резиновой смеси по заданной рецептуре и открытым экспериментальным данным. Численные значения получи с помощью доступного расчётного инструмента, не подменяя расчёт предположениями.
+
+Рецептура (все дозировки — в phr, массовых частях на 100 массовых частей каучуковой основы): NR SMR-20 — 55 phr; SBR-1502 — 45 phr; технический углерод N220 — 55 phr; оксид цинка — 5 phr; стеариновая кислота — 2 phr; TMQ — 1,5 phr; 6PPD — 1,5 phr; технологическое масло — 5 phr; сера — 5 phr; TMTD — 2 phr; регенерат — 5 phr.
+
+Рассчитай прогнозные значения и ориентировочные диапазоны для четырёх характеристик:
+— коэффициент теплопроводности, степень набухания в моторном масле после выдержки 1006 ч, степень набухания в воде после выдержки 1006 ч, %;
+— относительная плотность.
+
+В заключении укажи область применимости прогноза, источник и ограничения исходных данных. Предложи минимальные лабораторные испытания для проверки этих характеристик.`;
+
+  const heldoutQuery = query.replace(
+    "NR SMR-20 — 55 phr; SBR-1502 — 45 phr; технический углерод N220 — 55 phr;",
+    "NR SMR-20 — 50 phr; SBR-1502 — 50 phr; технический углерод N220 — 60 phr;"
+  ) + `
+
+Это проверка по опубликованной контрольной рецептуре. Вызови расчётный инструмент для указанного состава и в итоговом ответе покажи прогноз, значение из статьи, APE каждой характеристики и среднюю MAPE этого запуска. Контрольную строку исключи из обучения; не смешивай MAPE этого запуска с общей LOOCV-ошибкой модели.`;
+
+  const finalAnswer = `## Прогноз свойств заданного рецепта
+
+**Исходный рецепт (без изменений):** NR SMR-20 — 55 phr; SBR-1502 — 45 phr; технический углерод N220 — 55 phr; оксид цинка — 5 phr; стеариновая кислота — 2 phr; TMQ — 1,5 phr; 6PPD — 1,5 phr; технологическое масло — 5 phr; сера — 5 phr; TMTD — 2 phr; регенерат — 5 phr.
+
+| Свойство | Точечное значение | Ориентировочный диапазон |
+|---|---:|---:|
+| Теплопроводность | 0,43992 W/(m·K) | 0,39793–0,48191 W/(m·K) |
+| Набухание в масле за 1006 ч | 21,21625 % | 16,19046–26,24205 % |
+| Набухание в воде за 1006 ч | 29,22035 % | 26,13094–32,30976 % |
+| Удельный вес | 1,20057 | 1,18340–1,21774 |
+
+Рецепт находится внутри опубликованной сетки: NR 0–100 phr, N220 20–80 phr. Ближайшая точка — NR/SBR 50/50, N220 60 phr; нормированное расстояние — 0,3202. Результат подходит для исследовательского скрининга и приоритизации испытаний.
+
+**Ограничения:** 20 строк, оцифрованных с рисунков 4, 10, 11 и 14. Диапазоны эвристические по LOOCV RMSE, а не калиброванные доверительные интервалы.
+
+**Минимальная лабораторная проверка:** изготовить образцы точно по рецепту; измерить теплопроводность, удельный вес, набухание в масле и воде при экспозиции 1006 ч, фиксируя среду и методику.
+
+Источник: DOI **10.5281/zenodo.3838695**, лицензия **CC BY 4.0**. Результат не является спецификацией или выводом о безопасности, сертификации либо готовности шины.`;
+
+  const predictionResult = "recipe_input_unchanged=true; thermal=0.43992; oil=21.21625%; water=29.22035%; specific_gravity=1.20057; inside_published_grid=true; nearest=50/50/60; distance=0.3202; rows=20; DOI=10.5281/zenodo.3838695";
+  const validationResult = "Рецепт полный; NR 55 phr + SBR 45 phr = 100 phr эластомерной основы. Единицы распознаны, состав не изменён, численный прогноз разрешён.";
+  const applicability = "Рецепт не изменён; точка внутри домена. Данные из 20 оцифрованных точек применимы только для скрининга; нужна лабораторная валидация четырёх свойств.";
+  const qualityCheck = "Проверка пройдена: рецепт перенесён без изменений; четыре точечных значения, диапазоны, единицы, DOI, лицензия, ограничения и лабораторные проверки присутствуют. Новых чисел и выводов о безопасности нет.";
+
+  const config = {
+    agents: [
+      {name: "валидатор_рецепта", instruction: "Проверь входной рецепт из {user_query?}: перечисли компоненты и единицы без изменений, проверь полноту числовых значений и что NR + SBR образуют 100 phr эластомерной основы. Не предсказывай свойства, не исправляй, не меняй и не генерируй рецепт. Верни краткий машинно-проверяемый вердикт, можно ли передавать состав предиктору.", model, output_key: "recipe_validation", tools: []},
+      {name: "предиктор_свойств", instruction: "Получив рецепт из {user_query?} и результат проверки {recipe_validation?}, обязательно вызови инструмент predict_rubber_properties. Передай рецепт строго без изменений: не заменяй компоненты, не меняй количества или единицы и не генерируй иной рецепт. Сохрани исходный рецепт и полный точный результат предиктора, включая доступные свойства, диапазоны, сведения о домене и источнике. Не делай выводов о безопасности или готовности шины.", model, output_key: "prediction_result", tools: ["rubber-recipe-predictor"]},
+      {name: "аналитик_применимости", instruction: "Используя только {user_query?}, {recipe_validation?} и {prediction_result?}, подготовь фактическую основу заключения: оцени применимость по области данных и близости экспериментальных точек; сформулируй ограничения открытых данных и минимальные лабораторные проверки. Не вызывай инструменты, не пересчитывай значения, не меняй и не предлагай рецепт, не делай выводов о безопасности или готовности шины.", model, output_key: "applicability_analysis", tools: []},
+      {name: "финальный_агрегатор", instruction: "Сформируй на русском единый итог, опираясь только на {user_query?}, {recipe_validation?}, {prediction_result?} и {applicability_analysis?}. Обязательно включи исходный рецепт дословно и без изменений; прогноз всех доступных свойств с точечными значениями, диапазонами и единицами; применимость, ограничения, минимальные лабораторные проверки, источник и лицензию. Не добавляй новые числа, не генерируй и не меняй рецепт, не делай выводов о безопасности, сертификации или готовности шины.", model, output_key: "property_prediction", tools: []},
+      {name: "проверяющий_результат", instruction: "Проверь итог {property_prediction?} по исходному запросу {user_query?}, результату валидации {recipe_validation?}, численному прогнозу {prediction_result?} и анализу {applicability_analysis?}. Убедись, что рецепт не изменён, все числа, диапазоны, единицы, источник, лицензия и ограничения перенесены без искажений, а запрещённых выводов нет. Не переписывай итог и не добавляй новых данных: верни только структурированный вердикт и перечень найденных расхождений.", model, output_key: "quality_check", tools: []}
+    ],
+    pipeline: {type: "sequential", children: [
+      {type: "agent", agent_name: "валидатор_рецепта"},
+      {type: "agent", agent_name: "предиктор_свойств"},
+      {type: "agent", agent_name: "аналитик_применимости"},
+      {type: "agent", agent_name: "финальный_агрегатор"},
+      {type: "agent", agent_name: "проверяющий_результат"}
+    ]}
+  };
+
+  const trace = [
+    {agent: "валидатор_рецепта", phase: "валидация входа", tokens: 0, ms: 18000, text: "Проверены состав, единицы и сумма эластомерной основы.", io: {instruction: config.agents[0].instruction, incoming: query, outputKey: "recipe_validation", output: validationResult}},
+    {agent: "предиктор_свойств", phase: "MCP-прогноз", tokens: 0, ms: 124000, tool: "rubber-recipe-predictor", toolNote: "predict_rubber_properties", text: "FEDOT.MAS поднял MCP-сервер через stdio; рецепт передан без изменений.", io: {instruction: config.agents[1].instruction, incoming: validationResult, outputKey: "prediction_result", output: predictionResult}},
+    {agent: "аналитик_применимости", phase: "анализ домена", tokens: 0, ms: 76000, text: "Подтверждены домен данных, ограничения и программа валидации.", io: {instruction: config.agents[2].instruction, incoming: predictionResult, outputKey: "applicability_analysis", output: applicability}},
+    {agent: "финальный_агрегатор", phase: "агрегация property_prediction", tokens: 0, ms: 96359, text: "Собран итоговый прогноз для неизменённого рецепта.", io: {instruction: config.agents[3].instruction, incoming: applicability, outputKey: "property_prediction", output: finalAnswer}},
+    {agent: "проверяющий_результат", phase: "контроль качества", tokens: 0, ms: 28000, final: true, text: "Итог сопоставлен с прогнозом и исходным рецептом; расхождений не найдено.", io: {instruction: config.agents[4].instruction, incoming: finalAnswer, outputKey: "quality_check", output: qualityCheck}}
+  ];
+
+  const breakdown = {
+    scope: "mas_development",
+    subtasks: [
+      {name: "Выбрать взаимодействие агентов", hours: 3, note: "Спроектировать пятиагентный пайплайн: проверка рецепта, прогноз, применимость, агрегация и контроль результата."},
+      {name: "Определить роли и ответственность", hours: 2, note: "Разделить обязанности пяти агентов и задать запрет на изменение исходной рецептуры."},
+      {name: "Написать и настроить промпты", hours: 5, note: "Подготовить инструкции для пяти ролей: phr, четыре свойства, единицы, ограничения и лабораторная валидация."},
+      {name: "Настроить передачу контекста и данных", hours: 4, note: "Описать состояние сессии: рецепт, результат предиктора, диапазоны, источник и выводы; связать входы и выходы агентов."},
+      {name: "Подключить инструменты, память и обработку ошибок", hours: 5, note: "Интегрировать готовый предиктор, хранение промежуточных результатов в сессии, проверки области применимости и обработку сбоев вызова."},
+      {name: "Протестировать и отладить систему", hours: 9, note: "Провести несколько итераций: базовый и изменённые рецепты, недопустимый состав, недоступный инструмент, сверка чисел и итогового отчёта."},
+    ],
+  };
+  breakdown.total_hours = breakdown.subtasks.reduce((sum, task) => sum + task.hours, 0);
+  breakdown.total_days = breakdown.total_hours / 8;
+
+  const preset = {
+    id: "rubber_property_prediction_maw_terra_5_agents_20260916",
+    title: "Прогноз свойств рецепта резины · MAW",
+    domain: "Материаловедение · открытые данные",
+    kind: "maw", model, query, queryRevision: 1,
+    syntheticExamples: [{query: heldoutQuery, model: "", source: "published"}],
+    syntheticRevision: 1,
+    brief: "Meta-agent перед каждым прогоном формирует MAWConfig по задаче. В его промпт добавлено требование создать пять содержательных ролей; конкретный граф фиксируется только на время одного MAW-запуска.",
+    summary: "Пятиагентная топология подготовлена по обновлённому meta-agent prompt. Во время одного запуска граф фиксирован по правилам MAW; численные значения сохранены из предыдущего реального MCP-прогона.",
+    manual: "≈ 28 чел.-ч (3,5 дня)",
+    manualNote: "Экспертная оценка ручной разработки аналогичной МАС без автоматической генерации: один разработчик, знакомый с агентным стеком; данные и расчётный предиктор уже готовы. Включены интеграция и несколько итераций отладки. Не включены создание предиктора, оцифровка данных, лабораторные испытания, разработка GUI, промышленное внедрение и дальнейшее сопровождение. Память — состояние сессии, не отдельная долговременная база. Время не измерялось; это не доказательство экономии 90 %. Сравнивать с полным циклом создания и отладки МАС, а не с длительностью одного запуска.",
+    breakdown, effortRevision: 1,
+    auto: "5 мин 42 с · Terra",
+    gen: "требование: ровно 5 содержательных агентов",
+    genSteps: ["Задача → meta-agent", "Валидация рецепта", "MCP-прогноз", "Анализ применимости", "Синтез property_prediction", "Проверка результата"],
+    config, trace, answer: finalAnswer,
+    answerMeta: "Пятиагентный MAW-пример · host/gpt-5.6-terra · численный результат из MCP-прогона rubber_maw_tool_20260916",
+    tools: ["rubber-recipe-predictor"],
+    sources: [{title: "Oleiwi, Hamza, Nassir — SBR/NR passenger tire treads", note: " · 20 оцифрованных точек · CC BY 4.0", url: "https://doi.org/10.5281/zenodo.3838695", origin: "открытые данные"}],
+    real: false, custom: true, runId: "rubber_maw_5_agents_20260916", topologyGenerated: true
+  };
+
+  // Отдельная штатная запись реального запуска: прежнюю рецептуру 55/45/55
+  // не переписываем, чтобы не выдавать ей измерения контрольной точки 50/50/60.
+  const reference = window.RUBBER_REFERENCE_RUN;
+  if (reference?.rubberValidation?.reference_used_in_training === false
+      && Number.isFinite(reference.rubberValidation.mape_pct) && reference.answer) {
+    const oldComparisonHeading = "Прогнозные значения и сравнение с опубликованными данными";
+    const comparisonHeading = "Прогнозные значения и сравнение с фактом";
+    const relabelComparison = (value) => typeof value === "string"
+      ? value.replaceAll(oldComparisonHeading, comparisonHeading) : value;
+    const referenceConfig = JSON.parse(JSON.stringify(config));
+    for (const agent of referenceConfig.agents) {
+      agent.model = reference.model;
+      agent.max_output_tokens = 12000;
+    }
+    const recorded = {
+      ...preset,
+      id: "rubber_heldout_reference_run_20260927",
+      title: "Прогноз свойств рецепта резины · MAW",
+      query: heldoutQuery,
+      syntheticExamples: [{query, model: "", source: "alternative"}],
+      config: referenceConfig,
+      model: reference.model,
+      trace: reference.trace.map((event) => ({
+        ...event,
+        text: relabelComparison(event.text),
+        ...(event.io ? {io: {...event.io, output: relabelComparison(event.io.output)}} : {}),
+      })),
+      answer: relabelComparison(reference.answer),
+      answerMeta: `Реальный пятиагентный MAW · ${reference.model} · контрольная точка исключена из обучения · Условия лабораторных испытаний в ответе предложены моделью, а не подтверждены исходной статьёй`,
+      review: reference.review || null,
+      rubberValidation: reference.rubberValidation,
+      runStats: reference.runStats,
+      auto: `${Math.round(reference.runStats.elapsed)} с · ${(reference.runStats.tokens / 1000).toFixed(1).replace(".", ",")}к токенов`,
+      summary: "Реальный запуск пяти агентов и расчётного MCP для опубликованной контрольной рецептуры. MAPE вычислена по четырём отложенным измерениям; журнал и ответ сохранены без повторного вызова модели.",
+      real: true,
+      runId: "rubber_heldout_reference_20260927",
+      installOnExisting: true,
+    };
+    window.STARTUP_PRESETS = [recorded, preset].concat(window.STARTUP_PRESETS || []);
+  } else {
+    window.STARTUP_PRESETS = [preset].concat(window.STARTUP_PRESETS || []);
+  }
+})();

@@ -5,7 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-store">
 <title>FEDOT.MAS — генерация мультиагентных систем</title>
-<link rel="stylesheet" href="styles.css">
+<meta name="description" content="FEDOT.MAS собирает мультиагентную систему по текстовой постановке задачи: граф агентов, журнал выполнения с вызовами инструментов, сравнение с одной моделью и вердикт судьи.">
+<meta property="og:title" content="FEDOT.MAS — генерация мультиагентных систем">
+<meta property="og:description" content="Демо: система агентов собирается по описанию задачи и решает её. Записанные прогоны реальных кейсов.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-width='2.6' stroke-linecap='round'%3E%3Cpath stroke='%2394A6BC' d='M16 11 L7 20 M16 11 L25 20 M11 24 L21 24'/%3E%3Ccircle cx='16' cy='7' r='4.4' stroke='%230E9384'/%3E%3Ccircle cx='7' cy='24' r='4.4' stroke='%232563EB'/%3E%3Ccircle cx='25' cy='24' r='4.4' stroke='%232563EB'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
 
@@ -23,6 +27,7 @@
     </div>
   </div>
   <div class="topbar-right">
+    <button class="chip" id="btn-models" aria-haspopup="dialog">Выбор модели</button>
     <button class="chip chip-icon" id="btn-theme" title="Светлая / тёмная тема">
       <svg viewBox="0 0 24 24" class="ic"><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg>
     </button>
@@ -38,8 +43,11 @@
 
   <!-- ЛЕВАЯ КОЛОНКА -->
   <aside class="panel side">
-    <section class="block">
-      <div class="block-title">Постановка задачи</div>
+    <section class="block query-block" id="query-block">
+      <div class="block-title row-title query-title">
+        <span>Постановка задачи</span>
+        <button class="btn btn-mini" id="btn-query-expand" type="button" aria-controls="query" aria-expanded="false" title="Развернуть постановку задачи на весь экран">На весь экран</button>
+      </div>
       <textarea id="query" rows="5" spellcheck="false" placeholder="Опишите задачу на естественном языке…"></textarea>
       <div class="run-row">
         <button class="btn btn-ghost" id="btn-generate">
@@ -53,33 +61,13 @@
       </div>
     </section>
 
-    <section class="block">
-      <div class="block-title">Модели</div>
-      <div class="model-picks">
-        <label class="model-pick">
-          <span>Генерация системы</span>
-          <select id="model-gen" title="Модель мета-агента: проектирует состав агентов и пайплайн"></select>
-        </label>
-        <label class="model-pick">
-          <span>Запуск системы</span>
-          <select id="model-run" title="Модель агентов при исполнении и одиночной модели для сравнения"></select>
-        </label>
-        <label class="model-pick">
-          <span>Одна модель</span>
-          <select id="model-single" title="Модель, которая отвечает на ту же задачу одна, без системы"></select>
-        </label>
-        <label class="model-pick">
-          <span>Судья</span>
-          <select id="model-judge" title="Модель, которая сравнивает ответ системы с ответом одной модели"></select>
-        </label>
-      </div>
-    </section>
-
     <section class="block block-grow">
-      <div class="block-title row-title">
+      <div class="block-title row-title scenario-title-row">
         <span>Сценарии <span class="muted-count" id="preset-count"></span></span>
+        <div class="scenario-actions">
         <button class="btn btn-mini" id="btn-new" title="Описать свою задачу и сгенерировать под неё систему">Добавить сценарий</button>
         <button class="btn btn-mini" id="btn-import" title="Загрузить сценарий из файла, сохранённого на компьютере">Импортировать</button>
+        </div>
         <input type="file" id="import-file" accept="application/json,.json" hidden>
       </div>
       <div class="preset-list" id="presets"></div>
@@ -91,7 +79,7 @@
     </section>
 
     <section class="block block-foot">
-      <div class="stat-line"><span>Трудоёмкость вручную</span><b id="stat-manual">—</b></div>
+      <div class="stat-line"><span>Разработка вручную</span><b id="stat-manual">—</b></div>
       <div class="stat-line" id="stat-gen-row"><span>Генерация системы</span><b id="stat-gen">—</b></div>
       <div class="stat-line"><span>Запуск системы</span><b id="stat-auto">—</b></div>
     </section>
@@ -135,9 +123,12 @@
         <svg viewBox="0 0 24 24" class="ic" id="p-play-icon"><path d="M7 4l12 8-12 8z"/></svg>
       </button>
       <div class="progress"><div class="progress-fill" id="p-fill"></div></div>
+      <button class="pbtn pbtn-text" id="p-speed" title="Скорость воспроизведения записи">×1</button>
       <button class="pbtn pbtn-text" id="p-export" title="Сохранить сценарий целиком в файл: схема, прогон, ответы, оценка">
         <svg viewBox="0 0 24 24" class="ic"><path d="M12 4v11M8 11l4 4 4-4M5 19h14"/></svg>
       </button>
+      <button class="pbtn pbtn-text" id="p-export-ipr2" title="Скачать сценарий в формате Synapse для ИПР-2">Экспорт в ИПР-2</button>
+      <button class="pbtn pbtn-text" id="p-export-code" title="Скачать Python-код, конфигурацию и исходники выбранного расчётного MCP (ZIP)">Скачать код МАС</button>
     </div>
   </section>
 
@@ -163,6 +154,25 @@
         <div class="gen-progress-head"><b id="judge-progress-step">Судья читает ответы…</b><span id="judge-progress-time">0 с</span></div>
         <div class="gen-progress-bar"><i id="judge-progress-fill"></i></div>
         <div class="gen-progress-log" id="judge-progress-log"></div>
+      </div>
+      <div class="synthetic-box">
+        <div class="synthetic-head">
+          <div>
+            <b>Проверочные варианты</b>
+            <span>Опубликованная рецептура и новые тестовые запросы для МАС</span>
+          </div>
+          <label>за раз
+            <select id="synthetic-count" title="Количество вариантов за один вызов модели">
+              <option value="1">1</option>
+              <option value="3" selected>3</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+            </select>
+          </label>
+        </div>
+        <button class="btn btn-mini" id="btn-synthetic" disabled>Сгенерировать синтетический пример</button>
+        <div class="synthetic-note" id="synthetic-note"></div>
+        <div class="synthetic-list" id="synthetic-examples"></div>
       </div>
       <div class="answer-actions" id="answer-actions">
         <button class="btn btn-mini" id="btn-baseline" disabled>Сравнить с одной моделью</button>
@@ -231,6 +241,26 @@
   </div>
 </div>
 
+<div class="modal hidden" id="models-modal" role="dialog" aria-modal="true" aria-labelledby="models-title">
+  <div class="modal-card">
+    <div class="modal-head"><span id="models-title">Выбор модели</span>
+      <button class="zbtn" id="models-close" title="Закрыть">✕</button></div>
+    <div class="modal-body">
+      <p>Три модели Codex и модели с открытым исходным кодом через OpenRouter. Выбор применяется к следующим запускам.</p>
+      <span class="chip hidden" id="codex-status"></span>
+      <div class="model-picks">
+        <label class="model-pick"><span>Генерация системы</span><select id="model-gen"></select></label>
+        <label class="model-pick"><span>Запуск системы</span><select id="model-run"></select></label>
+        <label class="model-pick"><span>Одиночное сравнение</span><select id="model-single"></select></label>
+        <label class="model-pick"><span>Судья и новые примеры</span><select id="model-judge"></select></label>
+      </div>
+      <p class="label-hint" id="models-key-info">Для OpenRouter нужен ключ с доступом к выбранной модели.</p>
+      <button class="btn" id="models-key">Ввести ключ OpenRouter</button>
+    </div>
+    <div class="modal-foot"><button class="btn btn-primary" id="models-done">Готово</button></div>
+  </div>
+</div>
+
 <!-- Форма своего сценария -->
 <div class="modal hidden" id="new-modal">
   <div class="modal-card">
@@ -244,8 +274,8 @@
       </label>
       <label>Тип системы
         <span class="radio-row">
-          <label class="radio"><input type="radio" name="new-kind" value="maw" checked> MAW — пайплайн агентов</label>
-          <label class="radio"><input type="radio" name="new-kind" value="mas"> MAS — маршрутизация</label>
+          <label class="radio"><input type="radio" name="new-kind" value="maw"> MAW — пайплайн агентов</label>
+          <label class="radio"><input type="radio" name="new-kind" value="mas" checked> MAS — мастер-оркестратор</label>
         </span>
       </label>
       <label>Задача
@@ -307,6 +337,10 @@
 </div>
 
 <script src="presets.js"></script>
-<script src="app.js"></script>
+<script src="technology_card_preset.js?v=6"></script>
+<script src="rubber_reference_run.js?v=1"></script>
+<script src="rubber_reference_review.js?v=1"></script>
+<script src="rubber_preset.js?v=9"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>
