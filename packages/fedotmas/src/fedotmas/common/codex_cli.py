@@ -71,12 +71,14 @@ async def codex_login_status() -> tuple[bool, str]:
         stderr=asyncio.subprocess.PIPE,
         **_creation_options(),
     )
+    communicated = False
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+        communicated = True
     except TimeoutError:
         return False, "Проверка авторизации Codex CLI превысила 10 секунд"
     finally:
-        await _terminate_process(process)
+        await _terminate_process(process, interrupted=not communicated)
     note = _decode(stdout or stderr).strip()
     return process.returncode == 0, note
 
@@ -146,15 +148,17 @@ async def run_codex_cli(
             stderr=asyncio.subprocess.PIPE,
             **_creation_options(),
         )
+        communicated = False
         try:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(prompt.encode("utf-8")),
                 timeout=timeout or _DEFAULT_TIMEOUT_SECONDS,
             )
+            communicated = True
         except TimeoutError:
             raise TimeoutError(f"Codex CLI model {native_model} timed out") from None
         finally:
-            await _terminate_process(process)
+            await _terminate_process(process, interrupted=not communicated)
 
         stdout_text = _decode(stdout)
         stderr_text = _decode(stderr)
@@ -243,9 +247,12 @@ def _creation_options() -> _CreationOptions:
     )
 
 
-async def _terminate_process(process: asyncio.subprocess.Process) -> None:
+async def _terminate_process(
+    process: asyncio.subprocess.Process, *, interrupted: bool = False
+) -> None:
     """Reap an interrupted CLI, including its launcher children on POSIX."""
-    if process.returncode is not None:
+    # A launcher may already have exited while its child still owns the pipes.
+    if process.returncode is not None and not (interrupted and os.name != "nt"):
         return
     with suppress(ProcessLookupError):
         if os.name == "nt":

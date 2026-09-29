@@ -55,6 +55,7 @@ from fedotmas.plugins._code_agent_budget import CODE_AGENT_POLICY_STATE_KEY
 from fedotmas.plugins._research_telemetry import (
     RESEARCH_CANDIDATE_LEDGER_KEY,
     RESEARCH_GATE_STATE_KEY,
+    RESEARCH_INSPECTED_SOURCES_KEY,
     RESEARCH_MODE_STATE_KEY,
     RESEARCH_POLICY_STATE_KEY,
     RESEARCH_PROGRESS_STATE_KEY,
@@ -668,14 +669,14 @@ def build(
     agents_by_name: dict[str, MAWAgentConfig] = {a.name: a for a in config.agents}
     # The same set MAWConfig validates against: what a step can actually produce.
     state_keys = frozenset({"user_query"} | {a.output_key for a in config.agents})
-    return _build_node(
+    root = _build_node(
         config.pipeline,
         agents_by_name,
         mcp_registry,
         worker_models,
         state_keys,
         autonomous=autonomous,
-        final_answer_agent=config.final_answer_agent,
+        final_answer_agent=final_answer_agent,
         final_answer_contract=final_answer_contract,
         max_agent_llm_turns=(
             max_agent_llm_turns
@@ -683,6 +684,47 @@ def build(
             else get_max_agent_llm_turns()
         ),
     )
+    root.before_agent_callback = [
+        _start_invocation,
+        *root.canonical_before_agent_callbacks,
+    ]
+    return root
+
+
+def _start_invocation(callback_context: CallbackContext) -> None:
+    """Reset execution controls for a new request, retaining session artifacts.
+
+    Attach to the root so a parallel branch cannot reset another branch's work.
+    The invocation ID keeps resumed executions and loop iterations on one budget.
+    Caller-supplied initial state is preserved on the first invocation.
+    """
+    state = callback_context.state
+    metadata = state.get(EXECUTION_METADATA_KEY, {})
+    previous = metadata.get("invocation_id") if isinstance(metadata, dict) else None
+    if previous == callback_context.invocation_id:
+        return
+    if previous is not None:
+        for key in (
+            EXECUTION_METADATA_KEY,
+            ABSTENTION_STATE_KEY,
+            RESEARCH_GATE_STATE_KEY,
+            RESEARCH_MODE_STATE_KEY,
+            RESEARCH_POLICY_STATE_KEY,
+            RESEARCH_CANDIDATE_LEDGER_KEY,
+            RESEARCH_INSPECTED_SOURCES_KEY,
+            RESEARCH_PROGRESS_STATE_KEY,
+            RESEARCH_TURN_STATE_KEY,
+            DISCOVERY_VALIDATION_STATE_KEY,
+            RESEARCH_EVIDENCE_ACTION_STATE_KEY,
+            RESEARCH_CONTROLLER_STATE_KEY,
+            CODE_AGENT_POLICY_STATE_KEY,
+        ):
+            state[key] = {}
+        metadata = {}
+    state[EXECUTION_METADATA_KEY] = {
+        **(metadata if isinstance(metadata, dict) else {}),
+        "invocation_id": callback_context.invocation_id,
+    }
 
 
 def _build_node(

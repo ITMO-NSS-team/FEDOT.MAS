@@ -39,7 +39,6 @@ _MUTATING_KEYWORDS = {
     "discard",
     "do",
     "drop",
-    "end",
     "execute",
     "grant",
     "insert",
@@ -65,7 +64,6 @@ _MUTATING_KEYWORDS = {
     "unlisten",
     "update",
     "vacuum",
-    "for",
     "into",
 }
 _SIDE_EFFECT_FUNCTIONS = {
@@ -196,6 +194,29 @@ def _tokens(sql: str) -> Iterator[str]:
             i += 1
 
 
+def _validate_expression_keywords(tokens: list[str]) -> None:
+    """Allow END in CASE and FOR in string functions, not transaction/row locks."""
+    functions: list[str] = []
+    cases = 0
+    for index, token in enumerate(tokens):
+        if token == "(":
+            name = tokens[index - 1] if index else ""
+            functions.append(name.strip('"').casefold())
+        elif token == ")":
+            if functions:
+                functions.pop()
+        elif token == "case":
+            cases += 1
+        elif token == "end":
+            if not cases:
+                raise QueryRejected("END is allowed only in a CASE expression.")
+            cases -= 1
+        elif token == "for" and (
+            not functions or functions[-1] not in {"substring", "overlay"}
+        ):
+            raise QueryRejected("FOR is allowed only in substring/overlay expressions.")
+
+
 def validate_select_sql(sql: str) -> str:
     """Accept exactly one SELECT or WITH ... SELECT statement.
 
@@ -220,6 +241,7 @@ def validate_select_sql(sql: str) -> str:
         raise QueryRejected(
             f"Only read-only SELECT is allowed; forbidden keyword: {forbidden[0].upper()}."
         )
+    _validate_expression_keywords(tokens)
     identifiers = {
         (word[1:-1].replace('""', '"') if word.startswith('"') else word).casefold()
         for word in words

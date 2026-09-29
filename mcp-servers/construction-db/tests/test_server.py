@@ -79,3 +79,37 @@ def test_quoted_side_effect_functions_are_rejected(sql):
 def test_quoted_columns_and_escaped_quotes_remain_valid():
     sql = 'SELECT "update", "a""b" FROM "table"'
     assert validate_select_sql(sql) == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT CASE WHEN 1 = 1 THEN 'yes' ELSE 'no' END AS result",
+        "SELECT sum(CASE WHEN amount > 0 THEN amount ELSE 0 END) FROM works",
+        "SELECT CASE WHEN true THEN CASE WHEN false THEN 1 ELSE 2 END ELSE 3 END",
+        "SELECT substring('abcdef' FROM 1 FOR 3)",
+        "SELECT overlay('abcdef' PLACING 'x' FROM 1 FOR 3)",
+        "SELECT pg_catalog.substring(lower('ABC') FROM 1 FOR 2)",
+    ],
+)
+def test_read_only_case_and_string_expressions(sql):
+    assert validate_select_sql(sql) == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "END",
+        "SELECT 1; END",
+        "SELECT 1 END",
+        "SELECT * FROM works FOR UPDATE",
+        "SELECT * FROM works FOR NO KEY UPDATE",
+        "SELECT * FROM works FOR SHARE",
+        "SELECT * FROM works FOR KEY SHARE",
+        "SELECT * FROM works FOR /* comment */ SHARE",
+        "SELECT substring((SELECT title FROM works FOR SHARE) FROM 1 FOR 3)",
+    ],
+)
+def test_transaction_end_and_row_locks_stay_rejected(sql):
+    with pytest.raises(QueryRejected):
+        validate_select_sql(sql)

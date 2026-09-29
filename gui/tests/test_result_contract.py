@@ -52,12 +52,13 @@ async def run_gui(monkeypatch, kind, config, answers):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("loop", [False, True])
 @pytest.mark.parametrize(
     "answer,status",
     [("42", "completed"), ('{"status":"unresolved","answer":null}', "incomplete")],
 )
 async def test_maw_endpoint_preserves_answer_and_execution_status(
-    monkeypatch, answer, status
+    monkeypatch, answer, status, loop
 ):
     done = await run_gui(
         monkeypatch,
@@ -66,7 +67,15 @@ async def test_maw_endpoint_preserves_answer_and_execution_status(
             "agents": [
                 {"name": "critic", "instruction": "Answer.", "output_key": "answer"}
             ],
-            "pipeline": {"type": "agent", "agent_name": "critic"},
+            "pipeline": (
+                {
+                    "type": "loop",
+                    "max_iterations": 1,
+                    "children": [{"type": "agent", "agent_name": "critic"}],
+                }
+                if loop
+                else {"type": "agent", "agent_name": "critic"}
+            ),
         },
         [answer],
     )

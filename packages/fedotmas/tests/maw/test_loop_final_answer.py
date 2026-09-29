@@ -117,12 +117,43 @@ class _ScriptedLlm(BaseLlm):
         )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        '{"status":"unresolved","answer":null}',
+        "<abstain>No evidence</abstain>",
+    ],
+)
+@pytest.mark.parametrize("recover", [False, True])
+async def test_inferred_loop_terminal_reports_nonanswer_and_recovery(
+    monkeypatch, answer, recover
+):
+    config = MAWConfig(
+        agents=[{"name": "answerer", "instruction": "Answer.", "output_key": "answer"}],
+        pipeline={
+            "type": "loop",
+            "max_iterations": 2 if recover else 1,
+            "children": [{"type": "agent", "agent_name": "answerer"}],
+        },
+    )
+    llm = _ScriptedLlm(
+        model="openai/test", responses=[answer, "42"] if recover else [answer]
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_: llm)
+    result = await run_pipeline(builder.build(config, autonomous=False), "Answer")
+    assert result.status == ("completed" if recover else "incomplete")
+    assert result.state["answer"] == ("42" if recover else answer)
+
+
 @pytest.mark.parametrize("explicit", [True, False])
 @pytest.mark.asyncio
 async def test_post_loop_finalizer_alone_receives_contract_and_final_state(
     monkeypatch: pytest.MonkeyPatch, explicit: bool
 ) -> None:
-    config = _config(finalizer=True, final_answer_agent="answerer" if explicit else None)
+    config = _config(
+        finalizer=True, final_answer_agent="answerer" if explicit else None
+    )
     llm = _ScriptedLlm(
         model="openai/test",
         responses=["revised draft", "validated", "<solution>answer</solution>"],

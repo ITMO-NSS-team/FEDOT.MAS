@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -216,4 +217,68 @@ async def test_timeout_reaps_cli_process(monkeypatch, tmp_path):
         for process in processes:
             if process.returncode is None:
                 process.kill()
+            await process.communicate()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process group cleanup")
+@pytest.mark.parametrize(
+    "entry,interrupt", [("run", "timeout"), ("run", "cancel"), ("login", "cancel")]
+)
+@pytest.mark.asyncio
+async def test_exited_launcher_child_is_reaped(monkeypatch, tmp_path, entry, interrupt):
+    import asyncio
+    import signal
+    import sys
+    from contextlib import suppress
+    from unittest.mock import AsyncMock
+
+    ready = asyncio.Event()
+    processes = []
+    create_process = asyncio.create_subprocess_exec
+
+    async def local_subprocess(*args, **kwargs):
+        process = await create_process(
+            sys.executable,
+            "-c",
+            "import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])",
+            **kwargs,
+        )
+        processes.append(process)
+        # wait() may also wait for inherited pipes; observe only the launcher exit.
+        async with asyncio.timeout(5):
+            while process.returncode is None:
+                await asyncio.sleep(0.01)
+        assert process.returncode == 0
+        ready.set()
+        return process
+
+    monkeypatch.setattr(codex_cli, "find_codex_cli", lambda: "codex")
+    monkeypatch.setattr(codex_cli.asyncio, "create_subprocess_exec", local_subprocess)
+    if entry == "run":
+        monkeypatch.setattr(
+            codex_cli, "codex_login_status", AsyncMock(return_value=(True, ""))
+        )
+        call = codex_cli.run_codex_cli(
+            "host/test", "hello", workdir=tmp_path, timeout=0.1
+        )
+    else:
+        call = codex_cli.codex_login_status()
+    task = asyncio.create_task(call)
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=5)
+        if interrupt == "cancel":
+            task.cancel()
+        with pytest.raises(
+            asyncio.CancelledError if interrupt == "cancel" else TimeoutError
+        ):
+            await task
+        # The sleeping child inherits both pipes: EOF proves it no longer holds them.
+        await asyncio.wait_for(processes[0].communicate(), timeout=2)
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        for process in processes:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
             await process.communicate()
