@@ -24,9 +24,9 @@ def is_explicit_abstention(value: Any) -> bool:
 
 
 _UNRESOLVED_TEXT = re.compile(
-    r"\b(?:unresolved|no exact answer|no answer to verify|exact optimum was not computed)\b|"
-    r"upstream.{0,100}explicitly unresolved|\b(?:there is|we have|i have|the system has) "
-    r"no (?:concrete |exact )?answer\b",
+    r"^\s*unresolved\s*$|upstream.{0,100}explicitly unresolved|"
+    r"\bno exact answer\b|\bno answer to verify\b|"
+    r"\bexact optimum was not computed\b",
     re.IGNORECASE,
 )
 _ANSWER_NULL_KEYS = {"answer", "verified_answer", "value", "formatted_answer"}
@@ -37,30 +37,20 @@ def is_unresolved_answer(value: Any) -> bool:
     parsed_candidates = parse_artifact_candidates(value)
     if parsed_candidates:
 
-        def visit(item: Any) -> bool:
-            if isinstance(item, dict):
-                if str(item.get("status", "")).casefold() == "unresolved":
-                    return True
-                if any(
-                    key.casefold() in _ANSWER_NULL_KEYS and val is None
-                    for key, val in item.items()
-                ):
-                    return True
-                return any(visit(val) for val in item.values())
-            if isinstance(item, list):
-                return any(visit(val) for val in item)
-            return False
-
-        if any(visit(parsed) for parsed in parsed_candidates):
-            return True
         if any(
-            _field_is_present(parsed, key)
+            str(parsed.get("status", "")).casefold() == "unresolved"
             for parsed in parsed_candidates
-            for key in _ANSWER_NULL_KEYS
         ):
-            return False
+            return True
+        # A null nested candidate is not evidence that the actual answer is
+        # unresolved. Only a top-level answer field has that meaning.
+        for parsed in parsed_candidates:
+            if any(parsed.get(key) is None for key in _ANSWER_NULL_KEYS if key in parsed):
+                return True
     if isinstance(value, str):
-        return bool(_UNRESOLVED_TEXT.search(value))
+        if _UNRESOLVED_TEXT.search(value):
+            return True
+        return False
     return False
 
 

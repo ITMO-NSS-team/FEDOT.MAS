@@ -10,8 +10,7 @@ from fastmcp import FastMCP
 ROOT = Path(__file__).resolve().parents[4]
 PUBLIC = ROOT / "artifacts" / "sampo_benchmark"
 ARTIFACTS = PUBLIC / "candidate_artifacts"
-sys.path.insert(0, str(ROOT / "scripts"))
-from sampo_baselines import bm25_token_ranked, tfidf_char_ngrams_ranked, tfidf_char_word_hybrid_ranked, tfidf_construction_token_ranked, tfidf_word_ranked
+from .baselines import bm25_token_ranked, tfidf_char_ngrams_ranked, tfidf_char_word_hybrid_ranked, tfidf_construction_token_ranked, tfidf_word_ranked
 
 mcp = FastMCP("sampo-benchmark")
 RETRIEVERS = {"bm25_token": bm25_token_ranked, "char_tfidf": tfidf_char_ngrams_ranked, "char_word_fusion": tfidf_char_word_hybrid_ranked, "construction_token_tfidf": tfidf_construction_token_ranked, "word_tfidf": tfidf_word_ranked}

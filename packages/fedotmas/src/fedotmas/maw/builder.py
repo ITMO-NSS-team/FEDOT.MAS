@@ -155,37 +155,40 @@ def _instruction_provider(
 
     async def provide(readonly_context: ReadonlyContext) -> str:
         state = readonly_context.state
-        text = instruction
+        # Shield authored state references while ADK resolves other placeholders.
+        # This also keeps braces in substituted artifacts out of ADK's parser.
+        authored_refs: list[tuple[str, str]] = []
+
+        def shield(match: re.Match[str]) -> str:
+            key = match.group(1)
+            if state_keys is not None and key not in state_keys:
+                return match.group(0)
+            index = len(authored_refs)
+            authored_refs.append((match.group(0), key))
+            return f"\ue000{index}\ue001"
+
+        text = await inject_session_state(
+            _STATE_REF_RE.sub(shield, instruction), readonly_context
+        )
         if output_key is not None and _is_blank(state.get(output_key)):
             marker = (
                 f'[No previous output for "{output_key}" exists yet. Create the '
                 "initial result; later loop iterations will receive your previous "
                 "output here.]"
             )
-            for ref, key in {
-                (m.group(0), m.group(1)) for m in _STATE_REF_RE.finditer(text)
-            }:
+            for index, (_ref, key) in enumerate(authored_refs):
                 if key == output_key:
-                    text = text.replace(ref, marker)
-        for ref, key in {
-            (m.group(0), m.group(1)) for m in _STATE_REF_RE.finditer(text)
-        }:
-            # Only a key some step produces can be *missing*; anything else is
-            # a literal the task carried in.
-            if state_keys is not None and key not in state_keys:
-                continue
+                    text = text.replace(f"\ue000{index}\ue001", marker)
+        for index, (_ref, key) in enumerate(authored_refs):
+            placeholder = f"\ue000{index}\ue001"
             if key in state and not _is_blank(state[key]):
                 artifact = _best_artifact_candidate(state[key])
                 replacement = (
-                    json.dumps(
-                        _compact_repair_projection(artifact),
-                        ensure_ascii=False,
-                        default=str,
-                    )
+                    json.dumps(artifact, ensure_ascii=False, default=str)
                     if artifact is not None
-                    else str(state[key])[:1200]
+                    else str(state[key])
                 )
-                text = text.replace(ref, replacement)
+                text = text.replace(placeholder, replacement)
                 continue
             _log.warning(
                 "Missing input | agent={} key='{}' — telling the agent instead "
@@ -193,10 +196,7 @@ def _instruction_provider(
                 agent_name,
                 key,
             )
-            text = text.replace(ref, _missing_input_marker(key))
-        # Resolve authored state refs before appending runtime data, which may
-        # contain arbitrary braces (such as artifact text or a handoff purpose).
-        text = await inject_session_state(text, readonly_context)
+            text = text.replace(placeholder, _missing_input_marker(key))
         for requirement in input_requirements or []:
             raw, missing, identity = describe_requirement(state, requirement)
             parsed = _best_artifact_candidate(
@@ -535,6 +535,22 @@ def _repair_values_supported(
     for identity in upstream.values():
         for field, value in identity.items():
             upstream_by_field.setdefault(field, []).append(value)
+
+    def contains_value(container: Any, expected: Any) -> bool:
+        if container == expected:
+            return True
+        if isinstance(container, dict):
+            return any(contains_value(item, expected) for item in container.values())
+        if isinstance(container, list):
+            return any(contains_value(item, expected) for item in container)
+        return False
+
+    # Repair may rename a field to satisfy its declared schema, but it must not
+    # silently discard semantic data that was already present in the artifact.
+    for key, value in source.items():
+        if not contains_value(result, value):
+            invalid.append(f"<dropped:{key}>")
+
     for field in fields:
         source_values, source_path_valid = field_values(source, field)
         result_values, result_path_valid = field_values(result, field)

@@ -212,7 +212,7 @@ async def run_pipeline(
         status = "limited"
     elif (
         isinstance(final_session.state.get(ABSTENTION_STATE_KEY), dict)
-        and final_session.state[ABSTENTION_STATE_KEY].get("status") == "abstained"
+        and final_session.state[ABSTENTION_STATE_KEY].get("status") in {"abstained", "unresolved"}
     ) or unresolved_execution_issues(final_session.state):
         status = "incomplete"
     else:

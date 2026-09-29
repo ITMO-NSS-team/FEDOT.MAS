@@ -580,7 +580,10 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 budget["seconds"] = max(
                     0.0, float(budget.get("seconds", 0.0)) - result_seconds
                 )
-                budget["phase"] = "primary_available"
+                # An inspection recommendation refunds this call but must not
+                # erase a recovery-only phase established by an earlier failure.
+                if budget.get("phase") != "recovery_available":
+                    budget["phase"] = "primary_available"
                 phases = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
                 if isinstance(phases, dict):
                     phases[agent_name] = "inspection"

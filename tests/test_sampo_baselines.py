@@ -4,8 +4,8 @@ import sys
 from itertools import pairwise
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from sampo_baselines import tfidf_char_ngrams, tfidf_char_ngrams_ranked
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mcp-servers/sampo-benchmark/src"))
+from mcp_sampo_benchmark.baselines import tfidf_char_ngrams, tfidf_char_ngrams_ranked
 
 
 def test_char_ranked_returns_scores_for_arbitrary_k() -> None:

@@ -220,9 +220,17 @@ def _has_unresolved_answer_lineage(issues: list[dict[str, Any]], terminal: Any) 
         "result",
         "value",
     }
+
+    def has_answer_field(paths: list[str]) -> bool:
+        return any(
+            segment.removesuffix("[]").casefold() in answer_fields
+            for path in paths
+            for segment in path.split(".")
+        )
+
     requirements = getattr(terminal, "input_requirements", []) or []
     for requirement in requirements:
-        if not answer_fields.intersection(
+        if not has_answer_field(
             requirement.required_fields + requirement.identity_fields
         ):
             continue
