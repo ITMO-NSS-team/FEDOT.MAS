@@ -10,4 +10,4 @@ deterministic tools:
 
 The fixture is intentionally labeled as synthetic. It demonstrates the
 integration and report contract without claiming access to the private STAIRS
-or SAMPO dumps described in `DEMOS.md`.
+data described in `DEMOS.md`.

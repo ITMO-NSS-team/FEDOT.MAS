@@ -326,6 +326,9 @@ def test_concrete_answer_with_uncertainty_explanation_is_not_abstention():
     assert not is_unresolved_answer(
         'Earlier state was unresolved; final result: {"answer":"42"}'
     )
+    assert not is_unresolved_answer(
+        {"answer": 42, "discarded_candidate": {"status": "unresolved"}}
+    )
 
 
 @pytest.mark.asyncio
@@ -1286,7 +1289,22 @@ def test_contract_repair_rejects_ambiguous_nested_value_mapping():
         '{"standard_name":"X"}',
         cfg,
         {},
-    ) == ["standard_name"]
+    ) == ["<dropped:assessments>", "standard_name"]
+
+
+def test_contract_repair_rejects_dropping_optional_semantic_values():
+    cfg = MAWAgentConfig(
+        name="producer",
+        instruction="",
+        output_key="artifact",
+        output_contract=ArtifactContract(required_fields=["answer"]),
+    )
+    assert builder._repair_values_supported(
+        '{"solution":"42","evidence":{"quote":"source text"}}',
+        '{"answer":"42"}',
+        cfg,
+        {},
+    ) == ["<dropped:evidence>"]
 
 
 @pytest.mark.asyncio

@@ -1,20 +1,15 @@
 # construction-db MCP server
 
-Read-only, bounded access to separate restored STAIRS and SAMPO databases.
+Read-only, bounded access to a restored STAIRS PostgreSQL database.
 
 ## Setup
 
 Copy `.env.example` to a private environment file. Configure
-`CONSTRUCTION_DB_STAIRS_DSN` for the STAIRS PostgreSQL instance and
-`CONSTRUCTION_DB_SAMPO_DSN` for the SAMPO Greenplum instance. They are separate
-profiles and are never merged into one database. Use database roles with only
-`CONNECT` and `SELECT` permissions; the server also begins every operation in a
-read-only transaction.
+`CONSTRUCTION_DB_STAIRS_DSN` for the STAIRS PostgreSQL instance. Use a database
+role with only `CONNECT` and `SELECT` permissions; the server also begins every
+operation in a read-only transaction.
 
-The format must drive restoration: restore STAIRS with a compatible PostgreSQL
-toolchain, and restore SAMPO into a compatible Greenplum cluster. A Greenplum
-archive can include Greenplum-specific DDL and is not assumed portable to stock
-PostgreSQL.
+Restore STAIRS with a compatible PostgreSQL toolchain.
 
 ```sh
 cd mcp-servers/construction-db
@@ -34,8 +29,8 @@ just doctor construction-db
 
 | Tool | Purpose |
 | --- | --- |
-| `list_connections()` | List the `stairs`/PostgreSQL and `sampo`/Greenplum profiles and configuration status. |
-| `list_tables(connection)` | List non-system tables and views for `stairs` or `sampo`. |
+| `list_connections()` | List the `stairs`/PostgreSQL profile and configuration status. |
+| `list_tables(connection)` | List non-system tables and views for `stairs`. |
 | `describe_table(connection, table_name)` | Return columns for a `schema.table` or public table. |
 | `query(connection, sql)` | Execute one bounded `SELECT` or `WITH ... SELECT` query for a profile. |
 | `get_table_sample(connection, table_name, limit=20)` | Return a bounded sample for a profile. |

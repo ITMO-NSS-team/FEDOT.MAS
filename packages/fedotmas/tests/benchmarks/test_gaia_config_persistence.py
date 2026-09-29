@@ -28,6 +28,7 @@ from benchmarks.gaia.run_gaia import (
     compute_token_summary,
     extract_answer_from_state,
     extract_terminal_answer,
+    _has_unresolved_answer_lineage,
     _matches_declared_answer_format,
     print_score_by_level,
     process_task,
@@ -148,10 +149,10 @@ def test_gaia_all_mcp_servers_excludes_e2b_servers_without_key(
     servers = _gaia_mcp_servers()
 
     assert "sandbox-light" in servers
-    assert not {"sandbox", "code-agent", "sampo-python"} & set(servers)
+    assert not {"sandbox", "code-agent"} & set(servers)
     registry = _gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))
     assert "sandbox-light" in registry
-    assert not {"sandbox", "code-agent", "sampo-python"} & set(registry)
+    assert not {"sandbox", "code-agent"} & set(registry)
 
 
 def test_gaia_passes_resolved_worker_settings_to_browser_agent(monkeypatch):
@@ -817,6 +818,21 @@ def test_declared_answer_format_is_checked_for_incomplete_results():
     numeric_task = SimpleNamespace(metadata={"answer_format": "integer"})
     assert _matches_declared_answer_format("42", numeric_task)
     assert not _matches_declared_answer_format("forty two", numeric_task)
+
+
+def test_nested_terminal_answer_fields_keep_unresolved_lineage_blocking():
+    terminal = SimpleNamespace(
+        input_requirements=[
+            SimpleNamespace(
+                source_key="upstream",
+                required_fields=["result.answer"],
+                identity_fields=[],
+            )
+        ]
+    )
+    assert _has_unresolved_answer_lineage(
+        [{"kind": "incomplete_handoff", "source_key": "upstream"}], terminal
+    )
 
 
 @pytest.mark.asyncio

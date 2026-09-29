@@ -161,7 +161,7 @@ def _instruction_provider(
 
         def shield(match: re.Match[str]) -> str:
             key = match.group(1)
-            if state_keys is not None and key not in state_keys:
+            if state_keys is not None and key not in state_keys and key != output_key:
                 return match.group(0)
             index = len(authored_refs)
             authored_refs.append((match.group(0), key))
@@ -182,11 +182,11 @@ def _instruction_provider(
         for index, (_ref, key) in enumerate(authored_refs):
             placeholder = f"\ue000{index}\ue001"
             if key in state and not _is_blank(state[key]):
-                artifact = _best_artifact_candidate(state[key])
+                value = state[key]
                 replacement = (
-                    json.dumps(artifact, ensure_ascii=False, default=str)
-                    if artifact is not None
-                    else str(state[key])
+                    json.dumps(value, ensure_ascii=False, default=str)
+                    if isinstance(value, (dict, list))
+                    else str(value)
                 )
                 text = text.replace(placeholder, replacement)
                 continue

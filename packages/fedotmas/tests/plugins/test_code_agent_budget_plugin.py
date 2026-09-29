@@ -473,6 +473,61 @@ async def test_nested_inspection_recommendation_refunds_reserved_budget():
 
 
 @pytest.mark.asyncio
+async def test_inspection_recommendation_preserves_recovery_only_phase():
+    plugin = CodeAgentBudgetPlugin(
+        max_calls_per_agent=4,
+        total_seconds_per_agent=180,
+        max_seconds_per_call=60,
+        task_timeout_seconds=300,
+        deadline_reserve_seconds=30,
+    )
+    ctx = _context(deadline=time.monotonic() + 200, call_id="primary")
+    primary = {"task": "Compute result", "files": ["input.csv"]}
+    assert (
+        await plugin.before_tool_callback(
+            tool=_tool(), tool_args=primary, tool_context=ctx
+        )
+        is None
+    )
+    await plugin.after_tool_callback(
+        tool=_tool(),
+        tool_args=primary,
+        tool_context=ctx,
+        result={"status": "timed_out", "error_code": "CODE_AGENT_TIMEOUT"},
+    )
+    budget = ctx.state[CODE_AGENT_BUDGET_STATE_KEY]["optimizer"]
+    assert budget["phase"] == "recovery_available"
+
+    ctx.function_call_id = "inspect"
+    inspection = {
+        "task": "Read the headers from the file",
+        "files": ["input.csv"],
+        "call_intent": "inspect",
+    }
+    assert (
+        await plugin.before_tool_callback(
+            tool=_tool(), tool_args=inspection, tool_context=ctx
+        )
+        is None
+    )
+    await plugin.after_tool_callback(
+        tool=_tool(),
+        tool_args=inspection,
+        tool_context=ctx,
+        result={"error_code": "CODE_AGENT_DOCUMENT_READING_RECOMMENDED"},
+    )
+    assert budget["phase"] == "recovery_available"
+
+    ctx.function_call_id = "unqualified"
+    blocked = await plugin.before_tool_callback(
+        tool=_tool(),
+        tool_args={"task": "Compute again", "files": ["input.csv"]},
+        tool_context=ctx,
+    )
+    assert blocked["error_code"] == "CODE_AGENT_TARGETED_RECOVERY_REQUIRED"
+
+
+@pytest.mark.asyncio
 async def test_cumulative_nested_wall_time_is_reserved_and_enforced():
     plugin = CodeAgentBudgetPlugin(
         max_calls_per_agent=5,

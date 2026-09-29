@@ -1,6 +1,7 @@
 import pytest
 
 from mcp_construction_db.server import (
+    _CONNECTION_PROFILES,
     QueryRejected,
     bounded_query,
     connection_string,
@@ -40,11 +41,10 @@ def test_validator_accepts_literals_and_a_top_level_with_select() -> None:
     assert validate_select_sql("SELECT $$DELETE; UPDATE$$ AS text") == "SELECT $$DELETE; UPDATE$$ AS text"
 
 
-def test_connection_profiles_are_explicit_and_separate(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_connection_profile_is_stairs_only(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CONSTRUCTION_DB_STAIRS_DSN", "postgresql://stairs")
-    monkeypatch.setenv("CONSTRUCTION_DB_SAMPO_DSN", "postgresql://sampo")
 
+    assert set(_CONNECTION_PROFILES) == {"stairs"}
     assert connection_string("stairs") == "postgresql://stairs"
-    assert connection_string("sampo") == "postgresql://sampo"
     with pytest.raises(RuntimeError, match="Unknown connection"):
         connection_string("combined")

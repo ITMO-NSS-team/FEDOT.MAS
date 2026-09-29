@@ -30,7 +30,7 @@
     {
       "name": "аудитор_доказательств",
       "description": "Сверяет нормы, расчёты, ссылки и границы допустимой интерпретации.",
-      "instruction": "Независимо сверь результаты инструментов. Для каждой строки должны быть work_name, object, dates, fact_rate, norm_rate, deviation_pct и card_ref; norm_rate должен быть положительным. Проверь, что синтетические данные не названы реальными STAIRS/SAMPO.",
+      "instruction": "Независимо сверь результаты инструментов. Для каждой строки должны быть work_name, object, dates, fact_rate, norm_rate, deviation_pct и card_ref; norm_rate должен быть положительным. Проверь, что синтетические данные не названы реальными STAIRS.",
       "model": "host/gpt-5.6-terra",
       "tools": ["technology-card-audit"],
       "output_key": "evidence_check",

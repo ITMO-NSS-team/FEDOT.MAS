@@ -105,7 +105,7 @@ mcp = FastMCP(
     "technology-card-audit",
     instructions=(
         "Use these tools only for the labeled synthetic TTK demonstration. "
-        "Never present the fixture as a real norm or as rows from STAIRS/SAMPO."
+        "Never present the fixture as a real norm or as rows from STAIRS."
     ),
 )
 
@@ -189,7 +189,7 @@ def audit_historical_productivity(
         "source_kind": "synthetic_demo_fixture",
         "source_notice": (
             "Исторические строки синтетические и служат для проверки логики отчёта; "
-            "это не выгрузка STAIRS/SAMPO."
+            "это не выгрузка STAIRS."
         ),
     }
 

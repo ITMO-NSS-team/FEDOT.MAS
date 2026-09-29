@@ -520,6 +520,29 @@ class TestMissingInputIsNamed:
         assert "row {n}" in text
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]"),
+            (
+                '[{"candidate":1},{"candidate":2}]',
+                '[{"candidate":1},{"candidate":2}]',
+            ),
+            ("Hello {customer_name}", "Hello {customer_name}"),
+        ],
+    )
+    async def test_state_reference_preserves_full_payload_and_braces(
+        self, value, expected
+    ):
+        provider = _instruction_provider(
+            "Pass {raw_data?} to the next step.",
+            "writer",
+            frozenset({"raw_data"}),
+        )
+        text = await provider(_readonly_context({"raw_data": value}))
+        assert expected in text
+
+    @pytest.mark.asyncio
     async def test_missing_upstream_state_diagnostic_survives_interpolation(self):
         provider = _instruction_provider("Use {upstream}.", "writer", frozenset({"upstream"}))
         text = await provider(_readonly_context({}))

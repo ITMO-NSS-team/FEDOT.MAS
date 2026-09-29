@@ -36,7 +36,7 @@ const migration = app.slice(app.indexOf("  const retiredRubberId ="),
                            app.indexOf("  // В автономной копии список"));
 context.S = {hidden: [], custom: context.window.STARTUP_PRESETS.map(p => ({
   id: p.id, query: "user input", queryRevision: p.kind === "mas" ? 1 : p.queryRevision,
-  brief: p.kind === "mas" ? p.brief + " Демонстрационные данные явно отделить от реальных данных STAIRS/SAMPO." : "user brief",
+  brief: p.kind === "mas" ? p.brief : "user brief",
   manual: "old", config: {untouched: true},
 }))};
 let stores = 0;
@@ -47,7 +47,7 @@ for (const saved of context.S.custom) {
   if (saved.id === "custom_technology_card_audit_terra") {
     assert.equal(saved.queryRevision, 2);
     assert.doesNotMatch(saved.query, /Данные обозначь как демонстрационные/);
-    assert.doesNotMatch(saved.brief, /Демонстрационные данные явно отделить/);
+    assert.equal(saved.brief, context.window.STARTUP_PRESETS.find(p => p.id === saved.id).brief);
   } else {
     assert.equal(saved.query, "user input");
     assert.equal(saved.brief, "user brief");

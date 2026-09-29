@@ -19,11 +19,6 @@ _CONNECTION_PROFILES = {
         "engine": "PostgreSQL",
         "source": "STAIRS",
     },
-    "sampo": {
-        "dsn_env": "CONSTRUCTION_DB_SAMPO_DSN",
-        "engine": "Greenplum",
-        "source": "SAMPO",
-    },
 }
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
@@ -314,7 +309,7 @@ def _error_message(error: Exception) -> str:
 
 @mcp.tool
 def list_connections() -> dict[str, Any]:
-    """List STAIRS/PostgreSQL and SAMPO/Greenplum connection profiles without credentials."""
+    """List the STAIRS/PostgreSQL connection profile without credentials."""
     return {
         "connections": [
             {
@@ -330,7 +325,7 @@ def list_connections() -> dict[str, Any]:
 
 @mcp.tool
 def list_tables(connection: str) -> dict[str, Any]:
-    """List accessible non-system tables and views for stairs or sampo."""
+    """List accessible non-system tables and views for stairs."""
     try:
         columns, rows = _run(
             connection,
@@ -353,7 +348,7 @@ def list_tables(connection: str) -> dict[str, Any]:
 
 @mcp.tool
 def describe_table(connection: str, table_name: str) -> dict[str, Any]:
-    """Describe a table in the stairs or sampo connection."""
+    """Describe a table in the stairs connection."""
     try:
         schema, table = _table_parts(table_name)
     except ValueError as error:
@@ -377,7 +372,7 @@ def describe_table(connection: str, table_name: str) -> dict[str, Any]:
 
 @mcp.tool
 def query(connection: str, sql: str) -> dict[str, Any]:
-    """Run one bounded read-only SELECT query on stairs or sampo."""
+    """Run one bounded read-only SELECT query on stairs."""
     try:
         statement, parameters = bounded_query(sql, max_rows())
     except QueryRejected as error:
@@ -399,7 +394,7 @@ def query(connection: str, sql: str) -> dict[str, Any]:
 def get_table_sample(
     connection: str, table_name: str, limit: int = 20
 ) -> dict[str, Any]:
-    """Return a bounded table sample from the stairs or sampo connection."""
+    """Return a bounded table sample from the stairs connection."""
     try:
         schema, table = _table_parts(table_name)
     except ValueError as error:
