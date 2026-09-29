@@ -11,7 +11,9 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import tempfile
+from contextlib import suppress
 from copy import deepcopy
 from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
@@ -72,9 +74,9 @@ async def codex_login_status() -> tuple[bool, str]:
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
     except TimeoutError:
-        process.kill()
-        await process.wait()
         return False, "Проверка авторизации Codex CLI превысила 10 секунд"
+    finally:
+        await _terminate_process(process)
     note = _decode(stdout or stderr).strip()
     return process.returncode == 0, note
 
@@ -150,9 +152,9 @@ async def run_codex_cli(
                 timeout=timeout or _DEFAULT_TIMEOUT_SECONDS,
             )
         except TimeoutError:
-            process.kill()
-            await process.wait()
             raise TimeoutError(f"Codex CLI model {native_model} timed out") from None
+        finally:
+            await _terminate_process(process)
 
         stdout_text = _decode(stdout)
         stderr_text = _decode(stderr)
@@ -230,10 +232,27 @@ class CodexCliLlm(BaseLlm):
 
 class _CreationOptions(TypedDict, total=False):
     creationflags: int
+    start_new_session: bool
 
 
 def _creation_options() -> _CreationOptions:
-    return {"creationflags": 0x08000000} if os.name == "nt" else {}
+    return (
+        {"creationflags": 0x08000000}
+        if os.name == "nt"
+        else {"start_new_session": True}
+    )
+
+
+async def _terminate_process(process: asyncio.subprocess.Process) -> None:
+    """Reap an interrupted CLI, including its launcher children on POSIX."""
+    if process.returncode is not None:
+        return
+    with suppress(ProcessLookupError):
+        if os.name == "nt":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    await process.wait()
 
 
 def _decode(value: bytes) -> str:
