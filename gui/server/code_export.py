@@ -14,6 +14,7 @@ from .agent_names import latinize_mas
 from .config import AGENT_MAX_OUTPUT_TOKENS
 from .normalize import _builtin_names, _valid_name, cap_run_tokens, sanitize_config
 from .schemas import CodeExportIn
+from .results import prepare_output_key
 
 
 # Only reviewed, explicitly listed source files are exportable. Never walk a
@@ -152,29 +153,41 @@ if __name__ == "__main__":
 '''
 
 
-def build_code_archive(body: CodeExportIn, *, tools: list[str], default_model: str) -> bytes:
+def build_code_archive(
+    body: CodeExportIn, *, tools: list[str], default_model: str
+) -> bytes:
     if body.kind not in {"mas", "maw"}:
         raise ValueError("Допустимый тип системы: mas или maw")
 
-    config = (MASConfig if body.kind == "mas" else MAWConfig).model_validate(body.config)
+    config = (MASConfig if body.kind == "mas" else MAWConfig).model_validate(
+        body.config
+    )
     custom = _custom_names(body.custom_mcp, tools)
     # The GUI performs these transformations immediately before build_and_run.
     # Export the runnable form, with original prompts/topology and active model.
-    config = sanitize_config(config, body.kind, custom,
-                             available_tools=set(tools) | set(custom))
+    config = sanitize_config(
+        config, body.kind, custom, available_tools=set(tools) | set(custom)
+    )
     cap_run_tokens(config, AGENT_MAX_OUTPUT_TOKENS)
     if body.kind == "mas":
         latinize_mas(config)
+    prepare_output_key(config)
     if body.model:
-        agents = (getattr(config, "agents", None)
-                  or [config.coordinator, *config.workers])
+        agents = getattr(config, "agents", None) or [
+            config.coordinator,
+            *config.workers,
+        ]
         for agent in agents:
             agent.model = body.model
 
     bundled = [name for name in tools if name in _CALC_MCP]
-    manifest = {"kind": body.kind, "tools": tools, "custom_mcp": custom,
-                "bundled_mcp": bundled,
-                "model": body.model or default_model}
+    manifest = {
+        "kind": body.kind,
+        "tools": tools,
+        "custom_mcp": custom,
+        "bundled_mcp": bundled,
+        "model": body.model or default_model,
+    }
     readme = (
         "# Исходный код выбранной МАС\n\n"
         "`config.json` содержит агентов, их инструкции и схему взаимодействия; "
@@ -184,7 +197,7 @@ def build_code_archive(body: CodeExportIn, *, tools: list[str], default_model: s
         "## Запуск\n\n"
         "Установите Python 3.12+ и FEDOT.MAS из исходного репозитория, настройте "
         "`OPENROUTER_API_KEY` или ключ выбранного провайдера, затем выполните "
-        "`python run.py \"Ваша задача\"`. Модель, работающая через Codex CLI "
+        '`python run.py "Ваша задача"`. Модель, работающая через Codex CLI '
         "(`host/…`), требует установленного и авторизованного CLI. "
         "Инструментам могут понадобиться отдельные сервисы и зависимости. "
         "Другие выбранные MCP, отсутствующие в архиве, должны быть доступны "
@@ -192,8 +205,8 @@ def build_code_archive(body: CodeExportIn, *, tools: list[str], default_model: s
         "URL и заголовки пользовательских MCP-серверов не экспортируются. "
         "Если они используются, перед запуском задайте переменную окружения "
         "`FEDOTMAS_CUSTOM_MCP` как JSON-объект: "
-        "`{\"имя_сервера\": {\"url\": \"https://…\", "
-        "\"headers\": {\"Authorization\": \"Bearer …\"}}}`. "
+        '`{"имя_сервера": {"url": "https://…", '
+        '"headers": {"Authorization": "Bearer …"}}}`. '
         "Имена нужных серверов перечислены в `manifest.json`.\n\n"
         "Загруженные в GUI файлы, история выполнения, ключи и исходный текст "
         "запроса в архив не включаются. Проверяйте инструкции агентов перед "
@@ -210,7 +223,9 @@ def build_code_archive(body: CodeExportIn, *, tools: list[str], default_model: s
         )
     contents = {
         "run.py": RUNNER,
-        "config.json": json.dumps(_redact(config.model_dump(mode="json")), ensure_ascii=False, indent=2),
+        "config.json": json.dumps(
+            _redact(config.model_dump(mode="json")), ensure_ascii=False, indent=2
+        ),
         "manifest.json": json.dumps(_redact(manifest), ensure_ascii=False, indent=2),
         "README.md": readme,
     }
