@@ -2480,12 +2480,19 @@ const LS_RUN = "fedotmas-run";
 function initPresets() {
   S.custom = loadStored(LS_CUSTOM, []) || [];
   S.hidden = loadStored(LS_HIDDEN, []) || [];
+  // Старый пример с рецептурой 55/45/55 остаётся в хранилище браузера,
+  // но больше не показывается рядом с подтверждённым контрольным прогоном.
+  const retiredRubberId = "rubber_property_prediction_maw_terra_5_agents_20260916";
+  let queryUpdated = false;
+  if (!S.hidden.includes(retiredRubberId)) {
+    S.hidden.push(retiredRubberId);
+    queryUpdated = true;
+  }
   if (!S.custom.length && Array.isArray(window.STARTUP_PRESETS)) {
     S.custom = window.STARTUP_PRESETS.slice();
   }
   // Обновление постановки встроенного сценария применяется к сохранённой копии
   // один раз; дальнейшие правки пользователя сохраняются до следующей редакции.
-  let queryUpdated = false;
   // Новую запись эталонного прогона добавляем и в браузеры, где уже сохранены
   // свои сценарии. Старые прогоны и пользовательские правки не перезаписываем.
   for (const preset of window.STARTUP_PRESETS || []) {
@@ -2497,6 +2504,29 @@ function initPresets() {
   }
   for (const preset of window.STARTUP_PRESETS || []) {
     const saved = S.custom.find((item) => item.id === preset.id);
+    if (saved && preset.id === "rubber_heldout_reference_run_20260927"
+        && saved.title === "Шины · контрольная рецептура с MAPE") {
+      saved.title = preset.title;
+      queryUpdated = true;
+    }
+    if (saved && preset.id === "rubber_heldout_reference_run_20260927") {
+      const oldHeading = "Прогнозные значения и сравнение с опубликованными данными";
+      const newHeading = "Прогнозные значения и сравнение с фактом";
+      if (typeof saved.answer === "string" && saved.answer.includes(oldHeading)) {
+        saved.answer = saved.answer.replaceAll(oldHeading, newHeading);
+        queryUpdated = true;
+      }
+      for (const event of saved.trace || []) {
+        if (typeof event.text === "string" && event.text.includes(oldHeading)) {
+          event.text = event.text.replaceAll(oldHeading, newHeading);
+          queryUpdated = true;
+        }
+        if (typeof event.io?.output === "string" && event.io.output.includes(oldHeading)) {
+          event.io.output = event.io.output.replaceAll(oldHeading, newHeading);
+          queryUpdated = true;
+        }
+      }
+    }
     if (saved && (saved.queryRevision || 0) < (preset.queryRevision || 0)) {
       saved.query = preset.query;
       saved.queryRevision = preset.queryRevision;
