@@ -152,7 +152,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
         self.deadline_reserve_seconds = max(0.0, float(deadline_reserve_seconds))
         self.telemetry = telemetry
         self._reservations: dict[tuple[str, str, str], tuple[float, float]] = {}
-        self._requests: dict[tuple[str, str, str], str] = {}
+        self._requests: dict[tuple[str, str, str], tuple[str, str]] = {}
 
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
@@ -198,7 +198,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
 
         llm_request.append_instructions(
             [
-                "For exact computational tasks: use call_intent=inspect only for lightweight input/parse inspection, which does not start or reset computation. Use call_intent=compute for the primary computation. After an observed failure, a recovery requires call_intent=targeted_recovery and recovery_target equal to the reported failure code/category. Validate parsing with compact structural invariants; make only that targeted correction; do not redesign the solver."
+                "For exact computational tasks: use document-reading tools for lightweight input/parse inspection. solve_with_code always runs a solver, so call_intent=inspect is redirected without execution. Use call_intent=compute for the primary computation. After an observed failure, a recovery requires call_intent=targeted_recovery and recovery_target equal to the reported failure code/category. Validate parsing with compact structural invariants; make only that targeted correction; do not redesign the solver."
             ]
         )
         outcome = current.get("last_outcome") if isinstance(current, dict) else None
@@ -254,9 +254,11 @@ class CodeAgentBudgetPlugin(BasePlugin):
     ) -> dict | None:
         if strip_tool_name_prefix(tool.name).lower() != "solve_with_code":
             return None
+        # This tool always invokes a solver. An inspection label must not
+        # authorize computation outside the primary/recovery phase checks.
         if (
             _is_document_reading_call(tool_args)
-            and tool_args.get("call_intent") != "inspect"
+            or tool_args.get("call_intent") == "inspect"
         ):
             invocation = tool_context._invocation_context
             phase_root = tool_context.state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
@@ -388,10 +390,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 "converge_now": True,
                 "session_persistent": False,
             }
-        requested_inspection = tool_args.get("call_intent") == "inspect"
-        if requested_inspection:
-            call_phase = "inspection"
-        elif phase == "recovery_available":
+        if phase == "recovery_available":
             expected_target = str(
                 budget.get("failure_code")
                 or budget.get("last_outcome")
@@ -427,9 +426,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
             }
         phase_root = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
         if isinstance(phase_root, dict):
-            phase_root[agent_name] = (
-                "inspection" if requested_inspection else budget["phase"]
-            )
+            phase_root[agent_name] = budget["phase"]
 
         exhausted = str(budget.get("status", "")) == "exhausted"
         used_calls = int(budget.get("calls", 0))
@@ -484,7 +481,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 call_id = getattr(tool_context, "function_call_id", None)
                 key = (session_id, agent_name, str(call_id or used_calls + 1))
                 self._reservations[key] = (time.monotonic(), allowed)
-                self._requests[key] = call_phase
+                self._requests[key] = (call_phase, str(phase))
         budget["policy_mode"] = role_policy
 
         budget.update(
@@ -556,7 +553,9 @@ class CodeAgentBudgetPlugin(BasePlugin):
         if reservation is None:
             return
         started, reserved = reservation
-        call_phase = self._requests.pop(key, "primary_computation")
+        call_phase, previous_phase = self._requests.pop(
+            key, ("primary_computation", "primary_available")
+        )
         elapsed = max(0.0, time.monotonic() - started)
         if isinstance(budget, dict):
             budget["reserved_seconds"] = max(
@@ -588,11 +587,14 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 )
                 # An inspection recommendation refunds this call but must not
                 # erase a recovery-only phase established by an earlier failure.
-                if budget.get("phase") != "recovery_available":
-                    budget["phase"] = "primary_available"
+                budget["phase"] = previous_phase
                 phases = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
                 if isinstance(phases, dict):
-                    phases[agent_name] = "inspection"
+                    phases[agent_name] = (
+                        "inspection"
+                        if previous_phase == "primary_available"
+                        else previous_phase
+                    )
             else:
                 category, message = _outcome(payload)
                 budget["last_outcome"] = category
@@ -606,8 +608,6 @@ class CodeAgentBudgetPlugin(BasePlugin):
                 mode = budget.get("policy_mode", "solver")
                 if category == "budget_exhausted":
                     budget["phase"] = "budget_exhausted"
-                elif call_phase == "inspection":
-                    pass
                 elif call_phase == "targeted_recovery" or mode == "verify_candidate":
                     budget["phase"] = "complete"
                 elif category in {
@@ -620,12 +620,7 @@ class CodeAgentBudgetPlugin(BasePlugin):
                     budget["phase"] = "complete"
                 phase_root = state.setdefault(CODE_AGENT_PHASE_STATE_KEY, {})
                 if isinstance(phase_root, dict):
-                    phase_root[agent_name] = (
-                        "inspection"
-                        if call_phase == "inspection"
-                        and budget["phase"] == "primary_available"
-                        else budget["phase"]
-                    )
+                    phase_root[agent_name] = budget["phase"]
                 # Keep only a concise structured summary in the model context.
                 answer = (
                     str(payload.get("answer") or "")[:3000]

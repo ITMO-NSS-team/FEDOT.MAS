@@ -417,21 +417,11 @@ async def test_explicit_parse_inspection_does_not_consume_computation_phase():
         "files": ["input.csv"],
         "call_intent": "inspect",
     }
-    assert (
-        await plugin.before_tool_callback(
-            tool=_tool(), tool_args=inspect, tool_context=ctx
-        )
-        is None
+    blocked = await plugin.before_tool_callback(
+        tool=_tool(), tool_args=inspect, tool_context=ctx
     )
-    await plugin.after_tool_callback(
-        tool=_tool(),
-        tool_args=inspect,
-        tool_context=ctx,
-        result={"status": "completed", "answer": "3 columns, consistent rows"},
-    )
-    budget = ctx.state[CODE_AGENT_BUDGET_STATE_KEY]["optimizer"]
-    assert budget["calls"] == 1
-    assert budget["phase"] == "primary_available"
+    assert blocked["error_code"] == "CODE_AGENT_DOCUMENT_READING_RECOMMENDED"
+    assert CODE_AGENT_BUDGET_STATE_KEY not in ctx.state
     ctx.function_call_id = "compute"
     assert (
         await plugin.before_tool_callback(
@@ -440,7 +430,7 @@ async def test_explicit_parse_inspection_does_not_consume_computation_phase():
         is None
     )
     budget = ctx.state[CODE_AGENT_BUDGET_STATE_KEY]["optimizer"]
-    assert budget["calls"] == 2
+    assert budget["calls"] == 1
     assert budget["phase"] == "primary_running"
 
 
@@ -504,18 +494,10 @@ async def test_inspection_recommendation_preserves_recovery_only_phase():
         "files": ["input.csv"],
         "call_intent": "inspect",
     }
-    assert (
-        await plugin.before_tool_callback(
-            tool=_tool(), tool_args=inspection, tool_context=ctx
-        )
-        is None
+    blocked = await plugin.before_tool_callback(
+        tool=_tool(), tool_args=inspection, tool_context=ctx
     )
-    await plugin.after_tool_callback(
-        tool=_tool(),
-        tool_args=inspection,
-        tool_context=ctx,
-        result={"error_code": "CODE_AGENT_DOCUMENT_READING_RECOMMENDED"},
-    )
+    assert blocked["error_code"] == "CODE_AGENT_DOCUMENT_READING_RECOMMENDED"
     assert budget["phase"] == "recovery_available"
 
     ctx.function_call_id = "unqualified"
@@ -671,3 +653,95 @@ async def test_original_host_file_path_is_added_to_code_agent_context():
     assert "/host/input.txt" in instruction
     assert "files=[" in instruction
     assert "Do not copy its contents" in instruction
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", [None, "timeout", "success"])
+async def test_compute_labelled_inspect_never_runs_or_changes_phase(outcome):
+    plugin = CodeAgentBudgetPlugin(
+        max_calls_per_agent=4,
+        total_seconds_per_agent=240,
+        max_seconds_per_call=60,
+        task_timeout_seconds=600,
+        deadline_reserve_seconds=30,
+    )
+    ctx = _context(deadline=time.monotonic() + 600, call_id="primary")
+    primary = {"task": "Compute exact optimum", "files": ["input.csv"]}
+    assert (
+        await plugin.before_tool_callback(
+            tool=_tool(), tool_args=primary, tool_context=ctx
+        )
+        is None
+    )
+    if outcome:
+        result = (
+            {"status": "incomplete", "error_code": "CODE_AGENT_TIMEOUT"}
+            if outcome == "timeout"
+            else {"status": "completed", "answer": "42"}
+        )
+        await plugin.after_tool_callback(
+            tool=_tool(), tool_args=primary, tool_context=ctx, result=result
+        )
+    budget = ctx.state[CODE_AGENT_BUDGET_STATE_KEY]["optimizer"]
+    before = dict(budget)
+    for index in range(2):
+        ctx.function_call_id = f"inspect-{index}"
+        blocked = await plugin.before_tool_callback(
+            tool=_tool(),
+            tool_args={**primary, "call_intent": "inspect"},
+            tool_context=ctx,
+        )
+        assert blocked["error_code"] == "CODE_AGENT_DOCUMENT_READING_RECOMMENDED"
+        assert budget == before
+
+
+@pytest.mark.asyncio
+async def test_redirected_targeted_recovery_restores_recovery_phase():
+    plugin = CodeAgentBudgetPlugin(
+        max_calls_per_agent=4,
+        total_seconds_per_agent=240,
+        max_seconds_per_call=60,
+        task_timeout_seconds=600,
+        deadline_reserve_seconds=30,
+    )
+    ctx = _context(deadline=time.monotonic() + 600, call_id="primary")
+    args = {"task": "Compute optimum", "files": ["input.csv"]}
+    assert (
+        await plugin.before_tool_callback(
+            tool=_tool(), tool_args=args, tool_context=ctx
+        )
+        is None
+    )
+    await plugin.after_tool_callback(
+        tool=_tool(),
+        tool_args=args,
+        tool_context=ctx,
+        result={"status": "incomplete", "error_code": "CODE_AGENT_TIMEOUT"},
+    )
+    ctx.function_call_id = "recovery"
+    recovery = {
+        **args,
+        "call_intent": "targeted_recovery",
+        "recovery_target": "CODE_AGENT_TIMEOUT",
+    }
+    assert (
+        await plugin.before_tool_callback(
+            tool=_tool(), tool_args=recovery, tool_context=ctx
+        )
+        is None
+    )
+    await plugin.after_tool_callback(
+        tool=_tool(),
+        tool_args=recovery,
+        tool_context=ctx,
+        result={"error_code": "CODE_AGENT_DOCUMENT_READING_RECOMMENDED"},
+    )
+    budget = ctx.state[CODE_AGENT_BUDGET_STATE_KEY]["optimizer"]
+    assert budget["phase"] == "recovery_available"
+    assert budget["calls"] == 1
+    assert budget["reserved_seconds"] == 0
+    ctx.function_call_id = "untargeted"
+    blocked = await plugin.before_tool_callback(
+        tool=_tool(), tool_args=args, tool_context=ctx
+    )
+    assert blocked["error_code"] == "CODE_AGENT_TARGETED_RECOVERY_REQUIRED"
