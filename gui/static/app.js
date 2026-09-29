@@ -1989,41 +1989,28 @@ async function liveRun() {
         } else if (ev.type === "done") {
           S.tokens = ev.tokens ?? S.tokens;
           S.seconds = ev.elapsed;
-          S.preset.runStats = { tokens: S.tokens, elapsed: S.seconds };
+          S.preset.runStats = { tokens: S.tokens, elapsed: S.seconds, status: ev.status || "completed" };
           $("m-tokens").textContent = nfmt(S.tokens);
           $("m-time").textContent = fmtTime(ev.elapsed);
           $("p-fill").style.width = "100%";
-          // Итог — артефакт последнего содержательного агента; отзыв критика ответом не является.
-          const criticRe = /критик|critic|валид|valid|провер|review|judge|качеств|контрол|аудит|реценз|quality/i;
-          const cfgAgents = S.preset.kind === "mas"
-            ? [S.preset.config.coordinator, ...(S.preset.config.workers || [])]
-            : (S.preset.config.agents || []);
-          const criticKeys = new Set(cfgAgents.filter((a) => criticRe.test(a.name))
-                                              .map((a) => a.output_key).filter(Boolean));
-          const keys = Object.keys(ev.state || {}).filter((k) => String(ev.state[k] || "").trim());
-          const useful = keys.filter((k) => !criticKeys.has(k));
-          const pool = useful.length ? useful : keys;
-          // Последний по порядку агент иногда отдаёт короткую сводку вместо расчёта —
-          // тогда берём самый содержательный артефакт, а не формально последний.
-          let last = pool.length ? String(ev.state[pool[pool.length - 1]] || "") : "";
-          const longest = pool.reduce((best, k) => {
-            const v = String(ev.state[k] || "");
-            return v.length > best.length ? v : best;
-          }, "");
-          if (longest.length > last.length * 2) last = longest;
+          const status = ev.status || "completed";
+          const completed = status === "completed";
+          const statusText = ({incomplete: "не завершено", limited: "достигнут лимит",
+            timed_out: "превышено время", failed: "ошибка"})[status] || "не завершено";
+          const last = String(ev.answer ?? "");
           S.answer = { text: last || "(система не вернула текстового результата)",
-                       meta: `${S.preset.kind === "mas" ? "MASConfig" : "MAWConfig"} · ${nfmt(S.tokens)} токенов · ${String(ev.elapsed).replace(".", ",")} с` };
+                       meta: `${S.preset.kind === "mas" ? "MASConfig" : "MAWConfig"} · ${nfmt(S.tokens)} токенов · ${String(ev.elapsed).replace(".", ",")} с${completed ? "" : " · " + statusText}` };
           S.query = $("query").value;
           S.preset.query = S.query;
           S.baseline = null; S.judge = null; S.review = null;
           renderAnswer();
           const prev = document.querySelector(".msg:last-child .msg-text");
           const duplicate = prev && last && prev.textContent.trim().startsWith(last.trim().slice(0, 60));
-          if (!duplicate) liveMessage("готово", "результат", last || "Система завершила работу.");
+          if (!duplicate || !completed) liveMessage(completed ? "готово" : statusText, "результат", last || "Система не вернула итоговый ответ.");
           else prev.closest(".msg").classList.add("final");
 
           // сценарий получает журнал, ответ и стоимость — дальше его можно проигрывать без сети
-          if (trace.length) trace[trace.length - 1].final = true;
+          if (trace.length) trace[trace.length - 1].final = completed;
           S.preset.trace = trace;
           S.preset.answer = S.answer.text;
           S.preset.answerMeta = S.answer.meta;

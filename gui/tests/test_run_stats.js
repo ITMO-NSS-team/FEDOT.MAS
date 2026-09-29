@@ -67,6 +67,18 @@ async function run(events) {
   assert.equal(context.S.tokens, 42);
   const fallback = await run([{type: "tokens", tokens: 77}, {type: "done", elapsed: 1}]);
   assert.equal(fallback.runStats.tokens, 77);
+  const finalAnswer = await run([{type: "done", answer: "42", status: "completed",
+    state: {answer: "42", worker: "long draft".repeat(100), _fedotmas_execution: "metadata".repeat(200)}}]);
+  assert.equal(finalAnswer.answer, "42");
+  assert.equal(finalAnswer.runStats.status, "completed");
+  const incomplete = await run([
+    {type: "text", agent: "critic", text: "partial", tokens: 1},
+    {type: "done", answer: "partial", status: "incomplete", state: {answer: "partial"}},
+  ]);
+  assert.equal(incomplete.answer, "partial");
+  assert.match(incomplete.answerMeta, /не завершено/);
+  assert.equal(incomplete.runStats.status, "incomplete");
+  assert.equal(incomplete.trace.at(-1).final, false);
   assert.equal(context.recordedRunStats({answerMeta: "MASConfig · 12\u00a0345 токенов · 3 с",
     trace: [{tokens: 1}]}).tokens, 12345);
   assert.equal(context.recordedRunStats({trace: [{tokens: 10}, {tokens: 20}]}).tokens, 30);

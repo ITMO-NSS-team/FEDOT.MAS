@@ -48,7 +48,9 @@ def _builtin_names() -> set[str]:
     """Имена всех встроенных MCP-серверов, включая не запрошенные в этот раз."""
     try:
         return set(resolve_mcp_registry("all") or {})
-    except Exception:          # реестр не собрался — лучше перестраховаться именами по умолчанию
+    except (
+        Exception
+    ):  # реестр не собрался — лучше перестраховаться именами по умолчанию
         return set(SAFE_TOOLS)
 
 
@@ -57,7 +59,7 @@ def _is_smithery_url(url: str) -> bool:
 
     try:
         host = (urlparse(url).hostname or "").lower()
-    except ValueError:         # «https://[::1].smithery.ai/» — не адрес, ключ не подставляем
+    except ValueError:  # «https://[::1].smithery.ai/» — не адрес, ключ не подставляем
         return False
     return host.endswith(_SMITHERY_HOSTS)
 
@@ -100,7 +102,9 @@ def _mcp_registry_for(tools: list[str], custom: list | None) -> tuple:
             name = _valid_name(f"custom_{name}")
             while name in registry:
                 name += "_"
-            _log.warning("Имя своего MCP-сервера занято встроенным, переименован в {}", name)
+            _log.warning(
+                "Имя своего MCP-сервера занято встроенным, переименован в {}", name
+            )
         headers = dict(item.headers or {})
         # Ключ реестра подставляем только на адреса самого реестра. Раньше признак
         # «source: smithery» приходил от клиента вместе с адресом — и любой запрос
@@ -109,18 +113,28 @@ def _mcp_registry_for(tools: list[str], custom: list | None) -> tuple:
             if _is_smithery_url(item.url):
                 headers.setdefault("Authorization", f"Bearer {SMITHERY_API_KEY}")
             else:
-                _log.warning("Адрес {} не принадлежит реестру — ключ не подставлен", item.url)
+                _log.warning(
+                    "Адрес {} не принадлежит реестру — ключ не подставлен", item.url
+                )
         registry[name] = HttpMCPServer(
-            url=item.url, headers=headers,
-            description=f"Свой MCP-сервер: {item.url}", tags=("custom",))
+            url=item.url,
+            headers=headers,
+            description=f"Свой MCP-сервер: {item.url}",
+            tags=("custom",),
+        )
         added.append(name)
-        _log.info("Подключён свой MCP-сервер | имя={} адрес={} ключ={}",
-                  name, item.url, "есть" if headers.get("Authorization") else "нет")
+        _log.info(
+            "Подключён свой MCP-сервер | имя={} адрес={} ключ={}",
+            name,
+            item.url,
+            "есть" if headers.get("Authorization") else "нет",
+        )
     return registry, added
 
 
-def sanitize_config(config, kind: str, extra_tools: list[str] | None = None,
-                    *, available_tools=None):
+def sanitize_config(
+    config, kind: str, extra_tools: list[str] | None = None, *, available_tools=None
+):
     """Приводит имена агентов и ключи состояния к виду, который принимает ADK.
 
     *extra_tools* — имена своих MCP-серверов: они разрешены наравне со встроенными,
@@ -129,7 +143,9 @@ def sanitize_config(config, kind: str, extra_tools: list[str] | None = None,
     allowed_tools = set(SAFE_TOOLS) | set(extra_tools or [])
     if available_tools is not None:
         allowed_tools &= set(available_tools)
-    agents = list(getattr(config, "agents", None) or ([config.coordinator] + list(config.workers)))
+    agents = list(
+        getattr(config, "agents", None) or ([config.coordinator] + list(config.workers))
+    )
     renames: dict[str, str] = {}
     keys: dict[str, str] = {}
 
@@ -145,10 +161,23 @@ def sanitize_config(config, kind: str, extra_tools: list[str] | None = None,
                 keys[key] = new_key
                 agent.output_key = new_key
 
-    if keys:                                   # ссылки {ключ} в инструкциях должны совпадать
+    if keys:  # ссылки {ключ} в инструкциях должны совпадать
         for agent in agents:
-            for old, new in keys.items():
-                agent.instruction = agent.instruction.replace("{" + old, "{" + new)
+            agent.instruction = re.sub(
+                r"\{([^{}?]+)(\??)\}",
+                lambda match: "{" + keys.get(match[1], match[1]) + match[2] + "}",
+                agent.instruction,
+            )
+
+    if kind != "mas":
+        for agent in agents:
+            for requirement in agent.input_requirements:
+                requirement.source_key = keys.get(
+                    requirement.source_key, requirement.source_key
+                )
+        config.final_answer_agent = renames.get(
+            config.final_answer_agent, config.final_answer_agent
+        )
 
     if renames and kind == "mas":
         # Координатор зовёт воркеров по имени прямо в тексте инструкции: без
@@ -162,11 +191,13 @@ def sanitize_config(config, kind: str, extra_tools: list[str] | None = None,
                     agent.description = desc.replace(old, new)
 
     if renames and kind != "mas":
+
         def walk(node):
             if node.type == "agent" and node.agent_name in renames:
                 node.agent_name = renames[node.agent_name]
             for child in node.children or []:
                 walk(child)
+
         walk(config.pipeline)
 
     if kind != "mas" and getattr(config, "pipeline", None) is not None:
@@ -175,17 +206,21 @@ def sanitize_config(config, kind: str, extra_tools: list[str] | None = None,
         # Последствия проверены на прогонах: агенты повторяют работу с накопленным контекстом,
         # а сборщик на втором круге не дополняет ответ, а сокращает его втрое.
         if root.type == "loop" and _node_agents(root) > 2:
-            _log.warning("Цикл вокруг всего пайплайна выпрямлен | агентов={}", _node_agents(root))
+            _log.warning(
+                "Цикл вокруг всего пайплайна выпрямлен | агентов={}", _node_agents(root)
+            )
             root.type = "sequential"
             root.max_iterations = None
 
         # Сборщику нужен не «поразмышлять», а перенести числа предметных агентов в итог.
         for agent in agents:
-            if "sequential-thinking" in (agent.tools or []) and _ROLE_COLLECTOR.search(agent.name):
+            if "sequential-thinking" in (agent.tools or []) and _ROLE_COLLECTOR.search(
+                agent.name
+            ):
                 agent.tools = [t for t in agent.tools if t != "sequential-thinking"]
                 _log.info("У сборщика убран sequential-thinking | агент={}", agent.name)
 
-        pool = {a.name for a in agents}       # узел на несуществующего агента роняет сборку
+        pool = {a.name for a in agents}  # узел на несуществующего агента роняет сборку
         missing: list[str] = []
 
         def prune(node):
@@ -204,7 +239,7 @@ def sanitize_config(config, kind: str, extra_tools: list[str] | None = None,
             _log.warning("Из пайплайна убраны неизвестные агенты | {}", missing)
 
     dropped: dict[str, list[str]] = {}
-    for agent in agents:                      # ссылка на неподнятый сервер роняет сборку целиком
+    for agent in agents:  # ссылка на неподнятый сервер роняет сборку целиком
         unknown = [t for t in (agent.tools or []) if t not in allowed_tools]
         if unknown:
             dropped[agent.name] = unknown
@@ -218,10 +253,12 @@ def sanitize_config(config, kind: str, extra_tools: list[str] | None = None,
             )
 
     if renames or keys:
-        _log.info("Имена приведены к идентификаторам | агенты={} ключи={}", renames, keys)
+        _log.info(
+            "Имена приведены к идентификаторам | агенты={} ключи={}", renames, keys
+        )
     if dropped:
         _log.warning("Недоступные инструменты убраны из конфигурации | {}", dropped)
-    return config
+    return type(config).model_validate(config.model_dump())
 
 
 def cap_run_tokens(config, ceiling: int) -> None:
@@ -246,7 +283,8 @@ _DATA_HINT_RE = re.compile(
     # что агент уходит в веб-поиск и сочиняет данные вместо расчёта по файлу.
     r"скача|фактическ|датасет|dataset|\bcsv\b|выгрузк|суточн|наблюден|измерен|"
     r"временн\w+ ряд|ряд\w* (температур|значен|данн)|архив\w* (данн|наблюден|погод)",
-    re.IGNORECASE)
+    re.IGNORECASE,
+)
 
 
 def _ensure_data_tools(config, kind: str, text: str) -> None:
@@ -260,8 +298,11 @@ def _ensure_data_tools(config, kind: str, text: str) -> None:
     # и без download/document агент уходит в веб-поиск и подставляет справочные значения.
     if not (_URL_RE.search(text or "") or _DATA_HINT_RE.search(text or "")):
         return
-    needed = [t for t in ("download", "document", "sandbox-light", "websearch-searxng")
-              if t in SAFE_TOOLS]
+    needed = [
+        t
+        for t in ("download", "document", "sandbox-light", "websearch-searxng")
+        if t in SAFE_TOOLS
+    ]
     agents = list(getattr(config, "agents", None) or list(config.workers))
     if not agents:
         return
@@ -269,12 +310,27 @@ def _ensure_data_tools(config, kind: str, text: str) -> None:
     # Цель выбираем ПО ТЕМЕ, а не по тому, у кого инструменты уже есть: проверено прогоном —
     # мета-агент выдал download расчётчику, а температуры собирал другой агент с одним поиском,
     # и тот сделал 36 запросов к погодным агрегаторам вместо скачивания рядов.
-    topic = re.compile(r"температур|погод|климат|метео|данн|ряд|файл|измер|статист|наблюден",
-                       re.IGNORECASE)
+    topic = re.compile(
+        r"температур|погод|климат|метео|данн|ряд|файл|измер|статист|наблюден",
+        re.IGNORECASE,
+    )
     skip = re.compile(r"критик|провер|качеств|сборщик|итог|заключ", re.IGNORECASE)
-    target = (next((a for a in agents if topic.search(a.name) and not skip.search(a.name)), None)
-              or next((a for a in agents if "download" in (a.tools or []) and not skip.search(a.name)), None)
-              or next((a for a in agents if not skip.search(a.name)), None) or agents[0])
+    target = (
+        next(
+            (a for a in agents if topic.search(a.name) and not skip.search(a.name)),
+            None,
+        )
+        or next(
+            (
+                a
+                for a in agents
+                if "download" in (a.tools or []) and not skip.search(a.name)
+            ),
+            None,
+        )
+        or next((a for a in agents if not skip.search(a.name)), None)
+        or agents[0]
+    )
     target.tools = list(dict.fromkeys(list(target.tools or []) + needed))
     # Раньше здесь стоял ранний выход, если мета-агент уже раздал нужные инструменты. Из-за него
     # порядок работы с файлом и справочник источников не дописывались — агент имел download,
@@ -316,8 +372,13 @@ def _ensure_data_tools(config, kind: str, text: str) -> None:
         "среднее, минимум и его дату, счётчики по порогам, суммы, градусо-сутки. "
         "Тут же проверь тождество «сумма (20 − t) = N × (20 − среднее)» и приведи обе стороны "
         "равенства числами. Соседние агенты ряд не пересчитывают — если ты посчитаешь на глаз, "
-        "ошибка уйдёт в итог целиком. Опубликуй агрегаты списком «показатель = значение».")
-    _log.info("Агенту выданы инструменты работы с файлом | агент={} инструменты={}", target.name, needed)
+        "ошибка уйдёт в итог целиком. Опубликуй агрегаты списком «показатель = значение»."
+    )
+    _log.info(
+        "Агенту выданы инструменты работы с файлом | агент={} инструменты={}",
+        target.name,
+        needed,
+    )
 
     _ensure_data_first(config, kind, target.name)
 
@@ -340,7 +401,8 @@ def _ensure_data_tools(config, kind: str, text: str) -> None:
                     "Каждое число в итоге сверь с этим блоком. Любое расхождение — ошибка "
                     "переноса: бери значение отсюда, а не из промежуточных пересказов. "
                     "Пересчитывать ряд заново запрещено. Не переокругляй: переноси значения "
-                    "с той точностью, с какой они посчитаны, иначе итог разойдётся с расчётом.")
+                    "с той точностью, с какой они посчитаны, иначе итог разойдётся с расчётом."
+                )
                 continue
             agent.instruction = (agent.instruction or "") + (
                 "\n\nДАННЫЕ, ДОБЫТЫЕ АГЕНТОМ «" + target.name + "» (подставляются сюда "
@@ -348,18 +410,23 @@ def _ensure_data_tools(config, kind: str, text: str) -> None:
                 "Агрегаты по этому ряду (среднее, минимум, счётчики, суммы) уже посчитаны "
                 "в песочнице агентом-добытчиком — бери их ГОТОВЫМИ и не пересчитывай ряд "
                 "заново ни в уме, ни в коде. Свой ряд наблюдений писать запрещено. "
-                "Если блок выше пуст — данных нет: так и напиши, не выдумывай их.")
+                "Если блок выше пуст — данных нет: так и напиши, не выдумывай их."
+            )
         _log.info("Ряд добытчика прокинут в инструкции считающих | ключ={}", key)
 
 
 # Роли агентов определяем по имени: мета-агент называет их по-русски и осмысленно.
 _ROLE_CRITIC = re.compile(r"критик|провер|качеств|аудит|реценз|валид", re.IGNORECASE)
-_ROLE_COLLECTOR = re.compile(r"сборщик|сборка|агрегатор|агрегац|итог|заключ|финал|обобщ", re.IGNORECASE)
+_ROLE_COLLECTOR = re.compile(
+    r"сборщик|сборка|агрегатор|агрегац|итог|заключ|финал|обобщ", re.IGNORECASE
+)
 
 
 _ID_RE = re.compile(
     r"кадастров|\bИНН\b|\bОГРН\b|\bОКПО\b|\bВИН\b|\bVIN\b|артикул|госномер|"
-    r"\bISBN\b|ГОСТ\s*\d|СП\s*\d|реестр|выписк", re.IGNORECASE)
+    r"\bISBN\b|ГОСТ\s*\d|СП\s*\d|реестр|выписк",
+    re.IGNORECASE,
+)
 
 
 def _ensure_lookup_tools(config, kind: str, text: str) -> None:
@@ -374,12 +441,26 @@ def _ensure_lookup_tools(config, kind: str, text: str) -> None:
     if not agents:
         return
     skip = re.compile(r"критик|провер|качеств|сборщик|итог|заключ", re.IGNORECASE)
-    topic = re.compile(r"поиск|данн|объект|реестр|правов|огранич|градостро|контрагент|провер",
-                       re.IGNORECASE)
-    target = (next((a for a in agents if topic.search(a.name) and not skip.search(a.name)), None)
-              or next((a for a in agents if "websearch-searxng" in (a.tools or [])
-                       and not skip.search(a.name)), None)
-              or next((a for a in agents if not skip.search(a.name)), None) or agents[0])
+    topic = re.compile(
+        r"поиск|данн|объект|реестр|правов|огранич|градостро|контрагент|провер",
+        re.IGNORECASE,
+    )
+    target = (
+        next(
+            (a for a in agents if topic.search(a.name) and not skip.search(a.name)),
+            None,
+        )
+        or next(
+            (
+                a
+                for a in agents
+                if "websearch-searxng" in (a.tools or []) and not skip.search(a.name)
+            ),
+            None,
+        )
+        or next((a for a in agents if not skip.search(a.name)), None)
+        or agents[0]
+    )
     needed = [t for t in ("websearch-searxng", "web-scraping") if t in SAFE_TOOLS]
     target.tools = list(dict.fromkeys(list(target.tools or []) + needed))
     target.instruction = (target.instruction or "") + (
@@ -403,7 +484,8 @@ def _ensure_lookup_tools(config, kind: str, text: str) -> None:
         "3) выпиши найденное списком «параметр = значение — источник (ссылка)».\n"
         "Только если страницы не открылись или параметров там нет — скажи это прямо и переходи "
         "к типовым значениям с пометкой. Типовые значения вместо непрочитанных страниц — ошибка.\n"
-        "ЕСЛИ ПАРАМЕТР ЗАКРЫТ (платная версия, только по выписке ЕГРН, нет в открытых источниках) — это ТОЖЕ результат поиска, и его надо зафиксировать: напиши, какой именно параметр недоступен, где ты это увидел и со ссылкой. Затем не выдумывай одно число, а посчитай сценарно: возьми 2–3 правдоподобных значения параметра, доведи расчёт до чисел для каждого и покажи, как меняется вывод. Доказанная недоступность плюс сценарный расчёт сильнее одного выдуманного значения.")
+        "ЕСЛИ ПАРАМЕТР ЗАКРЫТ (платная версия, только по выписке ЕГРН, нет в открытых источниках) — это ТОЖЕ результат поиска, и его надо зафиксировать: напиши, какой именно параметр недоступен, где ты это увидел и со ссылкой. Затем не выдумывай одно число, а посчитай сценарно: возьми 2–3 правдоподобных значения параметра, доведи расчёт до чисел для каждого и покажи, как меняется вывод. Доказанная недоступность плюс сценарный расчёт сильнее одного выдуманного значения."
+    )
     _log.info("Включён протокол работы с объектом | агент={}", target.name)
 
 
@@ -427,7 +509,7 @@ def _drop_agent_node(node, name: str) -> bool:
         if _drop_agent_node(child, name):
             found = True
         if child.type == "agent" or (child.children or []):
-            kept.append(child)          # пустые группы не тащим дальше
+            kept.append(child)  # пустые группы не тащим дальше
     if node.children is not None:
         node.children = kept
     return found
@@ -460,8 +542,9 @@ def _ensure_data_first(config, kind: str, data_agent: str) -> None:
 
 # Роли, которые работают ПО чужим результатам: планировать, приоритизировать и
 # рекомендовать можно только после того, как кто-то посчитал.
-_ROLE_DEPENDENT = re.compile(r"планир|приоритиз|рекоменд|стратег|синтез|ранжир|решени",
-                             re.IGNORECASE)
+_ROLE_DEPENDENT = re.compile(
+    r"планир|приоритиз|рекоменд|стратег|синтез|ранжир|решени", re.IGNORECASE
+)
 
 
 def _ensure_dependent_after_parallel(config, kind: str) -> None:
@@ -489,8 +572,13 @@ def _ensure_dependent_after_parallel(config, kind: str) -> None:
         if child.type != "parallel":
             continue
         names = _node_agent_names(child)
-        dependent = [n for n in names if _ROLE_DEPENDENT.search(n)
-                     and not _ROLE_COLLECTOR.search(n) and not _ROLE_CRITIC.search(n)]
+        dependent = [
+            n
+            for n in names
+            if _ROLE_DEPENDENT.search(n)
+            and not _ROLE_COLLECTOR.search(n)
+            and not _ROLE_CRITIC.search(n)
+        ]
         # Уводить всех нельзя: в ветке должен остаться хоть кто-то, кто добывает данные.
         if not dependent or len(dependent) >= len(names):
             continue
@@ -531,8 +619,8 @@ def _ensure_calculator(config, kind: str) -> None:
                 "убедись, что результат действительно имеет ту единицу, которой подписан. "
                 "Ватты, умноженные на часы, дают Вт·ч, а не Гкал: перевод обязателен "
                 "(1 Гкал = 1163 кВт·ч = 1,163 МВт·ч). Отдельно проверь порядок величины: если из градусо-суток (°C·сут) получают энергию, обязан присутствовать множитель 24 ч/сут; его отсутствие занижает итог ровно в 24 раза. Оценивать числа на глаз запрещено."
-                if is_critic else
-                "\n\nВсе арифметические действия выполняй в песочнице sandbox-light, а не в уме: "
+                if is_critic
+                else "\n\nВсе арифметические действия выполняй в песочнице sandbox-light, а не в уме: "
                 "суммы, средние, доли, переводы единиц и итоговые показатели. Приводи и результат, "
                 "и числа, из которых он получен. Код пиши только на Python: JavaScript "
                 "(const, =>, toFixed) песочница не исполняет.\n"
@@ -557,14 +645,20 @@ def _ensure_calculator(config, kind: str) -> None:
                 "результат имеет заявленную единицу. Если формула из задачи даёт другую единицу, "
                 "чем подписано в задаче, приведи обе величины и явный перевод, а не подписывай "
                 "результат чужой единицей. Ориентиры: 1 Гкал = 1163 кВт·ч = 1,163 МВт·ч; "
-                "Вт × ч = Вт·ч.")
-            _log.info("Агенту выдана песочница | агент={} роль={}", agent.name,
-                      "критик" if is_critic else "расчёт")
+                "Вт × ч = Вт·ч."
+            )
+            _log.info(
+                "Агенту выдана песочница | агент={} роль={}",
+                agent.name,
+                "критик" if is_critic else "расчёт",
+            )
 
         # Считающему агенту sequential-thinking вредит: он рассуждает вместо вычислений
         if "sandbox-light" in tools and "sequential-thinking" in tools:
             tools = [t for t in tools if t != "sequential-thinking"]
-            _log.info("У считающего агента снят sequential-thinking | агент={}", agent.name)
+            _log.info(
+                "У считающего агента снят sequential-thinking | агент={}", agent.name
+            )
 
         agent.tools = list(dict.fromkeys(tools))
 
@@ -575,16 +669,29 @@ def _ensure_web_tool(config, kind: str) -> None:
     if any("websearch-searxng" in (a.tools or []) for a in agents):
         return
 
-    prefer = re.compile(r"поиск|источник|ограничен|контекст|сбор|данн|исслед|research|search", re.IGNORECASE)
-    skip = re.compile(r"критик|валид|провер|сборщик|агрегатор|заключ|итог", re.IGNORECASE)
-    target = next((a for a in agents if prefer.search(a.name) and not skip.search(a.name)), None)
-    target = target or next((a for a in agents if not skip.search(a.name)), None) or (agents[0] if agents else None)
+    prefer = re.compile(
+        r"поиск|источник|ограничен|контекст|сбор|данн|исслед|research|search",
+        re.IGNORECASE,
+    )
+    skip = re.compile(
+        r"критик|валид|провер|сборщик|агрегатор|заключ|итог", re.IGNORECASE
+    )
+    target = next(
+        (a for a in agents if prefer.search(a.name) and not skip.search(a.name)), None
+    )
+    target = (
+        target
+        or next((a for a in agents if not skip.search(a.name)), None)
+        or (agents[0] if agents else None)
+    )
     if target is None:
         return
 
     target.tools = list(target.tools or []) + ["websearch-searxng"]
-    target.instruction += ("\n\nОбязательно используй инструмент веб-поиска для внешних сведений "
-                           "и приводи ссылку на источник каждого утверждения.")
+    target.instruction += (
+        "\n\nОбязательно используй инструмент веб-поиска для внешних сведений "
+        "и приводи ссылку на источник каждого утверждения."
+    )
     _log.info("Веб-поиск добавлен агенту {}", target.name)
 
 
@@ -593,9 +700,15 @@ def _tools_hint(web: bool = True, tools: list[str] | None = None) -> str:
     names = [t for t in allowed if t != "websearch-searxng"]
     parts = [TOOL_DESCRIPTIONS.get(t, t) for t in names]
     if web and WEB_SEARCH and "websearch-searxng" in allowed:
-        parts.insert(0, "websearch-searxng — веб-поиск. ОБЯЗАТЕЛЬНО назначь его хотя бы одному агенту, "
-                        "который собирает внешние сведения, и потребуй в его инструкции приводить ссылки на источники")
-    return "; ".join(parts) + ". Других инструментов нет, назначай только эти и только там, где они нужны"
+        parts.insert(
+            0,
+            "websearch-searxng — веб-поиск. ОБЯЗАТЕЛЬНО назначь его хотя бы одному агенту, "
+            "который собирает внешние сведения, и потребуй в его инструкции приводить ссылки на источники",
+        )
+    return (
+        "; ".join(parts)
+        + ". Других инструментов нет, назначай только эти и только там, где они нужны"
+    )
 
 
 def _with_data_source(query: str, task: str) -> str:
