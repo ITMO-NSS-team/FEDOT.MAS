@@ -18,7 +18,7 @@ def load_inputs(model: str) -> tuple[MASConfig, str]:
     raw_config["coordinator"]["model"] = model
     for worker in raw_config["workers"]:
         worker["model"] = model
-    task = (HERE / "task.md").read_text(encoding="utf-8")
+    task = (HERE / "mas_input_request.md").read_text(encoding="utf-8")
     return MASConfig.model_validate(raw_config), task
 
 
@@ -35,12 +35,6 @@ async def main() -> None:
 
     if "/" not in args.model:
         parser.error("--model must include a provider prefix")
-    if args.model.startswith("host/"):
-        parser.error(
-            "host/gpt-5.6-terra uses the Codex subscription, not an API endpoint; "
-            "open the recorded run with serve_gui.py or pass a provider-backed model"
-        )
-
     config, task = load_inputs(args.model)
     endpoint = ModelConfig(
         model=args.model,

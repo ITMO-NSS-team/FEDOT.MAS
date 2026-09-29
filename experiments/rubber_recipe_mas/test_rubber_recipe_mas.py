@@ -46,26 +46,27 @@ async def test_master_calls_specialists_and_retains_control() -> None:
         (HERE / "config.json").read_text(encoding="utf-8")
     )
     llms = {
-        "rubber_recipe_master": ScriptedLlm(
+        "rubber_property_master": ScriptedLlm(
             model="test/master",
             responses=[
                 call(
-                    "predict_rubber_recipe",
+                    "predict_rubber_properties",
                     {
-                        "thermal_conductivity_min_w_mk": 0.45,
-                        "oil_swelling_max_pct_1006h": 20.0,
-                        "water_swelling_max_pct_1006h": 28.0,
-                        "specific_gravity_max": 1.23,
-                        "nr_min_phr": 25,
-                        "nr_max_phr": 75,
-                        "n220_min_phr": 20,
-                        "n220_max_phr": 80,
-                        "search_step_phr": 1,
-                        "center_nr_phr": 50,
+                        "nr_smr20_phr": 55,
+                        "sbr1502_phr": 45,
+                        "carbon_black_n220_phr": 55,
+                        "zinc_oxide_phr": 5,
+                        "stearic_acid_phr": 2,
+                        "tmq_antioxidant_phr": 1.5,
+                        "antiozonant_6ppd_phr": 1.5,
+                        "process_oil_phr": 5,
+                        "sulfur_phr": 5,
+                        "tmtd_accelerator_phr": 2,
+                        "reclaim_phr": 5,
                     },
                 ),
                 call(
-                    "formulation_specialist",
+                    "formulation_validator",
                     {"request": "Format the numerical candidate."},
                 ),
                 call(
@@ -79,7 +80,7 @@ async def test_master_calls_specialists_and_retains_control() -> None:
                 text("Recipe and predicted properties."),
             ],
         ),
-        "formulation_specialist": ScriptedLlm(
+        "formulation_validator": ScriptedLlm(
             model="test/formulation", responses=[text("Recipe formatted.")]
         ),
         "rubber_chemistry_reviewer": ScriptedLlm(
@@ -98,10 +99,10 @@ async def test_master_calls_specialists_and_retains_control() -> None:
     # The builder resolves models while traversing workers, then coordinator.
     order = iter(
         [
-            "formulation_specialist",
+            "formulation_validator",
             "rubber_chemistry_reviewer",
             "prediction_auditor",
-            "rubber_recipe_master",
+            "rubber_property_master",
         ]
     )
 
@@ -113,23 +114,35 @@ async def test_master_calls_specialists_and_retains_control() -> None:
     with patch("fedotmas.mas.builder._resolve_llm", side_effect=ordered_resolve):
         root = build_routing_system(config, autonomous=False)
 
-    result = await run_pipeline(root, "Generate a rubber recipe and properties.")
+    result = await run_pipeline(root, "Predict properties of the supplied recipe.")
 
-    assert root.name == "rubber_recipe_master"
+    assert root.name == "rubber_property_master"
     assert [agent.name for agent in root.sub_agents] == [
-        "formulation_specialist",
+        "formulation_validator",
         "rubber_chemistry_reviewer",
         "prediction_auditor",
     ]
     assert config.coordinator.tools == ["rubber-recipe-predictor"]
-    master_requests = llms["rubber_recipe_master"].requests
+    master_requests = llms["rubber_property_master"].requests
     assert len(master_requests) == 5
     tool_response = master_requests[1].contents[-1].parts[0].function_response
     assert tool_response is not None
     prediction = tool_response.response["structuredContent"]
-    assert prediction["recipe"]["nr_smr20_phr"] == 58.0
-    assert prediction["recipe"]["carbon_black_n220_phr"] == 60.0
+    assert prediction["recipe_input_unchanged"]["nr_smr20_phr"] == 55.0
+    assert prediction["recipe_input_unchanged"]["carbon_black_n220_phr"] == 55.0
     assert result.state["formulation_output"] == "Recipe formatted."
     assert result.state["chemistry_review"] == "Chemistry reviewed."
     assert result.state["prediction_audit"] == "Predictions audited."
-    assert result.state["recipe_prediction"] == "Recipe and predicted properties."
+    assert result.state["property_prediction"] == "Recipe and predicted properties."
+
+
+def test_runner_loads_complete_recipe_and_overrides_all_models():
+    import runpy
+
+    runner = runpy.run_path(str(HERE / "run_mas.py"), run_name="test_runner")
+    config, query = runner["load_inputs"]("openai/test")
+    assert config.coordinator.model == "openai/test"
+    assert all(worker.model == "openai/test" for worker in config.workers)
+    assert "NR SMR-20 — 55 phr" in query
+    assert "регенерат — 5 phr" in query
+    assert config.coordinator.output_key == "property_prediction"

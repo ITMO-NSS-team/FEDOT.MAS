@@ -42,15 +42,17 @@ M. S. Hamza, N. A. Nassir, DOI
 Эти данные подходят для исследовательского скрининга и требуют лабораторной
 валидации точного рецепта и режима процесса.
 
-## Запуск GUI
+## Запуск
 
-В ветке `gui-demo` GUI использует модели подписки Codex через локальный CLI:
+Полный запрос с исходным составом находится в
+[mas_input_request.md](mas_input_request.md); `run_mas.py` читает этот файл.
 
-```powershell
-codex login
-uv run python gui/run.py
+```sh
+uv run python experiments/rubber_recipe_mas/run_mas.py --model openrouter/qwen/qwen3-32b
 ```
 
-Открыть: <http://localhost:4173/>. Модель по умолчанию —
-`host/gpt-5.6-terra`; также доступны Sol и Luna. Полный входной запрос находится
-в [mas_input_request.md](mas_input_request.md).
+Для API-модели нужен ключ провайдера. Локально можно использовать `--model host/gpt-5.6-terra`
+после `codex login`. Запуск CLI выполняет реальные вызовы выбранной модели.
+
+GUI запускается командой `uv run python gui/run.py`, адрес — <http://localhost:4173/>.
+В публичном режиме доступны только API-модели.
