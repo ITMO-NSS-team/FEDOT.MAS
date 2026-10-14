@@ -39,14 +39,11 @@ flowchart LR
 
 ## Quick start
 
-**1. Install.** FEDOT.MAS is not on PyPI yet. Install it from source with [uv](https://github.com/astral-sh/uv)
-and [just](https://github.com/casey/just):
+**1. Install.** FEDOT.MAS is not on PyPI yet. Install it from source with [uv](https://github.com/astral-sh/uv):
 
 ```sh
 git clone https://github.com/ITMO-NSS-team/FEDOT.MAS.git && cd FEDOT.MAS
-just venv        # or: uv sync && cp -n .env.example .env
-just mcp-sync    # build the MCP servers once, or the first run can time out
-just doctor      # check which tools are ready and what the others need
+uv sync && cp -n .env.example .env
 ```
 
 **2. Configure.** Fill in `.env`:
@@ -64,8 +61,8 @@ import asyncio
 from fedotmas import MAW
 
 async def main():
-    maw = MAW(mcp_servers=["sandbox-light"])
-    state = await maw.run("How many prime numbers are below 10,000? Check it by computation.")
+    maw = MAW(mcp_servers=[])  # no tools yet
+    state = await maw.run("Compare Python and Rust for writing CLI tools")
     print(maw.generated_config.model_dump_json(indent=2))  # the team the meta-agent designed
     print(state)                                            # session state, incl. each agent's output by its output_key
 
@@ -74,6 +71,14 @@ asyncio.run(main())
 
 ```sh
 uv run python quickstart.py
+```
+
+**4. Add tools.** Build the MCP servers once with [just](https://github.com/casey/just), check
+what each one needs, then pass their names, e.g. `MAW(mcp_servers=["sandbox-light"])`:
+
+```sh
+just mcp-sync   # without it the first run with tools can time out
+just doctor
 ```
 
 ## Table of Contents
