@@ -159,9 +159,11 @@ hand-written seed reached 82.0% ([details](benchmarks/aime_math/README.md#refere
 ## Documentation
 
 - [MAW and MAS guide](docs/index.md) — pipeline types, two-step runs, handcrafted configs
-- [Meta-debugger](docs/debugger.md) — automatic recovery from failed runs
+- [Meta-debugger](docs/debugger.md) — recovery from failed runs with `Controller.run_with_recovery`
+- [Step-by-step control](examples/control/) — run a `MAW` pipeline agent by agent and inspect the state
 - [Optimizer](docs/optimizer.md) — scorers, strategies, checkpoints, synthetic test inputs
-- [Synapse export](docs/synapse-export.md) — running generated configs on another platform
+- [Synapse export](docs/synapse-export.md) — generating against another platform's tools and agents, then exporting
+- [Deployment](examples/deployment/) — serving `MAW` and `MAS` over the ADK API server
 - [Langfuse](docs/langfuse.md) — execution traces
 - [MCP servers](mcp-servers/README.md) — discovery, transports, adding your own server
 - [Web GUI](gui/README.md) — demo app, public mode, API (in Russian)
