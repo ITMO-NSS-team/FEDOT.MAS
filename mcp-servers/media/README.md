@@ -24,5 +24,7 @@ Analyze and transcribe media files (audio, images, video) using multimodal LLMs.
 ## Usage
 
 ```python
-AgentConfig(tools=["media"])
+from fedotmas import MAW
+
+maw = MAW(mcp_servers=["media"])
 ```

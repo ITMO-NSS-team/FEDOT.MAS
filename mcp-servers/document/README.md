@@ -22,5 +22,7 @@ Extract text from documents and archives using [MarkItDown](https://github.com/m
 ## Usage
 
 ```python
-AgentConfig(tools=["document"])
+from fedotmas import MAW
+
+maw = MAW(mcp_servers=["document"])
 ```

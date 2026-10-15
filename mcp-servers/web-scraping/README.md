@@ -32,31 +32,33 @@ A thin FastMCP proxy wrapping `lightpanda mcp` via `StdioTransport`. Tools from 
 ### Usage
 
 ```python
+from fedotmas import MAW
+
 maw = MAW(mcp_servers=["web-scraping"])
 ```
 
 ### Extract fallback
 
-`extract` runs the caller's schema against the page inside lightpanda, and fails in three different ways that all mean "the page is fine, the schema was not":
+When `extract` returns a selector/schema error, the proxy appends page markdown
+so the caller can read the content directly. It tries the current page first,
+then the last URL passed to `goto`. If markdown is unavailable, the original
+error is returned unchanged.
 
-| Cause | Error |
-|---|---|
-| No top-level key matched anything | `extract: no schema selector matched any element` (by design) |
-| A non-string value used as a selector spec — e.g. `"limit": 1` at the top level instead of inside an array spec | `Cannot read properties of null (reading 'trim')` |
-| A selector CSS does not support, e.g. `p:contains('...')` | `The string did not match the expected pattern` |
-
-Nothing in those tells the caller whether the page lacks the data or the schema was wrong, so agents tend to give up on the page and go back to searching — in one GAIA run the first such failure was followed by six more web searches for values that were on pages the agent had already loaded.
-
-`ExtractMarkdownFallback` appends the page, as markdown, to the failed result, prefixed with the original error and a note to read the values out of it. `markdown` is tried against the current page first, then against the last URL `goto` navigated to. If markdown fails or comes back blank, the original `extract` error is returned untouched.
-
-The result stays an error. Flipping it to success would hand markdown's content to the client's validation of `extract`'s own output schema (`mcp.client.session` validates only non-error results), and a caller that asked for fields should not receive a whole page as if its schema had matched. A successful `extract` is passed through untouched.
+The fallback preserves the error status and does not produce the requested
+structured fields. Successful `extract` results pass through unchanged.
 
 ### TLS
 
-Lightpanda is launched with `--insecure_disable_tls_host_verification` because its built-in TLS stack fails certificate verification for most HTTPS sites (`PeerFailedVerification`). This is standard practice for headless browsers used in automation/scraping contexts.
+The proxy launches Lightpanda with `--insecure_disable_tls_host_verification`.
+TLS host verification is disabled, so the connection does not verify the
+server's identity.
 
-### Known issues
+### Troubleshooting
 
-- **`invalid body: json decoder` on shutdown** — When stdin closes (pipe EOF), Lightpanda writes a raw error string to stdout instead of a JSON-RPC error response. The MCP Python SDK handles this gracefully (logs a warning). Does not affect normal operation.
-- **Telemetry 400 warnings** — Lightpanda sends telemetry to its server and logs `$scope=telemetry $level=warn $msg="server error" status=400` to stderr. These are harmless and don't affect operation. `--log_filter_scopes telemetry` exists in `--help` but only works in debug builds.
-- **`CouldntResolveHost`** — Navigation is performed by the proxied Lightpanda process, so this error points to DNS or outbound network access where that process runs. Check resolution for the failing host and an unrelated public host from the same environment; if both fail, fix the environment's resolver/network access rather than adding a site-specific fallback. In the current investigation, `apod.nasa.gov`, `nasa.gov`, and `example.com` all failed host lookup, indicating an environment-level issue.
+- **`CouldntResolveHost`** — check DNS resolution and outbound network access
+  from the environment running Lightpanda.
+- **`invalid body: json decoder` during shutdown** — Lightpanda may emit a
+  non-JSON-RPC message when stdin closes.
+- **Telemetry HTTP 400 warnings** — these concern Lightpanda's telemetry
+  endpoint. Check the tool result separately to determine whether navigation
+  or extraction succeeded.

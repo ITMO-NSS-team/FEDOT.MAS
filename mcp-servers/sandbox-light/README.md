@@ -11,5 +11,7 @@ Powered by [pydantic-monty](https://github.com/pydantic/monty).
 ## Usage
 
 ```python
-AgentConfig(tools=["sandbox-light"])
+from fedotmas import MAW
+
+maw = MAW(mcp_servers=["sandbox-light"])
 ```

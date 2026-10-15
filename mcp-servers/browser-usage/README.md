@@ -12,7 +12,11 @@ uvx playwright install chromium
 
 ### How it works
 
-A thin FastMCP proxy wrapping `browser-use --mcp` via `StdioTransport`. All tools from the underlying server are proxied without modification. Can be served over stdio (local) or HTTP/SSE (hosted).
+FastMCP wraps `browser-use --mcp` via `StdioTransport`. Screenshot fields in
+`browser_screenshot` and `browser_get_state` text results are saved to files and
+replaced with `screenshot_path`. Pass that path to the `media` server's
+`analyze_image` tool; both servers must have access to the file.
+Other tool results pass through unchanged. The proxy supports stdio and HTTP/SSE.
 
 ### Proxied tools
 
@@ -38,6 +42,8 @@ A thin FastMCP proxy wrapping `browser-use --mcp` via `StdioTransport`. All tool
 ### Usage
 
 ```python
+from fedotmas import MAW
+
 maw = MAW(mcp_servers=["browser-usage"])
 ```
 
@@ -48,6 +54,7 @@ maw = MAW(mcp_servers=["browser-usage"])
 | `BROWSER_USE_HEADLESS` | Run headless (default: `true`) |
 | `BROWSER_USE_LLM_MODEL` | LLM model for extract/agent tools (default: `openai/gpt-4o-mini`) |
 | `BROWSER_USE_ALLOWED_DOMAINS` | Comma-separated domain whitelist |
+| `BROWSER_USAGE_SCREENSHOT_DIR` | Screenshot directory (default: `fedotmas-screenshots` under the system temporary directory) |
 | `OPENAI_API_KEY` | Required by browser-use for LLM calls |
 | `OPENAI_BASE_URL` | Custom OpenAI-compatible endpoint (e.g. OpenRouter) |
 
