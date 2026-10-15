@@ -6,11 +6,11 @@ When a user describes a task, the **meta-agent** reads the descriptions of all r
 
 ### Auto-discovery
 
-Discovery runs when you pass `mcp_servers="all"` or a list of server names (e.g. `["download-url-content"]`). The registry walks up from the `fedotmas` package to find the workspace root (a `pyproject.toml` with `[tool.uv.workspace]`), then scans every `mcp-servers/*/pyproject.toml` for `[tool.fedotmas.mcp]` sections.
+Discovery runs when you pass `mcp_servers="all"` or a list of server names (e.g. `["download"]`). The registry walks up from the `fedotmas` package to find the workspace root (a `pyproject.toml` with `[tool.uv.workspace]`), then scans every `mcp-servers/*/pyproject.toml` for `[tool.fedotmas.mcp]` sections.
 
 If you leave `mcp_servers` at the default `None`, no discovery happens and no servers are registered.
 
-If `fedotmas` is installed from PyPI (outside a workspace), discovery finds no root and returns an empty registry. You can still use servers by passing a config dict directly or by pointing `discover_local_servers()` at a directory with the same layout:
+When `fedotmas` is installed outside a workspace, discovery finds no workspace root and returns an empty registry. You can still use servers by passing a config dict directly or by pointing `discover_local_servers()` at a directory with the same layout:
 
 ```python
 from fedotmas import MAW, discover_local_servers
@@ -21,7 +21,7 @@ maw = MAW(mcp_servers=discover_local_servers("/path/to/my-servers"))
 After construction you can inspect the resolved registry:
 
 ```python
-print(maw.mcp_servers)  # {'light-sandbox': StdioMCPServer(...), ...}
+print(maw.mcp_servers)  # {'sandbox-light': StdioMCPServer(...), ...}
 ```
 
 ### Adding a new MCP server
@@ -85,7 +85,7 @@ args = ["mcp"]
 
 ### Transports
 
-Auto-discovered servers always use **stdio** via `uv run`. When you pass `mcp_servers` as a dict, you can use either transport directly:
+Auto-discovered servers use **stdio**: Python servers run via `uv run`, while external binaries use their configured command. When you pass `mcp_servers` as a dict, you can use either transport directly:
 
 - `StdioMCPServer` is any command + args over stdio
 - `HttpMCPServer` is remote server over HTTP (Streamable HTTP transport)

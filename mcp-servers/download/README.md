@@ -11,5 +11,7 @@ Download files from URLs to the local filesystem.
 ## Usage
 
 ```python
-AgentConfig(tools=["download"])
+from fedotmas import MAW
+
+maw = MAW(mcp_servers=["download"])
 ```
