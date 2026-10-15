@@ -137,7 +137,7 @@ uv run python gui/run.py   # http://localhost:4173
 ```
 
 The GUI uses OpenRouter models by default, so add `OPENROUTER_API_KEY` to `.env`
-or enter it in the app via “Выбор модели” → “Ввести ключ OpenRouter”.
+or enter it in the app.
 
 > [!CAUTION]
 > A demo, not a production service: in public mode anyone with the link runs agents on
@@ -192,19 +192,10 @@ Set up with `just venv-dev`, and run `just check` and `just test-unit` before a 
 ```bibtex
 @inproceedings{10.65109/OOIG5670,
   author = {Gilemkhanov, Dmitry and Potemkin, Vadim A. and Zaitseva, Maria and Revin, Ilia and Kalyuzhnaya, Anna and Nikitin, Nikolay},
-  title = {FEDOT.MAS: Generating Multi-Agent Systems for Complex Tasks with Multi-Stage Validation},
+  title = {{FEDOT.MAS}: Generating Multi-Agent Systems for Complex Tasks with Multi-Stage Validation},
+  booktitle = {Proceedings of the 25th International Conference on Autonomous Agents and Multiagent Systems (AAMAS '26)},
   year = {2026},
-  isbn = {9798400723179},
-  publisher = {International Foundation for Autonomous Agents and Multiagent Systems},
-  address = {Richland, SC},
-  url = {https://doi.org/10.65109/OOIG5670},
-  doi = {10.65109/OOIG5670},
-  abstract = {Complex multi-step tasks such as scientific research are increasingly being performed using LLM-based agents. Existing approaches use fixed agent architectures requiring manual adaptation, or generate individual functions without coordination logic. We present a framework that generates complete multi-agent systems as executable multi-agent system code from natural language descriptions. Our approach employs a seven-stage pipeline with two feedback loops to catch errors at different cost points. On the GAIA benchmark, the framework achieves 49\% accuracy on Level 1, 24.4\% on Level 2, and 15.4\% on Level 3, outperforming the MAS-GPT baseline across all levels. Code and Demo: https://github.com/ITMO-NSS-team/FEDOT.MAS-Demo, https://youtu.be/1w8bBWGHjeQ.},
-  booktitle = {Proceedings of the 25th International Conference on Autonomous Agents and Multiagent Systems},
-  pages = {4077–4079},
-  numpages = {3},
-  keywords = {code generation, multi-agent systems, task automation, llm, workflow generation, validation},
-  location = {Paphos, Cyprus},
-  series = {AAMAS '26}
+  pages = {4077--4079},
+  doi = {10.65109/OOIG5670}
 }
 ```
