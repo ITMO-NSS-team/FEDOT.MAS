@@ -183,6 +183,7 @@ Set up with `just venv-dev`, and run `just check` and `just test-unit` before a 
 
 ## Contacts
 
+- [@FEDOT_helpdesk](https://t.me/FEDOT_helpdesk) — Telegram chat for questions about FEDOT and FEDOT.MAS
 - [Natural Systems Simulation Lab](https://itmo-nss-team.github.io/) website
 - [Telegram channel](https://t.me/NSS_group) of the lab
 
