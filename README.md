@@ -172,7 +172,7 @@ hand-written seed reached 82.0% in 1839 evaluations ([details](benchmarks/aime_m
 - [Deployment](examples/deployment/) — serving `MAW` and `MAS` over the ADK API server
 - [Langfuse](docs/langfuse.md) — execution traces
 - [MCP servers](mcp-servers/README.md) — discovery, transports, adding your own server
-- [Web GUI](gui/README.md) — demo app, public mode, API (in Russian)
+- [Web GUI](gui/README.md) — setup, usage and public mode (in Russian)
 - [Examples](examples/) — runnable scripts: workflows, routing, recovery, optimization, deployment, tools
 - [Benchmarks](benchmarks/) — GAIA, AIME and HotpotQA runners
 
