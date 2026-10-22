@@ -21,7 +21,8 @@ from fedotmas.common.logging import get_logger
 from fedotmas.control._iterable import IterableRun
 from fedotmas.control._run import ControlledRun, RunError, extract_failed_agent_name
 from fedotmas.control._strategy import Strategy, resolve_initial_state
-from fedotmas.core.runner import run_pipeline
+from fedotmas.core.runner import PipelineExecutionError, run_pipeline
+from fedotmas.maw.handoffs import ABSTENTION_STATE_KEY, unresolved_execution_issues
 from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import MAWConfig
 from fedotmas.plugins._checkpoint import CheckpointPlugin
@@ -122,7 +123,7 @@ class Controller:
             fix_tools: ADK-compatible tool functions the debugger agent can
                 call.  Each tool reads/writes config via
                 ``tool_context.state["config"]``.  Defaults to
-                ``[fix_instruction]``.
+                ``[fix_instruction, fix_agent_configs]``.
             checks: Per-agent check functions.  Each function receives the
                 pipeline state dict and returns an error message (str) if
                 the output is wrong, or ``None`` if OK.  The error message
@@ -243,20 +244,37 @@ class Controller:
         error_hint: str | None = None,
     ) -> MAWConfig:
         """Launch a debugger LLM agent with fix tools to patch the config."""
-        from fedotmas.control.fixes import fix_instruction, guardrail_validate_config
-        from fedotmas.meta._helpers import resolve_meta_and_workers
+        from fedotmas.control.fixes import (
+            fix_agent_configs,
+            fix_instruction,
+            guardrail_validate_config,
+        )
+        from fedotmas.control.fixes._fix_agent_configs import AVAILABLE_TOOLS_STATE_KEY
+        from fedotmas.mcp import get_server_descriptions
+        from fedotmas.meta._helpers import (
+            format_server_descriptions,
+            resolve_meta_and_workers,
+        )
         from fedotmas.meta.maw_debug_prompts import DEBUGGER_TOOL_PROMPT
 
-        tools = fix_tools or [fix_instruction]
+        tools = (
+            fix_tools if fix_tools is not None else [fix_instruction, fix_agent_configs]
+        )
+        registry = self._maw.mcp_servers
         resolved_meta, _, _ = resolve_meta_and_workers(
             self._maw.meta_model,
             None,
             None,
         )
 
-        config_json = current_config.model_dump_json(indent=2)
-        if len(config_json) > 6000:
-            config_json = config_json[:6000] + "... (truncated)"
+        # Preserve every tool assignment and contract. A prefix of the full
+        # JSON often contains only the first agent's long instruction.
+        compact = current_config.model_dump()
+        for item in compact["agents"]:
+            limit = 3000 if item["name"] == error.agent_name else 400
+            if len(item["instruction"]) > limit:
+                item["instruction"] = item["instruction"][:limit] + "... (truncated)"
+        config_json = json.dumps(compact, ensure_ascii=False)
 
         state_str = json.dumps(state, default=str, ensure_ascii=False)
         if len(state_str) > 4000:
@@ -272,6 +290,9 @@ class Controller:
             error_message=error_message,
             config_json=config_json,
             state_snapshot=state_str,
+            mcp_servers_desc=format_server_descriptions(
+                get_server_descriptions(registry)
+            ),
         )
         if error_hint:
             instruction += f"\n\n**User hint:** {error_hint}\n"
@@ -297,7 +318,10 @@ class Controller:
             app_name=app_name,
             user_id="system",
             session_id=session_id,
-            state={"config": current_config.model_dump_json()},
+            state={
+                "config": current_config.model_dump_json(),
+                AVAILABLE_TOOLS_STATE_KEY: sorted(registry),
+            },
         )
 
         message = types.Content(
@@ -401,7 +425,11 @@ class Controller:
         initial_state: dict[str, Any] | None = None,
     ) -> ControlledRun:
         checkpoint = CheckpointPlugin()
-        all_plugins = [checkpoint, *plugins]
+        effective_plugins = {p.name: p for p in [*self._maw._plugins, *plugins]}
+        effective_plugins.pop(checkpoint.name, None)
+        all_plugins = [checkpoint, *effective_plugins.values()]
+        self._maw._generated_config = config
+        self._maw._last_result = None
 
         try:
             result = await run_pipeline(
@@ -412,19 +440,64 @@ class Controller:
                 memory_service=self._maw._memory_service,
                 initial_state=initial_state,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - preserve arbitrary pipeline failures
             msg = str(exc)
             agent_name = extract_failed_agent_name(msg)
             _log.error("Pipeline execution failed | agent={} error={}", agent_name, msg)
-            error_state = (
-                dict(checkpoint.checkpoints[-1].state) if checkpoint.checkpoints else {}
-            )
+            if isinstance(exc, PipelineExecutionError):
+                self._maw._last_result = exc.result
+                error_state = exc.result.state
+            else:
+                error_state = (
+                    dict(checkpoint.checkpoints[-1].state)
+                    if checkpoint.checkpoints
+                    else {}
+                )
             return ControlledRun(
                 config=config,
                 status="error",
                 state=error_state,
                 checkpoints=checkpoint.checkpoints,
                 error=RunError(agent_name=agent_name, message=msg),
+            )
+
+        self._maw._last_result = result
+        if result.status != "completed":
+            issues = unresolved_execution_issues(result.state)
+            metadata = result.state.get("_fedotmas_execution", {})
+            limited = (
+                metadata.get("limited_agents", {}) if isinstance(metadata, dict) else {}
+            )
+            completion = result.state.get(ABSTENTION_STATE_KEY, {})
+            completion = completion if isinstance(completion, dict) else {}
+            candidates = [issue.get("agent") for issue in issues]
+            candidates.extend(limited)
+            candidates.append(completion.get("agent"))
+            known = {agent.name for agent in config.agents}
+            failed = next((name for name in candidates if name in known), "unknown")
+            message = json.dumps(
+                {
+                    "pipeline_status": result.status,
+                    "issues": issues,
+                    "limited_agents": limited,
+                    "completion": completion,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+            # A checkpoint for an unfinished agent must never be skipped on resume.
+            checkpoints = []
+            if failed != "unknown":
+                for item in checkpoint.checkpoints:
+                    if item.agent_name == failed:
+                        break
+                    checkpoints.append(item)
+            return ControlledRun(
+                config=config,
+                status="error",
+                state=result.state,
+                checkpoints=checkpoints,
+                error=RunError(agent_name=failed, message=message),
             )
 
         return ControlledRun(

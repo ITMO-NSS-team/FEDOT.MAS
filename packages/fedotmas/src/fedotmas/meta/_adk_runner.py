@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 from google.adk import Runner
@@ -41,6 +44,7 @@ class _MetaUsageTracker(BasePlugin):
         self._usage_totals = usage_totals
 
     async def after_model_callback(self, *, callback_context, llm_response):
+        _save_response_diagnostic(llm_response)
         finish_reason = str(getattr(llm_response, "finish_reason", "")).lower()
         if "max_tokens" in finish_reason or "length" in finish_reason:
             self._usage_totals["truncation_warning"] = 1
@@ -80,6 +84,7 @@ async def run_meta_agent_call(
     allowed_models: list[str] | None = None,
     plugins: list[BasePlugin] | None = None,
     timeout_s: float | None = None,
+    output_validator: Callable[[Any], None] | None = None,
 ) -> LLMCallResult:
     """Run a single ADK LlmAgent call and return the structured result.
 
@@ -124,6 +129,8 @@ async def run_meta_agent_call(
             else:
                 async with asyncio.timeout(effective_timeout_s):
                     result = await call
+            if output_validator is not None:
+                output_validator(result.raw_output)
             return LLMCallResult(
                 raw_output=result.raw_output,
                 prompt_tokens=failed_prompt_tokens + result.prompt_tokens,
@@ -164,7 +171,11 @@ async def run_meta_agent_call(
                     delay,
                 )
                 await asyncio.sleep(delay)
-                effective_message = _retry_message(user_message, e)
+                effective_message = _retry_message(
+                    user_message,
+                    e,
+                    output_truncated=bool(attempt_usage.get("truncation_warning")),
+                )
             else:
                 _log.error(
                     "{} failed after {} attempts: {}",
@@ -362,9 +373,11 @@ async def _execute_meta_call(
     )
 
 
-def _retry_message(user_message: str, error: Exception) -> str:
+def _retry_message(
+    user_message: str, error: Exception, *, output_truncated: bool = False
+) -> str:
     details = str(error)
-    if _is_output_truncation(error):
+    if output_truncated or _is_output_truncation(error):
         feedback = (
             "The previous structured response was truncated by the output-token "
             "limit. Regenerate the complete valid configuration concisely. If this "
@@ -421,3 +434,30 @@ def _resolve_max_output_tokens() -> int | None:
         )
         resolved = 8192
     return resolved if resolved > 0 else None
+
+
+def _save_response_diagnostic(llm_response: Any) -> None:
+    """Opt-in capture before ADK parses JSON; keep raw answers out of logs."""
+    directory = os.getenv("FEDOTMAS_META_RESPONSE_DIR")
+    if not directory:
+        return
+    content = getattr(llm_response, "content", None)
+    parts = getattr(content, "parts", None) or []
+    text = "".join(part.text for part in parts if part.text and not part.thought)
+    usage = getattr(llm_response, "usage_metadata", None)
+    payload = {
+        "text": text,
+        "finish_reason": str(getattr(llm_response, "finish_reason", "")),
+        "prompt_tokens": getattr(usage, "prompt_token_count", None),
+        "completion_tokens": getattr(usage, "candidates_token_count", None),
+    }
+    try:
+        target = Path(directory).expanduser()
+        target.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = target / f"meta-response-{uuid.uuid4().hex}.json"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        _log.debug("Meta response diagnostic saved: {}", path)
+    except OSError as exc:
+        _log.warning("Cannot save meta response diagnostic: {}", type(exc).__name__)

@@ -919,6 +919,10 @@ def _build_llm_agent(
     if terminal_boundary:
         instruction_text = (
             f"{instruction_text}\n\nFINAL ANSWER CONTRACT (terminal stage only):\n"
+            "This caller contract takes precedence over any conflicting JSON, "
+            "artifact, or report format in the instructions above. Complete the "
+            "reasoning internally and deliver the caller-facing answer in this "
+            "format; do not return the internal handoff object instead.\n"
             f"{final_answer_contract}"
         )
     if cfg.name == final_answer_agent:

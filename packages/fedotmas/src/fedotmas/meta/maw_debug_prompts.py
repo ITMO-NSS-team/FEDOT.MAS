@@ -164,15 +164,22 @@ ${state_snapshot}
 
 ---
 
+## AVAILABLE MCP SERVERS
+
+${mcp_servers_desc}
+
+Only these exact server names may be assigned in tools.
+
 ## INSTRUCTIONS
 
 1. Analyze the error and determine what needs to change in the failing agent.
 2. Call the appropriate fix tool to apply the change.
-3. Guardrails will automatically validate after each fix — if validation fails you will see the error and should retry with a corrected fix.
+3. For wrong tools or incompatible handoff shapes, use fix_agent_configs to update the relevant producer and consumer together. Match full dotted field paths (including [] for lists) to the actual artifact shape. Preserve required information, evidence, and identity; do not just remove validation.
+4. Guardrails will automatically validate after each fix — if validation fails you will see the error and should retry with a corrected fix.
 
 ## CONSTRAINTS
 
-- Fix only the failing agent ("${agent_name}"), do not change other agents.
+- Start from the failing agent ("${agent_name}"). You may also fix its producer or consumer when the same handoff defect requires a coordinated change. Do not change unrelated agents.
 - Keep the fix minimal — change only what is needed to resolve the error.
 - The agent's ``name`` and ``output_key`` must not change.
 """)

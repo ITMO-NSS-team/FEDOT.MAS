@@ -1047,6 +1047,54 @@ async def process_task(
     raise AssertionError("unreachable")
 
 
+def _task_query(task, mcp_registry: dict) -> str:
+    """Describe attachment access using the servers actually enabled for this run."""
+    parts: list[str] = []
+    if _is_custom_task(task):
+        parts.append(
+            "Solve the task fully specified in the supplied local file, including "
+            "its exactness and answer-format requirements. Let the meta-agent choose "
+            "the architecture. Treat the original file as the source of truth."
+        )
+    if task.file_path:
+        parts.append(
+            "The Host file path below identifies the file itself, not a directory. "
+            "Use it exactly as given, even if it has no extension. The File name is "
+            "metadata: never append it to the host path. Assign a tool that can "
+            "actually read or stage this file to an executed agent."
+        )
+        if "code-agent" in mcp_registry:
+            parts.append(
+                "For computation over the file, pass that exact path to "
+                "solve_with_code(files=[path]); do not copy its contents into task, "
+                "context, or an intermediate handoff. The code-agent stages files "
+                "automatically. Each call uses an independent fresh sandbox, so pass "
+                "the file again on any later call."
+            )
+        elif "document" in mcp_registry:
+            parts.append(
+                "Assign document to the agent that reads the attachment. Use "
+                "read_document or find_document on the exact host path; page through "
+                "the content when needed. Pass only the relevant extracted data to "
+                "downstream calculation. sandbox-light executes code but cannot open "
+                "host filesystem paths or stage files; give it extracted values as "
+                "explicit inputs, not a path to open."
+            )
+        else:
+            parts.append(
+                "Only use file-reading capabilities actually present in the available "
+                "tool catalog. sandbox-light cannot open host filesystem paths. "
+                "If no enabled tool can access the attachment, report the missing "
+                "capability rather than inventing file contents or tool functions."
+            )
+        parts.append(f"Host file path: {task.file_path}")
+    if task.file_name:
+        parts.append(f"File name: {task.file_name}")
+    if not _is_custom_task(task):
+        parts.append(f"Question: {task.question}")
+    return "\n".join(parts)
+
+
 async def _process_task_attempt(
     task,
     gaia_benchmark: GaiaBenchmark,
@@ -1081,33 +1129,6 @@ async def _process_task_attempt(
         "read to get the missing evidence first.\n\n"
     )
 
-    query = ""
-    if _is_custom_task(task):
-        query += (
-            "Solve the task fully specified in the supplied local file, including "
-            "its exactness and answer-format requirements. Treat the original file "
-            "as the source of truth; do not copy its contents into pipeline state. "
-            "Let the meta-agent choose the architecture. For computation over this "
-            "file, downstream code-agent workers must pass the host path via "
-            "solve_with_code(files=[path]); task and context are instructions, not "
-            "data transport.\n"
-        )
-    elif task.file_path:
-        query += (
-            "The source file is available at the host path below. For "
-            "computation over it, pass that exact path to solve_with_code(files=[path]); "
-            "do not copy its contents into task, context, or an intermediate handoff. "
-            "The code-agent stages files automatically. Each call uses an independent "
-            "fresh sandbox, so pass the file again on any later call. Document tools may "
-            "read or retrieve file content when that is the actual task.\n"
-        )
-    if task.file_path:
-        query += f"Host file path: {task.file_path}\n"
-    if task.file_name:
-        query += f"File name: {task.file_name}\n"
-    if not _is_custom_task(task):
-        query += f"Question: {task.question}"
-
     maw = None
     telemetry = None
     state: dict[str, Any] = {}
@@ -1119,6 +1140,7 @@ async def _process_task_attempt(
         task_timeout = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_SECONDS", 600)
         backstop = _env_int("FEDOTMAS_GAIA_TASK_TIMEOUT_BACKSTOP_SECONDS", 180)
         mcp_registry = _gaia_mcp_registry(worker_model)
+        query = _task_query(task, mcp_registry)
         code_agent_server = mcp_registry.get("code-agent")
         code_agent_mcp_timeout = int(getattr(code_agent_server, "timeout", 180))
         code_agent_max = _code_agent_max_execution_seconds(code_agent_mcp_timeout)
