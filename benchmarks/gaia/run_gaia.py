@@ -1480,6 +1480,7 @@ def _attempt_summaries(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     fields = (
         "attempt",
         "attempt_status",
+        "pipeline_status",
         "error",
         "root_cause",
         "last_exception",
@@ -1573,8 +1574,11 @@ def _copy_attempt_fields(destination: dict[str, Any], record: dict[str, Any]) ->
         "config_mode",
         "frozen_config_source",
         "frozen_config_sha256",
+        "attempt",
+        "attempt_artifact",
         "attempt_status",
         "pipeline_status",
+        "pipeline_diagnostics",
         "unresolved_execution_issues",
         "error",
     ):
@@ -1713,17 +1717,12 @@ async def run_gaia(
             partial_path = task_log_dir / "result.json"
             if partial_path.exists():
                 partial = json.loads(partial_path.read_text(encoding="utf-8"))
+                _copy_attempt_fields(result, partial)
                 for key in (
-                    "maw_config",
-                    "config_mode",
-                    "frozen_config_source",
-                    "frozen_config_sha256",
-                    "session_state",
                     "tokens",
                     "research_telemetry",
                     "attempts",
                     "elapsed",
-                    "unresolved_execution_issues",
                 ):
                     if key in partial:
                         result[key] = partial[key]
