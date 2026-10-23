@@ -6,6 +6,7 @@ from fedotmas.control.fixes import (
     fix_agent_configs,
     fix_instruction,
     guardrail_validate_config,
+    repair_agent_configs,
     run_config_guardrails,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "fix_agent_configs",
     "fix_instruction",
     "guardrail_validate_config",
+    "repair_agent_configs",
     "run_config_guardrails",
 ]

@@ -6,6 +6,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from typing import Any
 
 from google.adk import Runner
@@ -43,6 +44,17 @@ class Controller:
         self._maw = maw
         self._task: str | None = None
         self._last_run: ControlledRun | None = None
+        self._recovery_history: list[ControlledRun] = []
+
+    @property
+    def recovery_history(self) -> tuple[ControlledRun, ...]:
+        """Independent snapshots of each returned execution in the last recovery run.
+
+        Earlier states remain available if a later repair fails or times out.
+        They are diagnostic candidates, not validated replacements for the final
+        result. Reading the history cannot mutate controller state.
+        """
+        return tuple(deepcopy(self._recovery_history))
 
     async def run(
         self,
@@ -123,7 +135,7 @@ class Controller:
             fix_tools: ADK-compatible tool functions the debugger agent can
                 call.  Each tool reads/writes config via
                 ``tool_context.state["config"]``.  Defaults to
-                ``[fix_instruction, fix_agent_configs]``.
+                ``[fix_instruction, repair_agent_configs]``.
             checks: Per-agent check functions.  Each function receives the
                 pipeline state dict and returns an error message (str) if
                 the output is wrong, or ``None`` if OK.  The error message
@@ -146,7 +158,9 @@ class Controller:
         if checks:
             plugins.append(EvalPlugin(checks))
 
+        self._recovery_history = []
         run = await self.run(task, config=config, plugins=plugins)
+        self._recovery_history.append(deepcopy(run))
 
         for attempt in range(max_retries + 1):
             if run.status == "success":
@@ -230,6 +244,7 @@ class Controller:
             )
 
             run = await self.resume(new_config, strategy=strategy)
+            self._recovery_history.append(deepcopy(run))
 
         return run
 
@@ -245,9 +260,9 @@ class Controller:
     ) -> MAWConfig:
         """Launch a debugger LLM agent with fix tools to patch the config."""
         from fedotmas.control.fixes import (
-            fix_agent_configs,
             fix_instruction,
             guardrail_validate_config,
+            repair_agent_configs,
         )
         from fedotmas.control.fixes._fix_agent_configs import AVAILABLE_TOOLS_STATE_KEY
         from fedotmas.mcp import get_server_descriptions
@@ -258,7 +273,9 @@ class Controller:
         from fedotmas.meta.maw_debug_prompts import DEBUGGER_TOOL_PROMPT
 
         tools = (
-            fix_tools if fix_tools is not None else [fix_instruction, fix_agent_configs]
+            fix_tools
+            if fix_tools is not None
+            else [fix_instruction, repair_agent_configs]
         )
         registry = self._maw.mcp_servers
         resolved_meta, _, _ = resolve_meta_and_workers(
@@ -299,10 +316,16 @@ class Controller:
 
         llm = make_llm(resolved_meta)
 
+        def literal_instruction(_context):
+            # Configs and snapshots are quoted diagnostic data, not templates
+            # for the debugger's session. ADK interpolates string instructions
+            # and would silently erase optional references such as {source?}.
+            return instruction
+
         debugger_agent = LlmAgent(
             name="debugger",
             model=llm,
-            instruction=instruction,
+            instruction=literal_instruction,
             tools=[FunctionTool(func=f) for f in tools],
             after_tool_callback=guardrail_validate_config,
             generate_content_config=types.GenerateContentConfig(
@@ -497,7 +520,17 @@ class Controller:
                 status="error",
                 state=result.state,
                 checkpoints=checkpoints,
-                error=RunError(agent_name=failed, message=message),
+                error=RunError(
+                    agent_name=failed,
+                    message=message,
+                    retryable=(
+                        True
+                        if result.status in {"incomplete", "limited"}
+                        else False
+                        if result.status == "timed_out"
+                        else None
+                    ),
+                ),
             )
 
         return ControlledRun(
@@ -522,6 +555,8 @@ def _is_retryable(error: RunError | None) -> bool:
     """
     if error is None:
         return False
+    if error.retryable is not None:
+        return error.retryable
     return not bool(_FATAL_ERROR_RE.search(error.message))
 
 

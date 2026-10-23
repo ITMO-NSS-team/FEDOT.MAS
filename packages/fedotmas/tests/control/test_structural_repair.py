@@ -171,9 +171,9 @@ async def test_real_debugger_can_apply_structural_tool_with_stub_model(monkeypat
                 assert "document" in instruction and "sandbox-light" in instruction
                 part = types.Part(
                     function_call=types.FunctionCall(
-                        name="fix_agent_configs",
+                        name="repair_agent_configs",
                         args={
-                            "updates_json": json.dumps(coherent_updates()),
+                            "updates": coherent_updates(),
                             "reasoning": "Read file and align list paths",
                         },
                     )

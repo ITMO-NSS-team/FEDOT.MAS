@@ -5,13 +5,47 @@ from __future__ import annotations
 import json
 
 from google.adk.tools import ToolContext
+from pydantic import BaseModel, ConfigDict
 
 from fedotmas.control.fixes._guardrails import run_config_guardrails
 from fedotmas.maw.contracts import handoff_contract_errors
-from fedotmas.maw.models import MAWConfig
+from fedotmas.maw.models import ArtifactContract, ArtifactRequirement, MAWConfig
 
 AVAILABLE_TOOLS_STATE_KEY = "_fedotmas_recovery_available_tools"
 _EDITABLE_FIELDS = {"instruction", "tools", "output_contract", "input_requirements"}
+
+
+class AgentConfigRepair(BaseModel):
+    """Only explicitly supplied fields replace the corresponding agent fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_name: str
+    instruction: str | None = None
+    tools: list[str] | None = None
+    output_contract: ArtifactContract | None = None
+    input_requirements: list[ArtifactRequirement] | None = None
+
+
+async def repair_agent_configs(
+    tool_context: ToolContext, updates: list[AgentConfigRepair], reasoning: str
+) -> str:
+    """Atomically repair instructions, tools and contracts of related agents.
+
+    Pass updates as an array of objects, NOT a JSON-encoded string. Omit fields
+    that should stay unchanged. Preserve state references such as {source?} in
+    instructions. Include producer and consumer together for handoff changes.
+    Names, output keys, models, pipeline and required dependencies cannot change.
+    """
+    try:
+        payload = [
+            AgentConfigRepair.model_validate(update).model_dump(exclude_unset=True)
+            for update in updates
+        ]
+    except (ValueError, TypeError) as exc:
+        return f"Error applying repair (configuration unchanged): {exc}"
+    # Keep the existing entry point and validation semantics for API callers.
+    return await fix_agent_configs(tool_context, json.dumps(payload), reasoning)
 
 
 async def fix_agent_configs(
