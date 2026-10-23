@@ -182,6 +182,7 @@ Only these exact server names may be assigned in tools.
 - Start from the failing agent ("${agent_name}"). You may also fix its producer or consumer when the same handoff defect requires a coordinated change. Do not change unrelated agents.
 - Keep the fix minimal — change only what is needed to resolve the error.
 - The agent's ``name`` and ``output_key`` must not change.
+- Keep every existing output requirement, including those of terminal agents without consumers. Never null or empty an output contract to hide a failure. For a necessary field rename, provide output_field_renames with old_path/new_path and update the related consumer; distinct obligations must not be merged.
 - Preserve literal state references such as {source?} in rewritten instructions; these are resolved later in the worker session.
 - Required fields must contain substantive values under the current contract validator: empty lists are not a successful extraction. Do not require an uncertainty list to be non-empty merely to satisfy formatting.
 - A scalar aggregation should not claim to preserve the producer's full list under a different JSON shape. Describe the actual output and preserve any necessary item-level provenance explicitly.
