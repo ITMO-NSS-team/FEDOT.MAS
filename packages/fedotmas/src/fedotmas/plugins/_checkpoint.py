@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
@@ -31,9 +32,11 @@ class CheckpointPlugin(BasePlugin):
     rewind, or retry from a specific pipeline stage.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, checkpoints: list[Checkpoint] | None = None) -> None:
         super().__init__(name="fedotmas_checkpoint")
-        self._checkpoints: list[Checkpoint] = []
+        # ADK does not call after_agent for skipped agents. Carry their original
+        # boundaries forward so a second resume can still reuse that prefix.
+        self._checkpoints: list[Checkpoint] = deepcopy(checkpoints or [])
 
     @property
     def checkpoints(self) -> list[Checkpoint]:
@@ -56,7 +59,7 @@ class CheckpointPlugin(BasePlugin):
 
     async def after_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
-    ) -> Optional[types.Content]:
+    ) -> types.Content | None:
         if agent.name.startswith(_WORKFLOW_PREFIXES):
             return None
 

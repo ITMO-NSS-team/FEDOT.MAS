@@ -1,0 +1,33 @@
+{
+  "updates": [
+    {
+      "agent_name": "food_sales_calculator",
+      "instruction": null,
+      "tools": null,
+      "output_contract": {
+        "description": "Aggregated total sales for items confidently classified as food, plus lists of included, excluded, and uncertain items. Preserves per-item provenance under the included/excluded/uncertain lists.",
+        "required_fields": [
+          "total_usd",
+          "currency",
+          "included_items_count",
+          "included_items",
+          "excluded_items",
+          "uncertain_items"
+        ],
+        "identity_fields": [
+          "included_items[].item_name",
+          "excluded_items[].item_name",
+          "uncertain_items[].item_name"
+        ]
+      },
+      "input_requirements": null,
+      "output_field_renames": [
+        {
+          "old_path": "items[].item_name",
+          "new_path": "included_items[].item_name"
+        }
+      ]
+    }
+  ],
+  "reasoning": "The failure shows the agent produced fields (included_items, excluded_items) that were dropped because the agent's output_contract did not declare them, and it also declared identity_fields pointing to items[].item_name while the actual output used included_items[].item_name, causing an entity-continuity mismatch. To fix this minimally, update the food_sales_calculator's output contract to explicitly declare the lists it returns (included_items, excluded_items, uncertain_items, counts, currency) and set identity_fields to refer to item_name under those lists. Also add an output_field_renames entry mapping the original producer identity path items[].item_name to included_items[].item_name so the validator can trace identity continuity from the extractor to the included items produced by this agent."
+}

@@ -102,6 +102,10 @@ def normalize_tool_name(name: str) -> str:
     ):
         if normalized == known or normalized.endswith(f"_{known}"):
             return known
+    # Bare search is ambiguous: normalize its prefix, then use the description
+    # or server identity to distinguish web discovery from local/domain search.
+    if normalized.endswith("_search"):
+        return "search"
     return normalized
 
 

@@ -34,10 +34,13 @@ async def fix_instruction(
         names = [a.name for a in config.agents]
         return f"Error: agent '{agent_name}' not found. Available: {names}"
 
-    new_agent = agent.model_copy(update={"instruction": new_instruction})
+    payload = config.model_dump()
+    for item in payload["agents"]:
+        if item["name"] == agent_name:
+            item["instruction"] = new_instruction
     try:
-        new_config = config.replace_agent(agent_name, new_agent)
-    except Exception as e:
+        new_config = MAWConfig.model_validate(payload)
+    except (ValueError, TypeError) as e:
         return f"Error applying fix: {e}"
 
     tool_context.state["config"] = new_config.model_dump_json()

@@ -189,15 +189,9 @@ class ResearchTelemetry(BasePlugin):
         tool_args: dict[str, Any],
         tool_context: ToolContext,
     ) -> dict[str, Any] | None:
-        kind = _research_tool_kind(tool.name)
-        if (
-            kind is None
-            and tool_capability(
-                tool.name, description=getattr(tool, "description", "") or ""
-            )
-            == ToolCapability.DISCOVERY
-        ):
-            kind = "search"
+        kind = _research_tool_kind(
+            tool.name, description=getattr(tool, "description", "") or ""
+        )
         if kind is None:
             return None
         assert tool_context._invocation_context.agent is not None
@@ -549,15 +543,9 @@ class ResearchTelemetry(BasePlugin):
         tool_context: ToolContext,
         result: dict,
     ) -> None:
-        kind = _research_tool_kind(tool.name)
-        if (
-            kind is None
-            and tool_capability(
-                tool.name, description=getattr(tool, "description", "") or ""
-            )
-            == ToolCapability.DISCOVERY
-        ):
-            kind = "search"
+        kind = _research_tool_kind(
+            tool.name, description=getattr(tool, "description", "") or ""
+        )
         assert tool_context._invocation_context.agent is not None
         agent = tool_context._invocation_context.agent.name
         error_code = get_explicit_error_code(result)
@@ -810,7 +798,9 @@ class ResearchTelemetry(BasePlugin):
         tool_context: ToolContext,
         error: Exception,
     ) -> None:
-        kind = _research_tool_kind(tool.name)
+        kind = _research_tool_kind(
+            tool.name, description=getattr(tool, "description", "") or ""
+        )
         if kind is not None:
             assert tool_context._invocation_context.agent is not None
             agent = tool_context._invocation_context.agent.name
@@ -946,7 +936,11 @@ class ResearchTelemetry(BasePlugin):
         started = item.pop("started", time.monotonic())
         item["elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
         item["result_chars"] = len(json.dumps(result, ensure_ascii=False, default=str))
-        item["result_count"] = _result_count(result)
+        if is_discovery:
+            payload = _search_payload(result)
+            item["result_count"] = len(payload["results"]) if payload else None
+        else:
+            item["result_count"] = _result_count(result)
         code = get_explicit_error_code(result)
         error = str(result.get("error", result.get("message", "")))
         is_error = (
@@ -993,6 +987,9 @@ def _search_payload(result: dict[str, Any]) -> dict[str, Any] | None:
                 try:
                     value = json.loads(item["text"])
                 except (ValueError, TypeError):
+                    found = _markdown_search_payload(item["text"])
+                    if found is not None:
+                        return found
                     continue
                 if isinstance(value, dict):
                     found = _search_payload(value)
@@ -1001,8 +998,32 @@ def _search_payload(result: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _research_tool_kind(name: str) -> str | None:
-    capability = tool_capability(name)
+# Lightpanda emits numbered bold titles, a URL and an indented snippet. Only
+# result headers become candidates; arbitrary links inside snippets do not.
+_SEARCH_RESULT_HEADER = re.compile(
+    r"^\d+\. +\*\*(.+?)\*\* +— +(https?://\S+)[ \t]*$", re.MULTILINE
+)
+
+
+def _markdown_search_payload(text: str) -> dict[str, Any] | None:
+    headers = list(_SEARCH_RESULT_HEADER.finditer(text))
+    if not headers:
+        return None
+    results = []
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+        results.append(
+            {
+                "title": header.group(1).strip(),
+                "url": header.group(2),
+                "snippet": text[header.end() : end].strip(),
+            }
+        )
+    return {"results": results}
+
+
+def _research_tool_kind(name: str, *, description: str = "") -> str | None:
+    capability = tool_capability(name, description=description)
     if capability == ToolCapability.BROWSER_NAVIGATION:
         return "browser_agent"
     if capability == ToolCapability.COMPUTATION:

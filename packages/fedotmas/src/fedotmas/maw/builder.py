@@ -38,6 +38,7 @@ from fedotmas.maw.handoffs import (
     field_values,
     is_explicit_abstention,
     is_unresolved_answer,
+    merge_input_requirements,
     missing_contract_fields,
     parse_artifact,
     parse_artifact_candidates,
@@ -873,6 +874,11 @@ def _build_llm_agent(
     final_answer_agent: str | None = None,
     max_agent_llm_turns: int | None = None,
 ) -> LlmAgent:
+    # All callbacks and prompt helpers must see the same complete obligation
+    # for each source, including handoff recovery and identity propagation.
+    cfg = cfg.model_copy(
+        update={"input_requirements": merge_input_requirements(cfg.input_requirements)}
+    )
     tools: list = []
     for tool_name in cfg.tools:
         tools.append(create_toolset(tool_name, registry=mcp_registry))
@@ -919,6 +925,10 @@ def _build_llm_agent(
     if terminal_boundary:
         instruction_text = (
             f"{instruction_text}\n\nFINAL ANSWER CONTRACT (terminal stage only):\n"
+            "This caller contract takes precedence over any conflicting JSON, "
+            "artifact, or report format in the instructions above. Complete the "
+            "reasoning internally and deliver the caller-facing answer in this "
+            "format; do not return the internal handoff object instead.\n"
             f"{final_answer_contract}"
         )
     if cfg.name == final_answer_agent:

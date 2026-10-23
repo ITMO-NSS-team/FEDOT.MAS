@@ -164,15 +164,28 @@ ${state_snapshot}
 
 ---
 
+## AVAILABLE MCP SERVERS
+
+${mcp_servers_desc}
+
+Only these exact server names may be assigned in tools.
+
 ## INSTRUCTIONS
 
 1. Analyze the error and determine what needs to change in the failing agent.
 2. Call the appropriate fix tool to apply the change.
-3. Guardrails will automatically validate after each fix — if validation fails you will see the error and should retry with a corrected fix.
+3. For wrong tools or incompatible handoff shapes, use repair_agent_configs (or a caller-provided structural fix tool) to update the relevant producer and consumer together. Pass structured updates directly, not as an escaped JSON string. Omit unchanged fields or set them to null; null means no change for every optional repair field, including output_contract. Empty lists are actual edits, not placeholders. Match full dotted field paths (including [] for lists) to the actual artifact shape. Preserve required information, evidence, and identity; do not just remove validation.
+4. Guardrails will automatically validate after each fix — if validation fails you will see the error and should retry with a corrected fix.
 
 ## CONSTRAINTS
 
-- Fix only the failing agent ("${agent_name}"), do not change other agents.
+- Start from the failing agent ("${agent_name}"). You may also fix its producer or consumer when the same handoff defect requires a coordinated change. Do not change unrelated agents.
 - Keep the fix minimal — change only what is needed to resolve the error.
 - The agent's ``name`` and ``output_key`` must not change.
+- Keep every existing output requirement, including those of terminal agents without consumers. Null leaves the existing output contract unchanged; an empty or weakened contract must not be used to hide a failure. For a necessary field rename, provide output_field_renames with old_path/new_path and update the related consumer; distinct obligations must not be merged.
+- Keep every input requirement and identity check for each source, not just a non-empty list. For an input path change, provide input_field_renames with source_key/old_path/new_path alongside input_requirements. Update the producer too when its shape changes. Omit input_field_renames or set it to null when no path changes; distinct obligations must not be merged or moved between sources or categories.
+- Preserve literal state references such as {source?} in rewritten instructions; these are resolved later in the worker session.
+- Required fields must contain substantive values under the current contract validator: empty lists are not a successful extraction. Do not require an uncertainty list to be non-empty merely to satisfy formatting.
+- A scalar aggregation should not claim to preserve the producer's full list under a different JSON shape. Describe the actual output and preserve any necessary item-level provenance explicitly.
+- A 403, unavailable revision, or empty tool response is an evidence/access problem. A contract edit cannot supply missing evidence. Do not substitute a different year or source unless it actually establishes the facts requested by the task.
 """)

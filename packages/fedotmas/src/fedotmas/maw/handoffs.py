@@ -15,6 +15,35 @@ EXECUTION_METADATA_KEY = "_fedotmas_execution"
 ABSTENTION_STATE_KEY = "__fedotmas_completion"
 
 
+def merge_input_requirements(
+    requirements: list[ArtifactRequirement],
+) -> list[ArtifactRequirement]:
+    """Combine obligations for one source before evaluating or resolving issues.
+
+    Runtime issues are keyed by source, not individual requirement. A successful
+    subset must not clear another subset's missing fields or identity mismatch.
+    Return fresh models so building an agent leaves the caller's config intact.
+    """
+    grouped: dict[str, list[ArtifactRequirement]] = {}
+    for requirement in requirements:
+        grouped.setdefault(requirement.source_key, []).append(requirement)
+    return [
+        ArtifactRequirement(
+            source_key=source,
+            required_fields=list(
+                dict.fromkeys(field for item in items for field in item.required_fields)
+            ),
+            identity_fields=list(
+                dict.fromkeys(field for item in items for field in item.identity_fields)
+            ),
+            purpose="\n".join(
+                dict.fromkeys(item.purpose for item in items if item.purpose)
+            ),
+        )
+        for source, items in grouped.items()
+    ]
+
+
 def is_explicit_abstention(value: Any) -> bool:
     """Recognize the runtime's explicit terminal abstention protocol."""
     if isinstance(value, str):
