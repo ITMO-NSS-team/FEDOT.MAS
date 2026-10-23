@@ -24,6 +24,12 @@ class OutputFieldRename(BaseModel):
     new_path: str
 
 
+class InputFieldRename(OutputFieldRename):
+    """An explicit relocation of an input obligation from one source."""
+
+    source_key: str
+
+
 class AgentConfigRepair(BaseModel):
     """Only supplied non-null fields replace the corresponding agent fields.
 
@@ -39,12 +45,16 @@ class AgentConfigRepair(BaseModel):
     output_contract: ArtifactContract | None = None
     input_requirements: list[ArtifactRequirement] | None = None
     output_field_renames: list[OutputFieldRename] | None = None
+    input_field_renames: list[InputFieldRename] | None = None
 
 
 def _preserve_output_contract(
     previous: ArtifactContract | None,
     proposed: ArtifactContract | None,
     renames: list[dict] | None,
+    *,
+    contract_name: str = "output_contract",
+    rename_field: str = "output_field_renames",
 ) -> None:
     """Preserve each declared obligation, allowing explicit non-merging renames.
 
@@ -96,10 +106,61 @@ def _preserve_output_contract(
             # requirement such as evidence.url to a merely non-empty evidence.
             if not any(covers(path, field) for field in declared):
                 raise ValueError(
-                    f"Repair must preserve output_contract {kind} field {old_path!r}. "
-                    "For a renamed field, supply output_field_renames and retain "
+                    f"Repair must preserve {contract_name} {kind} field {old_path!r}. "
+                    f"For a renamed field, supply {rename_field} and retain "
                     "the corresponding requirement in the new contract."
                 )
+
+
+def _preserve_input_requirements(
+    previous: list[ArtifactRequirement],
+    proposed: list[ArtifactRequirement],
+    renames: list[dict] | None,
+) -> None:
+    """Preserve every obligation per source, even across split requirements."""
+
+    def grouped(requirements: list[ArtifactRequirement]) -> dict[str, ArtifactContract]:
+        result: dict[str, ArtifactContract] = {}
+        for requirement in requirements:
+            contract = result.setdefault(requirement.source_key, ArtifactContract())
+            contract.required_fields.extend(requirement.required_fields)
+            contract.identity_fields.extend(requirement.identity_fields)
+        return result
+
+    old = grouped(previous)
+    new = grouped(proposed)
+    by_source: dict[str, list[dict]] = {}
+    for raw in renames or []:
+        rename = InputFieldRename.model_validate(raw)
+        if rename.source_key not in old:
+            raise ValueError(f"Unknown input rename source: {rename.source_key!r}")
+        by_source.setdefault(rename.source_key, []).append(
+            rename.model_dump(exclude={"source_key"})
+        )
+    for source, contract in old.items():
+        if source not in new:
+            raise ValueError("Repair must preserve existing handoff dependencies")
+        field_renames = by_source.get(source, [])
+        try:
+            _preserve_output_contract(
+                contract,
+                new[source],
+                field_renames,
+                contract_name="input_requirements",
+                rename_field="input_field_renames",
+            )
+            mapping = {r["old_path"]: r["new_path"] for r in field_renames}
+            # A child guarantees presence of its container, but equality of a
+            # child does not preserve identity of the whole original object.
+            for path in contract.identity_fields:
+                if mapping.get(path, path) not in new[source].identity_fields:
+                    raise ValueError(f"Repair must preserve identity field {path!r}")
+        except ValueError as exc:
+            raise ValueError(
+                f"input_requirements for {source!r}: {exc}. "
+                "Use input_field_renames with source_key/old_path/new_path "
+                "for an explicit relocation."
+            ) from exc
 
 
 async def repair_agent_configs(
@@ -116,6 +177,9 @@ async def repair_agent_configs(
     Existing output requirements cannot be removed. For a field rename supply
     output_field_renames=[{old_path: ..., new_path: ...}]; preserve every obligation
     in its original required_fields/identity_fields category. Do not merge fields.
+    Preserve every input requirement too. Input path changes require
+    input_field_renames=[{source_key: ..., old_path: ..., new_path: ...}]
+    alongside input_requirements; update the producer if its shape changes.
     """
     try:
         payload = []
@@ -149,6 +213,8 @@ async def fix_agent_configs(
     cannot change. Nothing is applied unless the entire repair validates.
     Existing output obligations must remain. Renamed paths require explicit
     output_field_renames=[{"old_path": ..., "new_path": ...}] in the same update.
+    Input obligations also cannot be removed; input path changes require
+    input_field_renames=[{"source_key": ..., "old_path": ..., "new_path": ...}].
     """
     try:
         updates = json.loads(updates_json)
@@ -165,6 +231,7 @@ async def fix_agent_configs(
         available = tool_context.state.get(AVAILABLE_TOOLS_STATE_KEY)
         touched: set[str] = set()
         contract_updates: dict[str, list[dict] | None] = {}
+        input_updates: dict[str, list[dict] | None] = {}
         for update in updates:
             if not isinstance(update, dict):
                 raise TypeError("Every update must be an object")
@@ -172,10 +239,12 @@ async def fix_agent_configs(
             if not isinstance(name, str) or name not in agents or name in touched:
                 raise ValueError(f"Unknown or duplicate agent_name: {name!r}")
             fields = set(update) - {"agent_name"}
-            if not fields or fields - (_EDITABLE_FIELDS | {"output_field_renames"}):
+            if not fields or fields - (
+                _EDITABLE_FIELDS | {"output_field_renames", "input_field_renames"}
+            ):
                 raise ValueError(
                     f"Only these fields may change: {sorted(_EDITABLE_FIELDS)}; "
-                    "output_field_renames may accompany an output_contract update"
+                    "field renames may accompany their corresponding contract update"
                 )
             if "output_field_renames" in fields and "output_contract" not in fields:
                 raise ValueError(
@@ -202,35 +271,25 @@ async def fix_agent_configs(
                         f"Unavailable MCP servers: {sorted(unknown)}. Available: {available}"
                     )
             if "input_requirements" in fields:
-                # Changing field paths is legitimate; deleting a dependency to
-                # manufacture a completed status is not a recovery operation.
-                proposed = update["input_requirements"]
-                if not isinstance(proposed, list) or not all(
-                    isinstance(r, dict) for r in proposed
-                ):
-                    raise ValueError("input_requirements must be a list of objects")
-                for previous in agents[name]["input_requirements"]:
-                    replacements = [
-                        r
-                        for r in proposed
-                        if r.get("source_key") == previous["source_key"]
-                    ]
-                    if not replacements:
-                        raise ValueError(
-                            "Repair must preserve existing handoff dependencies"
-                        )
-                    for kind in ("required_fields", "identity_fields"):
-                        if previous[kind] and not any(
-                            r.get(kind) for r in replacements
-                        ):
-                            raise ValueError(
-                                f"Repair must preserve non-empty {kind} requirements"
-                            )
+                renames = update.get("input_field_renames")
+                if renames is not None and not isinstance(renames, list):
+                    raise ValueError("input_field_renames must be an array of objects")
+                input_updates[name] = renames
+            elif "input_field_renames" in fields:
+                raise ValueError(
+                    "input_field_renames requires an input_requirements update"
+                )
             agents[name].update({key: update[key] for key in fields & _EDITABLE_FIELDS})
             touched.add(name)
         candidate = MAWConfig.model_validate(payload)
         old_agents = {agent.name: agent for agent in config.agents}
         for agent in candidate.agents:
+            if agent.name in input_updates:
+                _preserve_input_requirements(
+                    old_agents[agent.name].input_requirements,
+                    agent.input_requirements,
+                    input_updates[agent.name],
+                )
             if agent.name in contract_updates:
                 _preserve_output_contract(
                     old_agents[agent.name].output_contract,

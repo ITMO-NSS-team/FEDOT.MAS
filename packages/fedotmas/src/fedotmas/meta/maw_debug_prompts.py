@@ -183,6 +183,7 @@ Only these exact server names may be assigned in tools.
 - Keep the fix minimal — change only what is needed to resolve the error.
 - The agent's ``name`` and ``output_key`` must not change.
 - Keep every existing output requirement, including those of terminal agents without consumers. Null leaves the existing output contract unchanged; an empty or weakened contract must not be used to hide a failure. For a necessary field rename, provide output_field_renames with old_path/new_path and update the related consumer; distinct obligations must not be merged.
+- Keep every input requirement and identity check for each source, not just a non-empty list. For an input path change, provide input_field_renames with source_key/old_path/new_path alongside input_requirements. Update the producer too when its shape changes. Omit input_field_renames or set it to null when no path changes; distinct obligations must not be merged or moved between sources or categories.
 - Preserve literal state references such as {source?} in rewritten instructions; these are resolved later in the worker session.
 - Required fields must contain substantive values under the current contract validator: empty lists are not a successful extraction. Do not require an uncertainty list to be non-empty merely to satisfy formatting.
 - A scalar aggregation should not claim to preserve the producer's full list under a different JSON shape. Describe the actual output and preserve any necessary item-level provenance explicitly.

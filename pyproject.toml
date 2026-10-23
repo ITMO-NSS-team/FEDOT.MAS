@@ -45,6 +45,7 @@ exclude = [ "**/tests/**" ]
 
 [tool.pytest]
 ini_options.asyncio_mode = "auto"
+ini_options.pythonpath = [ "." ]
 ini_options.testpaths = [
   "tests",
   "packages/fedotmas/tests",

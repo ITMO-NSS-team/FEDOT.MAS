@@ -57,6 +57,13 @@ def coherent_updates():
         },
         {
             "agent_name": "consumer",
+            "input_field_renames": [
+                {
+                    "source_key": "locations",
+                    "old_path": "place_name",
+                    "new_path": "locations[].place_name",
+                }
+            ],
             "input_requirements": [
                 {
                     "source_key": "locations",

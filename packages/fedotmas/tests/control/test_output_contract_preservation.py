@@ -215,6 +215,9 @@ async def test_real_debugger_can_rename_producer_and_consumer_together(monkeypat
         },
         {
             "agent_name": "consumer",
+            "input_field_renames": [
+                {"source_key": "answer", "old_path": "evidence", "new_path": "citation"}
+            ],
             "input_requirements": [
                 {"source_key": "answer", "required_fields": ["citation"]}
             ],

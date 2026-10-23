@@ -26,7 +26,7 @@ from fedotmas.core.runner import PipelineExecutionError, run_pipeline
 from fedotmas.maw.handoffs import ABSTENTION_STATE_KEY, unresolved_execution_issues
 from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import MAWConfig
-from fedotmas.plugins._checkpoint import CheckpointPlugin
+from fedotmas.plugins._checkpoint import Checkpoint, CheckpointPlugin
 from fedotmas.plugins._eval import CheckFn, EvalPlugin
 from fedotmas.plugins._skip_completed import SkipCompletedPlugin
 
@@ -435,6 +435,9 @@ class Controller:
             new_config,
             plugins=extra_plugins,
             initial_state=initial_state,
+            completed_checkpoints=[
+                cp for cp in self._last_run.checkpoints if cp.agent_name in completed
+            ],
         )
         return self._last_run
 
@@ -446,8 +449,9 @@ class Controller:
         *,
         plugins: list[BasePlugin],
         initial_state: dict[str, Any] | None = None,
+        completed_checkpoints: list[Checkpoint] | None = None,
     ) -> ControlledRun:
-        checkpoint = CheckpointPlugin()
+        checkpoint = CheckpointPlugin(completed_checkpoints)
         effective_plugins = {p.name: p for p in [*self._maw._plugins, *plugins]}
         effective_plugins.pop(checkpoint.name, None)
         all_plugins = [checkpoint, *effective_plugins.values()]

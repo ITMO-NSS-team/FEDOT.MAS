@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
-
+from fedotmas.core.runner import run_pipeline
 from fedotmas.plugins._skip_completed import SkipCompletedPlugin
+from google.adk.agents import LlmAgent
+from google.adk.models.base_llm import BaseLlm
+from pydantic import BaseModel
 
 
 @pytest.fixture
@@ -48,3 +51,33 @@ async def test_ignores_workflow_nodes(plugin):
         ctx = MagicMock()
         result = await plugin.before_agent_callback(agent=agent, callback_context=ctx)
         assert result is None
+
+
+@pytest.mark.parametrize("value", ['{"entity":"A"}', {"entity": "A"}])
+@pytest.mark.parametrize("schema", [False, True])
+async def test_real_adk_skip_preserves_checkpoint_output(value, schema):
+    class Output(BaseModel):
+        entity: str
+
+    class NeverCalled(BaseLlm):
+        async def generate_content_async(self, llm_request, stream=False):
+            raise AssertionError("Completed agent must not call its model")
+            yield
+
+    agent = LlmAgent(
+        name="reader",
+        model=NeverCalled(model="offline"),
+        output_key="artifact",
+        output_schema=Output if schema else None,
+    )
+    with patch(
+        "socket.socket.connect", side_effect=AssertionError("Network forbidden")
+    ):
+        result = await run_pipeline(
+            agent,
+            "Continue",
+            initial_state={"artifact": value},
+            plugins=[SkipCompletedPlugin({"reader"})],
+        )
+    assert result.status == "completed"
+    assert result.state["artifact"] == value
