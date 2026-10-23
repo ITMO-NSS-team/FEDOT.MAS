@@ -38,6 +38,7 @@ from fedotmas.maw.handoffs import (
     field_values,
     is_explicit_abstention,
     is_unresolved_answer,
+    merge_input_requirements,
     missing_contract_fields,
     parse_artifact,
     parse_artifact_candidates,
@@ -873,6 +874,11 @@ def _build_llm_agent(
     final_answer_agent: str | None = None,
     max_agent_llm_turns: int | None = None,
 ) -> LlmAgent:
+    # All callbacks and prompt helpers must see the same complete obligation
+    # for each source, including handoff recovery and identity propagation.
+    cfg = cfg.model_copy(
+        update={"input_requirements": merge_input_requirements(cfg.input_requirements)}
+    )
     tools: list = []
     for tool_name in cfg.tools:
         tools.append(create_toolset(tool_name, registry=mcp_registry))

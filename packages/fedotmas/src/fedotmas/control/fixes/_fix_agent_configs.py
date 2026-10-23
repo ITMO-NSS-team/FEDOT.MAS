@@ -8,7 +8,7 @@ from google.adk.tools import ToolContext
 from pydantic import BaseModel, ConfigDict
 
 from fedotmas.control.fixes._guardrails import run_config_guardrails
-from fedotmas.maw.contracts import handoff_contract_errors
+from fedotmas.maw.contracts import field_path_is_guaranteed, handoff_contract_errors
 from fedotmas.maw.models import ArtifactContract, ArtifactRequirement, MAWConfig
 
 AVAILABLE_TOOLS_STATE_KEY = "_fedotmas_recovery_available_tools"
@@ -83,17 +83,15 @@ def _preserve_output_contract(
     if len(set(targets)) != len(targets):
         raise ValueError("Output field renames must not merge distinct obligations")
 
-    def covers(container: str, field: str) -> bool:
-        return field == container or field.startswith(
-            (container + ".", container + "[].")
-        )
-
     for index, left in enumerate(paths):
         for offset in range(index + 1, len(paths)):
             right = paths[offset]
-            if not (covers(left, right) or covers(right, left)) and (
-                covers(targets[index], targets[offset])
-                or covers(targets[offset], targets[index])
+            if not (
+                field_path_is_guaranteed(left, right)
+                or field_path_is_guaranteed(right, left)
+            ) and (
+                field_path_is_guaranteed(targets[index], targets[offset])
+                or field_path_is_guaranteed(targets[offset], targets[index])
             ):
                 raise ValueError(
                     "Output field renames must not merge distinct obligations"
@@ -104,7 +102,7 @@ def _preserve_output_contract(
             path = mapping.get(old_path, old_path)
             # A child guarantees its container; the converse would weaken a
             # requirement such as evidence.url to a merely non-empty evidence.
-            if not any(covers(path, field) for field in declared):
+            if not any(field_path_is_guaranteed(path, field) for field in declared):
                 raise ValueError(
                     f"Repair must preserve {contract_name} {kind} field {old_path!r}. "
                     f"For a renamed field, supply {rename_field} and retain "

@@ -8,6 +8,19 @@ if TYPE_CHECKING:
     from fedotmas.maw.models import MAWConfig
 
 
+def field_path_is_guaranteed(required: str, declared: str) -> bool:
+    """A checked descendant or list expansion guarantees its nonempty container.
+
+    Keep list/object boundaries intact: ``urls[]`` implies ``urls``, but a
+    container alone does not guarantee its items or any particular child.
+    """
+    return (
+        declared == required
+        or declared == required + "[]"
+        or declared.startswith((required + ".", required + "[]."))
+    )
+
+
 def handoff_contract_errors(config: MAWConfig) -> list[str]:
     """Check declared paths without guessing, renaming, or dropping required data.
 
@@ -45,10 +58,7 @@ def handoff_contract_errors(config: MAWConfig) -> list[str]:
             missing = sorted(
                 path
                 for path in needed
-                if not any(
-                    field == path or field.startswith((path + ".", path + "[]."))
-                    for field in declared
-                )
+                if not any(field_path_is_guaranteed(path, field) for field in declared)
             )
             if missing:
                 errors.append(

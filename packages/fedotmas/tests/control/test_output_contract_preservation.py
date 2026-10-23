@@ -111,7 +111,7 @@ async def test_strengthening_and_explicit_rename_preserve_obligations(legacy):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("new_path", ["answer", "answer.detail"])
+@pytest.mark.parametrize("new_path", ["answer", "answer.detail", "answer[]"])
 async def test_rename_cannot_merge_evidence_into_answer(new_path):
     ctx = context()
     before = ctx.state["config"]
@@ -132,6 +132,25 @@ async def test_rename_cannot_merge_evidence_into_answer(new_path):
         "Merge",
     )
     assert "must not merge" in result and ctx.state["config"] == before
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_repeated_leaf_strengthens_container_but_reverse_is_rejected(legacy):
+    raw = config().model_dump()
+    raw["agents"][0]["output_contract"]["required_fields"] = ["urls"]
+    ctx = context(MAWConfig.model_validate(raw))
+    update = {
+        "agent_name": "solver",
+        "output_contract": {
+            "required_fields": ["urls[]"],
+            "identity_fields": ["source_id"],
+        },
+    }
+    assert (await repair(ctx, [update], legacy)).startswith("Updated")
+    before = ctx.state["config"]
+    update["output_contract"]["required_fields"] = ["urls"]
+    assert (await repair(ctx, [update], legacy)).startswith("Error")
+    assert ctx.state["config"] == before
 
 
 @pytest.mark.asyncio

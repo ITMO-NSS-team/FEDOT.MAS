@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fedotmas._settings import ModelConfig
 from fedotmas.maw.contracts import handoff_contract_errors
+from fedotmas.maw.handoffs import describe_requirement, validate_output_contract
 from fedotmas.maw.models import MAWConfig
 from fedotmas.meta import _adk_runner
 from fedotmas.meta._adk_runner import LLMCallResult, run_meta_agent_call
@@ -71,6 +72,34 @@ def test_matching_paths_and_guaranteed_containers(produced, required):
 
 def test_declaring_container_does_not_guarantee_its_children():
     assert handoff_contract_errors(pipeline(["locations"], ["locations[].place_name"]))
+
+
+@pytest.mark.parametrize(
+    "produced, required, artifact",
+    [
+        ("urls[]", "urls", {"urls": ["https://example.com"]}),
+        ("items[].urls[]", "items[].urls", {"items": [{"urls": ["u"]}]}),
+        ("items[].urls[]", "items", {"items": [{"urls": ["u"]}]}),
+    ],
+)
+def test_repeated_leaf_guarantees_container(produced, required, artifact):
+    config = pipeline([produced], [required])
+    assert validate_output_contract(artifact, config.agents[0].output_contract) == []
+    assert (
+        describe_requirement(
+            {"locations": artifact}, config.agents[1].input_requirements[0]
+        )[1]
+        == []
+    )
+    validate_pipeline_output(config.model_dump(), available_tools={"document"})
+
+
+@pytest.mark.parametrize(
+    "produced, required",
+    [("urls", "urls[]"), ("urls[].value", "urls.value"), ("urls_extra[]", "urls")],
+)
+def test_array_path_coverage_does_not_weaken_or_confuse_shapes(produced, required):
+    assert handoff_contract_errors(pipeline([produced], [required]))
 
 
 def test_missing_producer_contract_and_text_user_query():
