@@ -59,7 +59,6 @@ async def repair(ctx, updates, legacy):
 @pytest.mark.parametrize(
     "contract",
     [
-        None,
         {},
         {"description": "no checks"},
         {"required_fields": [], "identity_fields": []},

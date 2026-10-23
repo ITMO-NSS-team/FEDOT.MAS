@@ -25,7 +25,11 @@ class OutputFieldRename(BaseModel):
 
 
 class AgentConfigRepair(BaseModel):
-    """Only explicitly supplied fields replace the corresponding agent fields."""
+    """Only supplied non-null fields replace the corresponding agent fields.
+
+    Omitted or null fields mean no change. Empty lists are explicit edits and
+    still pass through dependency and output-contract preservation checks.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -103,8 +107,10 @@ async def repair_agent_configs(
 ) -> str:
     """Atomically repair instructions, tools and contracts of related agents.
 
-    Pass updates as an array of objects, NOT a JSON-encoded string. Omit fields
-    that should stay unchanged. Preserve state references such as {source?} in
+    Pass updates as an array of objects, NOT a JSON-encoded string. Omitted or
+    null fields stay unchanged, including output_contract; null never deletes a
+    contract. Empty lists are explicit edits, subject to preservation checks.
+    Preserve state references such as {source?} in
     instructions. Include producer and consumer together for handoff changes.
     Names, output keys, models, pipeline and required dependencies cannot change.
     Existing output requirements cannot be removed. For a field rename supply
@@ -117,13 +123,15 @@ async def repair_agent_configs(
             item = AgentConfigRepair.model_validate(update).model_dump(
                 exclude_unset=True
             )
-            # An explicitly null optional rename list carries no rename metadata.
-            if item.get("output_field_renames") is None:
-                item.pop("output_field_renames", None)
-            payload.append(item)
+            # The tool schema permits null placeholders for unchanged fields.
+            # Normalize only the top-level patch, after validation: malformed
+            # nested values and unknown fields must still be rejected.
+            payload.append(
+                {key: value for key, value in item.items() if value is not None}
+            )
     except (ValueError, TypeError) as exc:
         return f"Error applying repair (configuration unchanged): {exc}"
-    # Keep the existing entry point and validation semantics for API callers.
+    # Keep legacy JSON calls and all non-null edit guardrails unchanged.
     return await fix_agent_configs(tool_context, json.dumps(payload), reasoning)
 
 
