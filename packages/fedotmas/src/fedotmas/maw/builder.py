@@ -28,6 +28,11 @@ from fedotmas._settings import (
 )
 from fedotmas.common.llm import make_llm
 from fedotmas.common.logging import get_logger
+from fedotmas.maw._artifact_repair import (
+    apply_field_copies,
+    close_outer_object,
+    repair_source,
+)
 from fedotmas.maw._validators import _find_terminal_node, agent_executes_in_loop
 from fedotmas.maw.handoffs import (
     ABSTENTION_STATE_KEY,
@@ -314,10 +319,7 @@ def _inherit_identity_fields(
     value: Any, cfg: MAWAgentConfig, state: dict[str, Any] | State
 ) -> dict[str, Any] | None:
     """Copy only declared, available upstream identity values into an artifact."""
-    artifact = parse_artifact(value, cfg.output_contract)
-    if artifact is None:
-        candidates = parse_artifact_candidates(value)
-        artifact = candidates[-1] if candidates else None
+    artifact = repair_source(value, cfg.output_contract)
     if artifact is None:
         return None
     artifact = json.loads(json.dumps(artifact, ensure_ascii=False, default=str))
@@ -417,7 +419,15 @@ async def _repair_contract_once(
     ]
     compact = _compact_repair_projection(previous)
     prompt = (
-        "Repair structure/schema only. Return JSON only as exactly one object. "
+        "Repair structure/schema only. Return JSON only as exactly one object: "
+        '{"field_copies":[{"from":"/existing_field","to":"/required_field"}]}. '
+        "Use JSON pointers (escape ~ as ~0 and / as ~1). An empty from pointer "
+        "copies the whole original object. Destinations are object fields, not array indices. "
+        "Suggest at most 24 copies of existing, semantically equivalent fields. "
+        "Do not return replacement values or the rewritten artifact. The runtime applies "
+        "copies to the full original data and keeps every original field unchanged. "
+        "Source pointers always refer to the original, never to earlier copies. "
+        "Return an empty field_copies list if the required fact is absent. "
         "Do not use tools, perform computation, research, or add semantic facts. "
         "Do not invent facts, evidence, sources, or identity values. "
         "Preserve every existing semantic value exactly. Produced required field paths: "
@@ -511,8 +521,8 @@ def _repair_values_supported(
     upstream: dict[str, dict[str, Any]],
 ) -> list[str]:
     """Reject repaired contract values that cannot be traced to prior output."""
-    source = parse_artifact(previous, cfg.output_contract)
-    result = parse_artifact(repaired, cfg.output_contract)
+    source = repair_source(previous, cfg.output_contract)
+    result = repair_source(repaired, cfg.output_contract)
     if source is None or result is None or cfg.output_contract is None:
         return ["<invalid_repair_artifact>"]
 
@@ -551,6 +561,18 @@ def _repair_values_supported(
             return any(contains_value(item, expected) for item in container)
         return False
 
+    def collect(value: Any, semantic_field: str, found: list[Any]) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if isinstance(key, str) and key_tokens(key) & key_tokens(
+                    semantic_field
+                ):
+                    found.append(item)
+                collect(item, semantic_field, found)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item, semantic_field, found)
+
     # Repair may rename a field to satisfy its declared schema, but it must not
     # silently discard semantic data that was already present in the artifact.
     for key, value in source.items():
@@ -581,7 +603,30 @@ def _repair_values_supported(
         ):
             invalid.append(field)
             continue
-        if field not in result or _is_blank(result[field]):
+        if field not in result:
+            # Wrapping an artifact must not turn an unrelated value into missing
+            # evidence merely by placing it under a nested contract path.
+            if result_path_valid:
+                leaf = field.rsplit(".", 1)[-1].removesuffix("[]")
+                nested_values: list[Any] = []
+                collect(source, leaf, nested_values)
+                if field.endswith("[]"):
+                    nested_values = [
+                        item
+                        for value in nested_values
+                        if isinstance(value, list)
+                        for item in value
+                    ]
+                if not nested_values or (
+                    result_values != nested_values
+                    and not all(
+                        value == nested_values[0]
+                        for value in [*nested_values, *result_values]
+                    )
+                ):
+                    invalid.append(field)
+            continue
+        if _is_blank(result[field]):
             continue
         if field in source and source[field] == result[field]:
             source_fields = [field]
@@ -600,18 +645,6 @@ def _repair_values_supported(
             ]
             if not source_fields and field not in cfg.output_contract.identity_fields:
                 nested = []
-
-                def collect(value: Any, semantic_field: str, found: list[Any]) -> None:
-                    if isinstance(value, dict):
-                        for key, item in value.items():
-                            if isinstance(key, str) and key_tokens(key) & key_tokens(
-                                semantic_field
-                            ):
-                                found.append(item)
-                            collect(item, semantic_field, found)
-                    elif isinstance(value, list):
-                        for item in value:
-                            collect(item, semantic_field, found)
 
                 collect(source, field, nested)
                 if (
@@ -1085,11 +1118,33 @@ def _build_llm_agent(
             return
         if cfg.output_contract is None:
             return
+        closed = close_outer_object(value)
+        if closed is not None:
+            value = json.dumps(closed, ensure_ascii=False)
+            callback_context.state[cfg.output_key] = value
+            _record_contract_repair(
+                callback_context.state,
+                cfg.name,
+                {"status": "json_delimiter_repair_succeeded"},
+            )
         candidate = _inherit_identity_fields(value, cfg, callback_context.state)
         if candidate is not None:
             value = json.dumps(candidate, ensure_ascii=False)
             callback_context.state[cfg.output_key] = value
-        missing = validate_output_contract(value, cfg.output_contract)
+        partial = repair_source(value, cfg.output_contract)
+        missing = (
+            validate_output_contract(partial, cfg.output_contract)
+            if partial is not None
+            else list(
+                dict.fromkeys(
+                    [
+                        *cfg.output_contract.required_fields,
+                        *cfg.output_contract.identity_fields,
+                    ]
+                )
+            )
+            or ["structured artifact"]
+        )
         if missing:
             _record_contract_repair(
                 callback_context.state,
@@ -1098,14 +1153,7 @@ def _build_llm_agent(
             )
             repaired = None
             repaired_missing = missing
-            if not _is_blank(value):
-                partial = parse_artifact(value, cfg.output_contract)
-                if partial is None:
-                    candidates = parse_artifact_candidates(value)
-                    partial = (
-                        candidates[-1] if candidates else {"excerpt": str(value)[:1000]}
-                    )
-                partial = _compact_repair_projection(partial)
+            if not _is_blank(value) and partial is not None:
                 try:
                     repaired, usage, finish_reason = await _repair_contract_once(
                         model,
@@ -1137,6 +1185,16 @@ def _build_llm_agent(
                             },
                         )
                     else:
+                        # Apply plans only after recording model usage. Invalid
+                        # plans still consumed tokens, but never change state.
+                        parsed = repair_source(repaired, None)
+                        if parsed is not None and "field_copies" in parsed:
+                            repaired = json.dumps(
+                                apply_field_copies(
+                                    partial, parsed, cfg.output_contract
+                                ),
+                                ensure_ascii=False,
+                            )
                         repaired_candidate = _inherit_identity_fields(
                             repaired, cfg, callback_context.state
                         )

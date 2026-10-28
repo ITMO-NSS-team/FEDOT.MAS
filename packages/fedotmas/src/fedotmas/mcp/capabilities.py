@@ -29,6 +29,7 @@ _URL_INSPECTION = frozenset(
     {
         "goto",
         "markdown",
+        "html",
         "extract",
         "links",
         "eval",
@@ -109,7 +110,9 @@ def normalize_tool_name(name: str) -> str:
     return normalized
 
 
-def tool_capability(name: str, *, description: str = "", server: str = "") -> ToolCapability:
+def tool_capability(
+    name: str, *, description: str = "", server: str = ""
+) -> ToolCapability:
     """Return the runtime capability for a bare, prefixed, or namespaced tool."""
     raw = name.lower().replace("-", "_").replace(".", "_")
     server_name = server.lower().replace("-", "_").replace(".", "_")
@@ -122,9 +125,32 @@ def tool_capability(name: str, *, description: str = "", server: str = "") -> To
     ):
         return ToolCapability.DISCOVERY
     if normalized == "search":
-        hints = ("web search", "search the web", "search the internet", "internet search", "search engine", "search broadly", "search for independent", "search sources", "tavily", "searx")
-        return ToolCapability.DISCOVERY if any(hint in description.casefold() for hint in hints) else ToolCapability.OTHER
-    if normalized in {"web_search", "websearch", "google_search", "searxng_search", "tavily_search"} or normalized.endswith(("_web_search", "_google_search", "_searxng_search", "_tavily_search")):
+        hints = (
+            "web search",
+            "search the web",
+            "search the internet",
+            "internet search",
+            "search engine",
+            "search broadly",
+            "search for independent",
+            "search sources",
+            "tavily",
+            "searx",
+        )
+        return (
+            ToolCapability.DISCOVERY
+            if any(hint in description.casefold() for hint in hints)
+            else ToolCapability.OTHER
+        )
+    if normalized in {
+        "web_search",
+        "websearch",
+        "google_search",
+        "searxng_search",
+        "tavily_search",
+    } or normalized.endswith(
+        ("_web_search", "_google_search", "_searxng_search", "_tavily_search")
+    ):
         return ToolCapability.DISCOVERY
     if normalized == "web_scraping" or normalized in _URL_INSPECTION:
         return ToolCapability.URL_INSPECTION
@@ -136,10 +162,7 @@ def tool_capability(name: str, *, description: str = "", server: str = "") -> To
         return ToolCapability.BROWSER_NAVIGATION
     if normalized in _COMPUTATION:
         return ToolCapability.COMPUTATION
-    if (
-        normalized in _DIAGNOSTIC
-        or normalized.endswith(("_telemetry", "_diagnostics"))
-    ):
+    if normalized in _DIAGNOSTIC or normalized.endswith(("_telemetry", "_diagnostics")):
         return ToolCapability.DIAGNOSTIC
     return ToolCapability.OTHER
 
