@@ -51,6 +51,7 @@ from fedotmas.maw.handoffs import (
     validate_output_contract,
 )
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
+from fedotmas.maw.task_requirements import task_requirements_instruction
 from fedotmas.mcp import MCPServerConfig, create_toolset
 from fedotmas.mcp.capabilities import (
     ToolCapability,
@@ -231,10 +232,16 @@ def _instruction_provider(
                     f"missing {', '.join(missing)}. Compact received artifact: {compact_raw}. {mode}]"
                 )
             elif identity:
+                routes = {
+                    field: requirement.output_identity_path(field)
+                    for field in requirement.identity_fields
+                }
                 text = (
                     f"{text}\n\n[ENTITY CONTINUITY for {requirement.source_key}: "
                     f"preserve these upstream identity values exactly: "
-                    f"{identity}. Do not replace them with another entity. If the "
+                    f"{identity}. Source-to-output field paths: {routes}. "
+                    "Keep each repeated identity in its original record; do not "
+                    "assign missing IDs by list position. Do not replace them with another entity. If the "
                     "identity cannot be supported, mark it unresolved.]"
                 )
             if requirement.purpose:
@@ -255,8 +262,9 @@ def _contract_instruction(cfg: MAWAgentConfig) -> str:
         "\n\nRUNTIME HANDOFF CONTRACT (required for this nonterminal agent):\n"
         "Return exactly one JSON object. Required produced field paths are "
         f"{json.dumps(produced)}. Identity paths are {json.dumps(identity)}; "
-        "the runtime propagates identity values from declared upstream artifacts, "
-        "so you do not need to regenerate omitted identity fields. If you emit one, "
+        "the runtime can propagate omitted scalar identities from declared upstream artifacts. "
+        "You MUST explicitly retain repeated identities inside their records; "
+        "the runtime will not guess which record owns a missing ID. If you emit an identity, "
         "it must match the upstream value exactly. "
         "A path containing [] refers to every record in that repeated list; keep "
         "each identity inside its own record and never move one to the top level. "
@@ -290,7 +298,7 @@ def _upstream_identity_values(
         if artifact is None:
             continue
         identity = {
-            field: field_value(artifact, field)
+            requirement.output_identity_path(field): field_value(artifact, field)
             for field in requirement.identity_fields
             if not missing_contract_fields(artifact, [field])[1]
         }
@@ -334,8 +342,11 @@ def _inherit_identity_fields(
         )
         if source is None:
             continue
-        for path in set(requirement.identity_fields) & output_identities:
-            source_values, valid = field_values(source, path)
+        for source_path in requirement.identity_fields:
+            path = requirement.output_identity_path(source_path)
+            if path not in output_identities:
+                continue
+            source_values, valid = field_values(source, source_path)
             if not valid or any(_is_blank(item) for item in source_values):
                 continue
             _current_values, current_valid = field_values(artifact, path)
@@ -1288,14 +1299,18 @@ def _build_llm_agent(
                 )
                 if upstream is None:
                     continue
-                shared_identity = set(requirement.identity_fields) & set(
-                    cfg.output_contract.identity_fields
-                )
+                shared_identity = {
+                    field: requirement.output_identity_path(field)
+                    for field in requirement.identity_fields
+                    if requirement.output_identity_path(field)
+                    in cfg.output_contract.identity_fields
+                }
                 mismatched = [
                     field
                     for field in shared_identity
                     if not missing_contract_fields(upstream, [field])[1]
-                    and field_value(artifact, field) != field_value(upstream, field)
+                    and field_value(artifact, shared_identity[field])
+                    != field_value(upstream, field)
                 ]
                 if mismatched:
                     append_execution_issue(
@@ -1309,7 +1324,9 @@ def _build_llm_agent(
                     )
                 elif shared_identity and all(
                     not missing_contract_fields(upstream, [field])[1]
-                    and not missing_contract_fields(artifact, [field])[1]
+                    and not missing_contract_fields(artifact, [shared_identity[field]])[
+                        1
+                    ]
                     for field in shared_identity
                 ):
                     resolve_execution_issue(
@@ -1645,6 +1662,11 @@ def _build_llm_agent(
                 finish_reason=genai_types.FinishReason.STOP,
             )
         turn_index = used + 1
+        task_instruction = task_requirements_instruction(
+            state.get("user_query"), terminal=cfg.name == final_answer_agent
+        )
+        if task_instruction:
+            llm_request.append_instructions([task_instruction])
         if isinstance(turns, dict):
             turns[cfg.name] = turn_index
         progress_root = state.get(RESEARCH_PROGRESS_STATE_KEY)

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from string import Template
 
-META_AGENT_SYSTEM_PROMPT = Template("""You are a pipeline architect that designs multi-agent workflows.
+from fedotmas.maw.task_requirements import TASK_REQUIREMENTS_GUIDANCE
+
+META_AGENT_SYSTEM_PROMPT = Template(
+    TASK_REQUIREMENTS_GUIDANCE
+    + "\n\n"
+    + """You are a pipeline architect that designs multi-agent workflows.
 
 Given a user task, you produce a JSON pipeline configuration that describes:
 1. A list of **agents** — each with a name, instruction, output_key, optional model, and optional MCP tools.
@@ -78,6 +83,7 @@ Choose models based on task complexity: use stronger models for critical/complex
 - Contract shapes shown in examples are illustrative for those roles. Choose fields from the current task's dependencies and evidence needs.
 - A producer with an `output_contract` must return a JSON object containing every required field. It may include additional evidence, sources, assumptions, and uncertainty needed downstream; never reduce that artifact to a bare final answer.
 - If a dependent role must continue with the same selected entity, include those identity fields in both contracts. Preserve their values exactly or mark the dependency unresolved; do not silently substitute another paper, site, video, or entity.
+- Keep identity paths unchanged when possible. If an output renames a container, declare identity_field_mapping on its input requirement as a list of source_path/output_path objects (for example source_path people[].id to output_path web_counts[].id). The input identity_fields still describe the source; the output_contract declares the destination. Preserve every record and its ID in order. Do not map multiple identities into one, or copy missing IDs by list position. Only include records whose required identification exists in the source.
 - Verifiers should use `research_policy: "evidence_first"` when upstream evidence is complete, or `"targeted_recovery"` when their role permits retrieving a specific missing claim. Avoid duplicating a full research pass.
 - Set `research_mode` by capability: `discovery_only` for source finders that select URLs and hand off titles/snippets/relevance; `inspection_only` for extractors that consume selected sources; `mixed` for a researcher that must discover and inspect. A source finder hands off a small useful candidate set as soon as it has a plausible match; downstream extractors do deep reading. One exact authoritative source can be sufficient.
 - Broad discovery is limited to one call per model turn. Use each result, retain candidate URLs, inspect known sources, and change the query or source method when a search adds no new evidence.
@@ -281,13 +287,17 @@ sources when one exact authoritative source is sufficient.
 ## OUTPUT FORMAT
 
 Respond with ONLY valid JSON matching the MAWConfig schema. No markdown fencing, no explanations — just the JSON object.
-""")
+"""
+)
 
 # ---------------------------------------------------------------------------
 # Two-stage prompts
 # ---------------------------------------------------------------------------
 
-POOL_AGENT_SYSTEM_PROMPT = Template("""You are an agent pool architect that designs teams of AI agents.
+POOL_AGENT_SYSTEM_PROMPT = Template(
+    TASK_REQUIREMENTS_GUIDANCE
+    + "\n\n"
+    + """You are an agent pool architect that designs teams of AI agents.
 
 Given a user task, you produce a JSON object listing the agents needed to solve it.
 Focus ONLY on defining agents — you do NOT design the pipeline or data flow.
@@ -417,10 +427,14 @@ Choose models based on task complexity: use stronger models for critical/complex
 ## OUTPUT FORMAT
 
 Respond with ONLY valid JSON matching the AgentPoolConfig schema. No markdown fencing, no explanations — just the JSON object.
-""")
+"""
+)
 
 
-PIPELINE_AGENT_SYSTEM_PROMPT = Template("""You are a pipeline architect that designs multi-agent workflow structures.
+PIPELINE_AGENT_SYSTEM_PROMPT = Template(
+    TASK_REQUIREMENTS_GUIDANCE
+    + "\n\n"
+    + """You are a pipeline architect that designs multi-agent workflow structures.
 
 You are given:
 1. A user task.
@@ -501,6 +515,7 @@ ${available_models}
 - Use at most one broad discovery call per model turn. Reuse the candidate ledger, inspect known sources, and switch strategy when a search yields no new evidence.
 - Do not impose a universal multiple-source evidence rule. Use one exact authoritative source when it answers the task; require more only when the task itself needs corroboration.
 - For repeated identities inside records, express the identity path as `people[].orcid` or the corresponding collection path. Keep each identity in its record; never promote one repeated identity to a top-level value.
+- If the output renames the collection, use identity_field_mapping on the input requirement: a list of source_path/output_path objects. Keep input identity_fields on the source shape and output_contract.identity_fields on the destination shape. Preserve every identified record and its ID in order; never fill a missing ID by list position or include an unidentified record as if identified.
 - For large local documents, use `document.read_document` with its continuation cursor or `document.find_document`. Use `code-agent` for XML/JSON/spreadsheets when filtering, joins, aggregation, or structured traversal materially benefits from execution.
 - For local-file computation, pass the host path through code-agent `files`; do not inline the file in `task`, `context`, or a reader-to-worker handoff. Code-agent calls use fresh independent sandboxes; bundle a complete bounded job in one call and pass required files again for any later call.
 - Do not make a reader reproduce a large local file verbatim into pipeline state solely to transport it to code-agent. Preserve the source file as the exact data source; hand off the path and concise semantic findings. Retain reader roles for actual extraction/retrieval.
@@ -645,4 +660,5 @@ Use single curly braces around the state key name. In the examples below, angle 
 ## OUTPUT FORMAT
 
 Respond with ONLY valid JSON matching the MAWConfig schema. No markdown fencing, no explanations — just the JSON object.
-""")
+"""
+)

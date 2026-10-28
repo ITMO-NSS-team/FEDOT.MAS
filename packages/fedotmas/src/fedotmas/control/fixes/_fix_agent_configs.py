@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 from google.adk.tools import ToolContext
 from pydantic import BaseModel, ConfigDict
@@ -12,7 +13,13 @@ from fedotmas.maw.contracts import field_path_is_guaranteed, handoff_contract_er
 from fedotmas.maw.models import ArtifactContract, ArtifactRequirement, MAWConfig
 
 AVAILABLE_TOOLS_STATE_KEY = "_fedotmas_recovery_available_tools"
-_EDITABLE_FIELDS = {"instruction", "tools", "output_contract", "input_requirements"}
+_EDITABLE_FIELDS = {
+    "instruction",
+    "tools",
+    "output_contract",
+    "input_requirements",
+    "research_mode",
+}
 
 
 class OutputFieldRename(BaseModel):
@@ -42,6 +49,7 @@ class AgentConfigRepair(BaseModel):
     agent_name: str
     instruction: str | None = None
     tools: list[str] | None = None
+    research_mode: Literal["discovery_only", "mixed", "inspection_only"] | None = None
     output_contract: ArtifactContract | None = None
     input_requirements: list[ArtifactRequirement] | None = None
     output_field_renames: list[OutputFieldRename] | None = None
@@ -114,6 +122,7 @@ def _preserve_input_requirements(
     previous: list[ArtifactRequirement],
     proposed: list[ArtifactRequirement],
     renames: list[dict] | None,
+    output_renames: list[dict] | None = None,
 ) -> None:
     """Preserve every obligation per source, even across split requirements."""
 
@@ -127,6 +136,9 @@ def _preserve_input_requirements(
 
     old = grouped(previous)
     new = grouped(proposed)
+    output_mapping = {
+        item["old_path"]: item["new_path"] for item in output_renames or []
+    }
     by_source: dict[str, list[dict]] = {}
     for raw in renames or []:
         rename = InputFieldRename.model_validate(raw)
@@ -159,6 +171,30 @@ def _preserve_input_requirements(
                 "Use input_field_renames with source_key/old_path/new_path "
                 "for an explicit relocation."
             ) from exc
+    # Relocating input paths must not silently redirect the identity check to an
+    # unrelated output field. Output relocations require the same explicit map
+    # used to preserve the producer's output contract.
+    new_routes = {
+        (item.source_key, field): item.output_identity_path(field)
+        for item in proposed
+        for field in item.identity_fields
+    }
+    for item in previous:
+        input_mapping = {
+            rename["old_path"]: rename["new_path"]
+            for rename in by_source.get(item.source_key, [])
+        }
+        for field in item.identity_fields:
+            new_field = input_mapping.get(field, field)
+            old_target = item.output_identity_path(field)
+            expected_target = output_mapping.get(
+                old_target, new_field if old_target == field else old_target
+            )
+            if new_routes.get((item.source_key, new_field)) != expected_target:
+                raise ValueError(
+                    "Repair must preserve identity_field_mapping; output relocations "
+                    "require output_field_renames and a matching output_contract"
+                )
 
 
 async def repair_agent_configs(
@@ -178,6 +214,10 @@ async def repair_agent_configs(
     Preserve every input requirement too. Input path changes require
     input_field_renames=[{source_key: ..., old_path: ..., new_path: ...}]
     alongside input_requirements; update the producer if its shape changes.
+    If a repaired role must inspect sources, update research_mode coherently:
+    discovery_only does not permit full inspection, even after adding tools.
+    An input identity_field_mapping maps source identity paths to output paths;
+    changing an output destination requires corresponding output_field_renames.
     """
     try:
         payload = []
@@ -203,7 +243,7 @@ async def fix_agent_configs(
     """Repair tools or handoff contracts for related agents atomically.
 
     updates_json is a JSON array of objects with agent_name and the fields to
-    replace: instruction, tools (MCP server names), output_contract, and/or
+    replace: instruction, tools (MCP server names), research_mode, output_contract, and/or
     input_requirements. Include BOTH producer and consumer when fixing a shape
     mismatch. Use full dotted paths, including [] for list items. Preserve the
     information required by the task; never suppress a failure by deleting its
@@ -287,6 +327,7 @@ async def fix_agent_configs(
                     old_agents[agent.name].input_requirements,
                     agent.input_requirements,
                     input_updates[agent.name],
+                    contract_updates.get(agent.name),
                 )
             if agent.name in contract_updates:
                 _preserve_output_contract(

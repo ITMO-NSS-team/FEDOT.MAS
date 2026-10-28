@@ -25,12 +25,17 @@ scripts.mcp-document = "mcp_document.server:main"
 
 [dependency-groups]
 dev = [
- "pytest",
- "pytest-asyncio",
- "xlwt>=1.3.0",
+  "pytest",
+  "pytest-asyncio",
+  "xlwt>=1.3",
 ]
 
 [tool.fedotmas]
 mcp.name = "document"
-mcp.description = "Read and search documents (PDF, DOCX, PPTX, XLS, XLSX, CSV, JSON, XML, HTML, code files, etc.) with pageable extraction, and manage ZIP archives."
+mcp.description = """\
+  Read and search documents (PDF, DOCX, PPTX, XLS, XLSX, CSV, JSON, XML, HTML, code files, etc.) with pageable \
+  extraction, and manage ZIP archives. For images or embedded image evidence, read_document(describe_images=True) can \
+  describe visual content using a configured vision model; this requires OPENAI_API_KEY and optionally OPENAI_BASE_URL \
+  / DOCUMENT_VISION_MODEL. Default text extraction does not inspect images.\
+  """
 mcp.tags = [ "document", "pdf", "office", "archive", "text" ]

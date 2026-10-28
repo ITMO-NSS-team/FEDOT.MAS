@@ -9,7 +9,11 @@ from typing import Any
 
 from google.adk.sessions.state import State
 
-from fedotmas.maw.models import ArtifactContract, ArtifactRequirement
+from fedotmas.maw.models import (
+    ArtifactContract,
+    ArtifactRequirement,
+    IdentityFieldMapping,
+)
 
 EXECUTION_METADATA_KEY = "_fedotmas_execution"
 ABSTENTION_STATE_KEY = "__fedotmas_completion"
@@ -27,6 +31,20 @@ def merge_input_requirements(
     grouped: dict[str, list[ArtifactRequirement]] = {}
     for requirement in requirements:
         grouped.setdefault(requirement.source_key, []).append(requirement)
+    mappings: dict[str, dict[str, str]] = {}
+    for source, items in grouped.items():
+        mapping: dict[str, str] = {}
+        for item in items:
+            for field in item.identity_fields:
+                target = item.output_identity_path(field)
+                if field in mapping and mapping[field] != target:
+                    raise ValueError(
+                        f"Conflicting identity mappings for {source}.{field}"
+                    )
+                mapping[field] = target
+        mappings[source] = {
+            field: target for field, target in mapping.items() if field != target
+        }
     return [
         ArtifactRequirement(
             source_key=source,
@@ -39,6 +57,10 @@ def merge_input_requirements(
             purpose="\n".join(
                 dict.fromkeys(item.purpose for item in items if item.purpose)
             ),
+            identity_field_mapping=[
+                IdentityFieldMapping(source_path=field, output_path=target)
+                for field, target in mappings[source].items()
+            ],
         )
         for source, items in grouped.items()
     ]

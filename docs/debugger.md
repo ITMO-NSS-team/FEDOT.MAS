@@ -62,6 +62,52 @@ The second type is logical errors. The pipeline completes without any exception,
 
 ## Programmatic Checks
 
+### Preserving identities across handoffs
+
+When an agent changes a collection name, declare how its input identity paths
+map to its output. For example, an inspector can consume `people[].id` and
+produce `web_counts[].id`:
+
+```python
+from fedotmas import ArtifactContract, ArtifactRequirement, IdentityFieldMapping
+
+requirement = ArtifactRequirement(
+    source_key="people",
+    required_fields=["people"],
+    identity_fields=["people[].id"],
+    identity_field_mapping=[
+        IdentityFieldMapping(
+            source_path="people[].id", output_path="web_counts[].id"
+        )
+    ],
+)
+output_contract = ArtifactContract(
+    required_fields=["web_counts"], identity_fields=["web_counts[].id"]
+)
+```
+
+The inspector's `input_requirements` contains `requirement`; its
+`output_contract` is the contract above. IDs must remain in their records and
+retain their original order. The runtime checks every ID and never fills
+missing record IDs by list position. A mapping changes paths, not values or
+cardinality. Without a mapping, identity paths retain their original names.
+
+`repair_agent_configs` preserves these routes. Relocating an output path during
+recovery requires a matching `output_field_renames` entry, updated output
+contract, and updated input mapping. Input-path renames remain separate and
+require `input_field_renames`. Adding inspection tools also requires changing
+`research_mode` when the role was `discovery_only`; tools alone do not override
+that mode.
+
+Every MAW worker receives the original caller task at model-request time,
+including its requested units and answer scope. `user_query` is reserved for
+that task and cannot be an agent output key; a checkpoint's `user_query` cannot
+override the current request. This preserves task context, but does not prove
+that a model's answer or chosen evidence is correct. Use task-specific checks
+for those properties.
+
+### Checking result values
+
 A check function receives the full pipeline state as a dictionary and returns either an error message (a string describing what went wrong) or `None` if the output is correct. The error message is passed directly to the meta-debugger, so write it as an instruction that explains what needs to be fixed.
 
 ```python

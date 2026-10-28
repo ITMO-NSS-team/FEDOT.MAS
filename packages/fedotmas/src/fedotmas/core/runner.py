@@ -111,9 +111,10 @@ async def run_pipeline(
     session_id = session_id or uuid.uuid4().hex
 
     # Pre-populate state with user_query + any caller-supplied keys.
-    state: dict[str, Any] = {"user_query": user_query}
-    if initial_state:
-        state.update(initial_state)
+    state: dict[str, Any] = dict(initial_state or {})
+    # A checkpoint may contain a previous query; the current caller request is
+    # authoritative for both the user message and per-agent task requirements.
+    state["user_query"] = user_query
 
     session = await session_service.create_session(
         app_name=effective_name,
@@ -144,7 +145,9 @@ async def run_pipeline(
             try:
                 deadline = state.get("_fedotmas_task_deadline_monotonic")
                 if not isinstance(deadline, int | float):
-                    deadline = time.monotonic() + timeout if timeout and timeout > 0 else None
+                    deadline = (
+                        time.monotonic() + timeout if timeout and timeout > 0 else None
+                    )
                 with llm_request_deadline(deadline):
                     await _consume_with_timeout(
                         runner=runner,
@@ -212,7 +215,8 @@ async def run_pipeline(
         status = "limited"
     elif (
         isinstance(final_session.state.get(ABSTENTION_STATE_KEY), dict)
-        and final_session.state[ABSTENTION_STATE_KEY].get("status") in {"abstained", "unresolved"}
+        and final_session.state[ABSTENTION_STATE_KEY].get("status")
+        in {"abstained", "unresolved"}
     ) or unresolved_execution_issues(final_session.state):
         status = "incomplete"
     else:

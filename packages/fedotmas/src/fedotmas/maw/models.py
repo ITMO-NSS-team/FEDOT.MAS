@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from fedotmas._settings import validate_model_name
 from fedotmas.common.logging import get_logger
@@ -115,13 +115,58 @@ class ArtifactContract(BaseModel):
     identity_fields: list[str] = []
 
 
+class IdentityFieldMapping(BaseModel):
+    """An explicit identity relocation from an input artifact to this agent's output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str
+    output_path: str
+
+
 class ArtifactRequirement(BaseModel):
     """Fields a downstream agent expects from one upstream state artifact."""
 
     source_key: str
     required_fields: list[str] = []
     identity_fields: list[str] = []
+    identity_field_mapping: list[IdentityFieldMapping] = []
     purpose: str = ""
+
+    @model_validator(mode="after")
+    def _validate_identity_mapping(self) -> ArtifactRequirement:
+        """Map source identity paths to output paths without dropping identities."""
+        seen: set[str] = set()
+        for mapping in self.identity_field_mapping:
+            source, target = mapping.source_path, mapping.output_path
+            if source in seen:
+                raise ValueError(f"Duplicate identity mapping source {source!r}")
+            seen.add(source)
+            if source not in self.identity_fields:
+                raise ValueError(
+                    f"Identity mapping source {source!r} is not an identity field"
+                )
+            for path in (source, target):
+                if not re.fullmatch(
+                    r"[^.\[\]\s]+(?:\[\])?(?:\.[^.\[\]\s]+(?:\[\])?)*", path
+                ):
+                    raise ValueError(f"Invalid identity field path: {path!r}")
+            if source.count("[]") != target.count("[]"):
+                raise ValueError("Identity mapping must preserve list cardinality")
+        targets = [self.output_identity_path(path) for path in self.identity_fields]
+        if len(set(targets)) != len(set(self.identity_fields)):
+            raise ValueError("Identity mappings must not merge distinct identities")
+        return self
+
+    def output_identity_path(self, source_path: str) -> str:
+        return next(
+            (
+                mapping.output_path
+                for mapping in self.identity_field_mapping
+                if mapping.source_path == source_path
+            ),
+            source_path,
+        )
 
 
 class MAWAgentConfig(BaseModel):
@@ -295,6 +340,8 @@ class MAWConfig(BaseModel):
 
         # Unique output keys
         output_keys = [a.output_key for a in self.agents]
+        if "user_query" in output_keys:
+            raise ValueError("user_query is reserved for the original caller task")
         if len(set(output_keys)) != len(output_keys):
             seen_keys: set[str] = set()
             for a in self.agents:
@@ -322,7 +369,11 @@ class MAWConfig(BaseModel):
                 raise ValueError(
                     "final_answer_agent must be the pipeline's terminal agent"
                 )
+        from fedotmas.maw.handoffs import merge_input_requirements
+
         for agent in self.agents:
+            # Validate routes split across requirements for the same source too.
+            merge_input_requirements(agent.input_requirements)
             for requirement in agent.input_requirements:
                 if requirement.source_key not in state_keys:
                     raise ValueError(
@@ -330,7 +381,7 @@ class MAWConfig(BaseModel):
                         f"'{requirement.source_key}'"
                     )
             required_identity = {
-                field
+                requirement.output_identity_path(field)
                 for requirement in agent.input_requirements
                 for field in requirement.identity_fields
             }
@@ -338,8 +389,37 @@ class MAWConfig(BaseModel):
                 continue
             if required_identity:
                 contract = agent.output_contract or ArtifactContract()
+                for requirement in agent.input_requirements:
+                    for field in requirement.identity_fields:
+                        if (
+                            "[]" not in field
+                            or any(
+                                mapping.source_path == field
+                                for mapping in requirement.identity_field_mapping
+                            )
+                            or field in contract.identity_fields
+                        ):
+                            continue
+                        alternatives = [
+                            target
+                            for target in contract.identity_fields
+                            if target.rsplit(".", 1)[-1] == field.rsplit(".", 1)[-1]
+                            and target.count("[]") == field.count("[]")
+                        ]
+                        # A single replacement collection is ambiguous. Split
+                        # classifications may retain the original collection as
+                        # provenance; do not infer a mapping to one subset.
+                        if len(alternatives) == 1:
+                            raise ValueError(
+                                f"Agent '{agent.name}' has ambiguous identity paths: input "
+                                f"{field!r}, output {alternatives}. Declare identity_field_mapping "
+                                "for a relocated identity, or explicitly retain the original "
+                                "identity path in output_contract when these are different identities."
+                            )
                 normalized_identity = list(
-                    dict.fromkeys([*contract.identity_fields, *sorted(required_identity)])
+                    dict.fromkeys(
+                        [*contract.identity_fields, *sorted(required_identity)]
+                    )
                 )
                 if normalized_identity != contract.identity_fields:
                     agent.output_contract = contract.model_copy(
