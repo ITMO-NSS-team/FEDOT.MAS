@@ -50,6 +50,87 @@ def request(*tools):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name", ["tree", "getUrl", "waitForState", "waitForScript", "save"]
+)
+async def test_browser_repetitions_converge_and_cannot_bypass_policy(name):
+    state = {}
+    ctx = context(state)
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(name="reader", instruction="Read", output_key="out"), None, None
+    )
+    telemetry = ResearchTelemetry()
+    t = tool("web_scraping_" + name)
+    await agent.before_agent_callback(ctx)
+    for _ in range(4):
+        await agent.before_model_callback(ctx, request(t))
+        if state[RESEARCH_TURN_STATE_KEY]["reader"]["force_converge"]:
+            break
+        assert await agent.before_tool_callback(t, {}, ctx) is None
+        result = {"content": [{"text": "same DOM"}]}
+        await telemetry.after_tool_callback(
+            tool=t, tool_args={}, tool_context=ctx, result=result
+        )
+        await agent.after_tool_callback(t, {}, ctx, result)
+    assert state[RESEARCH_TURN_STATE_KEY]["reader"]["force_converge"]
+    assert (await agent.before_tool_callback(t, {}, ctx))[
+        "error_code"
+    ] == "RESEARCH_CONVERGENCE_REQUIRED"
+    req = request(t)
+    await agent.before_model_callback(ctx, req)
+    assert t.name not in {
+        d.name
+        for group in req.config.tools or []
+        for d in group.function_declarations or []
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("args", [{}, {"url": "https://example.org/page"}])
+async def test_first_read_after_navigation_has_bounded_allowance(args):
+    state = {}
+    ctx = context(state)
+    agent = builder._build_llm_agent(
+        MAWAgentConfig(name="reader", instruction="Read", output_key="out"), None, None
+    )
+    await agent.before_agent_callback(ctx)
+    await agent.after_tool_callback(
+        tool("goto"), {"url": "https://example.org/page"}, ctx, {}
+    )
+    state[RESEARCH_TURN_STATE_KEY] = {"reader": {"force_converge": True}}
+    for name in ("markdown", "html"):
+        t = tool(name)
+        assert await agent.before_tool_callback(t, args, ctx) is None
+        await agent.after_tool_callback(t, args, ctx, {"isError": True})
+        assert (await agent.before_tool_callback(t, {**args, "selector": "new"}, ctx))[
+            "error_code"
+        ] == "RESEARCH_CONVERGENCE_REQUIRED"
+    assert (await agent.before_tool_callback(tool("extract"), args, ctx))[
+        "error_code"
+    ] == "RESEARCH_CONVERGENCE_REQUIRED"
+
+
+def test_prior_url_less_read_is_not_forgotten_and_navigation_does_not_reset_route():
+    state = {}
+    args = {"url": "https://example.org/page"}
+    record_retrieval(state, "reader", "goto", args)
+    record_retrieval(state, "reader", "markdown", {})
+    record_retrieval(state, "reader", "goto", args)
+    assert not allow_fallback(state, "reader", "markdown", [], args={})
+    assert not allow_fallback(state, "reader", "html", [], args={})
+
+
+def test_failed_document_route_can_still_switch_to_browser_navigation_and_read():
+    state = {}
+    url = "https://example.org/page"
+    record_retrieval(state, "reader", "read_document", {"file_path": url})
+    assert allow_fallback(state, "reader", "goto", [], args={"url": url}, reserve=True)
+    record_retrieval(state, "reader", "goto", {"url": url})
+    assert allow_fallback(state, "reader", "markdown", [], args={}, reserve=True)
+    assert not allow_fallback(state, "reader", "html", [], args={}, reserve=True)
+
+
+@pytest.mark.asyncio
 async def test_real_reading_counts_without_search_ledger_and_deduplicates():
     state = {}
     ctx = context(state)

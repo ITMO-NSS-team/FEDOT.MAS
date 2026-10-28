@@ -3,11 +3,43 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from fedotmas.maw.builder import build
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.mcp import ToolCapability, create_toolset, tool_capability
 from fedotmas.mcp._config import StdioMCPServer
 from mcp import ListToolsResult, Tool
+
+
+@pytest.mark.parametrize("prefix", ["", "web_scraping_", "web_scraping__"])
+def test_actual_browser_catalog_has_no_unclassified_control_or_reader(prefix):
+    inspections = "click detectForms evaluate extract fill findElement getUrl goto hover html interactiveElements links markdown nodeDetails press save screenshot scroll selectOption setChecked structuredData tree semantic_tree waitForScript waitForSelector waitForState".split()
+    diagnostics = (
+        "consoleLogs getCookies getEnv session_close session_list session_new".split()
+    )
+    for name in inspections:
+        assert tool_capability(prefix + name) == ToolCapability.URL_INSPECTION
+    for name in diagnostics:
+        assert tool_capability(prefix + name) == ToolCapability.DIAGNOSTIC
+
+
+def test_browser_toolset_filters_service_tools_but_retains_readers():
+    toolset = create_toolset(
+        "web-scraping",
+        registry={"web-scraping": StdioMCPServer(command="echo", args=())},
+    )
+    for name in (
+        "getEnv",
+        "getCookies",
+        "consoleLogs",
+        "session_new",
+        "session_close",
+        "session_list",
+    ):
+        assert not toolset.tool_filter(SimpleNamespace(name=name), None)
+    for name in ("tree", "getUrl", "goto", "markdown"):
+        assert toolset.tool_filter(SimpleNamespace(name=name), None)
 
 
 def test_shared_capability_map_covers_research_tools():

@@ -47,9 +47,14 @@ _URL_INSPECTION = frozenset(
         "scroll",
         "selectoption",
         "semantic_tree",
+        "tree",
+        "geturl",
+        "save",
         "setchecked",
         "structureddata",
         "waitforselector",
+        "waitforstate",
+        "waitforscript",
     }
 )
 _DOCUMENT_INSPECTION = frozenset(
@@ -77,7 +82,19 @@ _MEDIA_INSPECTION = frozenset(
 _BROWSER = frozenset({"complete_browser_task"})
 _COMPUTATION = frozenset({"solve_with_code", "run_python", "execute_code"})
 _DIAGNOSTIC = frozenset(
-    {"telemetry", "health", "health_check", "get_metrics", "diagnostics"}
+    {
+        "telemetry",
+        "health",
+        "health_check",
+        "get_metrics",
+        "diagnostics",
+        "getcookies",
+        "getenv",
+        "consolelogs",
+        "session_list",
+        "session_new",
+        "session_close",
+    }
 )
 _DISCOVERY_SERVERS = frozenset({"websearch_tavily", "websearch_searxng"})
 _INSPECTION_SERVERS = frozenset(
@@ -90,16 +107,20 @@ def normalize_tool_name(name: str) -> str:
     normalized = name.rsplit("__", 1)[-1].lower().replace("-", "_").replace(".", "_")
     # MCP server prefixes are conventionally prepended with an underscore. Strip
     # a prefix only when the suffix is a known capability-bearing tool name.
-    for known in (
-        *_DISCOVERY,
-        *_URL_INSPECTION,
-        *_DOCUMENT_INSPECTION,
-        *_MEDIA_INSPECTION,
-        *_BROWSER,
-        *_COMPUTATION,
-        *_DIAGNOSTIC,
-        *_DISCOVERY_SERVERS,
-        *_INSPECTION_SERVERS,
+    for known in sorted(
+        (
+            *_DISCOVERY,
+            *_URL_INSPECTION,
+            *_DOCUMENT_INSPECTION,
+            *_MEDIA_INSPECTION,
+            *_BROWSER,
+            *_COMPUTATION,
+            *_DIAGNOSTIC,
+            *_DISCOVERY_SERVERS,
+            *_INSPECTION_SERVERS,
+        ),
+        key=lambda name: len(name),
+        reverse=True,
     ):
         if normalized == known or normalized.endswith(f"_{known}"):
             return known

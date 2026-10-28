@@ -685,6 +685,8 @@ class ResearchTelemetry(BasePlugin):
             "eval",
             "evaluate",
             "structureddata",
+            "tree",
+            "semantic_tree",
         }:
             return False
         text = re.sub(r"\s+", " ", _retrieved_text(result)).strip()

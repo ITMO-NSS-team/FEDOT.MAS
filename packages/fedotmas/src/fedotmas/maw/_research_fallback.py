@@ -13,6 +13,7 @@ from fedotmas.plugins._research_telemetry import _sanitize_url
 RETRIEVAL_STATE_KEY = "__fedotmas_retrieval_attempts"
 MAX_FALLBACK_ROUTES = 2
 MAX_CALLS_PER_ROUTE = 2
+_NAVIGATION_METHODS = {"web:goto", "web:navigate"}
 
 
 def _source_id(value: Any) -> str | None:
@@ -41,11 +42,17 @@ def _target(args: dict) -> str | None:
 
 def record_retrieval(state: Any, agent: str, tool: str, args: dict) -> None:
     """Remember executed routes, including failures, but not policy blocks."""
-    source, family = _target(args), _family(tool)
-    if source is None or family is None:
-        return
     root = dict(state.get(RETRIEVAL_STATE_KEY) or {})
     entry = dict(root.get(agent) or {})
+    source, family = _target(args), _family(tool)
+    if (
+        source is None
+        and family == "web"
+        and not any(key in args for key in ("url", "urls", "path", "file_path"))
+    ):
+        source = entry.get("current_web_source")
+    if source is None or family is None:
+        return
     attempts = dict(entry.get("attempts") or {})
     if source not in attempts and len(attempts) >= 64:
         return
@@ -55,6 +62,8 @@ def record_retrieval(state: Any, agent: str, tool: str, args: dict) -> None:
         methods.append(method)
     attempts[source] = methods
     entry["attempts"] = attempts
+    if method in _NAVIGATION_METHODS:
+        entry["current_web_source"] = source
     root[agent] = entry
     state[RETRIEVAL_STATE_KEY] = root
 
@@ -83,6 +92,16 @@ def allow_fallback(
     routes = dict(entry.get("fallback_routes") or {})
     known = {value for c in candidates if (value := _source_id(c.get("url")))}
     targets = [value] if args is not None and (value := _target(args)) else []
+    # DOM readers often operate on the current page without a URL argument.
+    if (
+        args is not None
+        and not targets
+        and family == "web"
+        and not any(key in args for key in ("url", "urls", "path", "file_path"))
+    ):
+        current = entry.get("current_web_source")
+        if current:
+            targets = [current]
     if args is None:
         targets = list(known | set(attempts))
     method = family + ":" + normalize_tool_name(tool)
@@ -90,6 +109,7 @@ def allow_fallback(
         route = target + ":" + family
         used = list(routes.get(route) or [])
         previous = attempts.get(target) or []
+        family_methods = {m for m in previous if m.startswith(family + ":")}
         if method in used or method in previous:
             continue
         if route in routes:
@@ -99,7 +119,13 @@ def allow_fallback(
                 (target in known and not previous)
                 or (
                     bool(previous)
-                    and not any(m.startswith(family + ":") for m in previous)
+                    and (
+                        not family_methods
+                        or (
+                            family_methods <= _NAVIGATION_METHODS
+                            and method not in _NAVIGATION_METHODS
+                        )
+                    )
                 )
             )
         if not eligible:

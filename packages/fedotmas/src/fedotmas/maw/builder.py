@@ -33,6 +33,14 @@ from fedotmas.maw._artifact_repair import (
     close_outer_object,
     repair_source,
 )
+from fedotmas.maw._file_evidence import (
+    begin_file_evidence,
+    record_file_evidence,
+    reject_file_artifact,
+    rejected_file_inputs,
+    remember_file_artifact,
+    unsupported_file_artifact,
+)
 from fedotmas.maw._validators import _find_terminal_node, agent_executes_in_loop
 from fedotmas.maw._research_fallback import allow_fallback, record_retrieval
 from fedotmas.maw.handoffs import (
@@ -945,6 +953,14 @@ def _build_llm_agent(
     )
     answer_only = terminal_boundary and not cfg.tools
     instruction_text = cfg.instruction
+    if "document" in cfg.tools:
+        instruction_text += (
+            "\n\nFile evidence: listing, downloading or extracting an archive only "
+            "provides file metadata. Call a reader on the relevant extracted files "
+            "before reporting their contents. Tool calls written as ordinary text "
+            "do not execute. If reading fails, report an incomplete result; never "
+            "substitute illustrative records for extracted data."
+        )
     if answer_only:
         # A generated presentation plan can ask for extra outputs even when
         # the caller asks for one value. Do not give it instruction authority.
@@ -1069,7 +1085,45 @@ def _build_llm_agent(
             max_output_tokens=cfg.max_output_tokens,
         )
 
-    async def before_agent(callback_context: CallbackContext) -> None:
+    async def before_agent(
+        callback_context: CallbackContext,
+    ) -> genai_types.Content | None:
+        rejected = rejected_file_inputs(
+            callback_context.state,
+            list(
+                dict.fromkeys(
+                    [
+                        *[r.source_key for r in cfg.input_requirements],
+                        *re.findall(
+                            r"(?<!\{)\{(\w+)(?:\.\w+)*\??\}(?!\})", cfg.instruction
+                        ),
+                    ]
+                )
+            ),
+        )
+        if rejected:
+            # Stop dependent computation, including access to the earlier model
+            # prose in ADK conversation history. Recovery must fix the producer.
+            value = reject_file_artifact(
+                callback_context.state,
+                cfg.output_key,
+                "Upstream file extraction lacks executed source reads: "
+                + ", ".join(rejected),
+            )
+            for source in rejected:
+                append_execution_issue(
+                    callback_context.state,
+                    {
+                        "kind": "incomplete_handoff",
+                        "agent": cfg.name,
+                        "source_key": source,
+                        "missing_fields": ["executed_source_read"],
+                    },
+                )
+            return genai_types.Content(
+                role="model", parts=[genai_types.Part(text=value)]
+            )
+        begin_file_evidence(callback_context.state, cfg.name)
         _seed_upstream_candidates(callback_context.state, cfg)
         modes = callback_context.state.get(RESEARCH_MODE_STATE_KEY)
         if not isinstance(modes, dict):
@@ -1136,6 +1190,27 @@ def _build_llm_agent(
                     },
                 )
 
+    def reject_unread_artifact(state: Any, value: Any) -> bool:
+        if not unsupported_file_artifact(state, cfg, value):
+            return False
+        # Do not pass rejected records to downstream agents or ask a formatting
+        # repair model to turn them into an apparently valid extraction.
+        reject_file_artifact(
+            state,
+            cfg.output_key,
+            "File contents were not read: only archive/download metadata is available.",
+        )
+        append_execution_issue(
+            state,
+            {
+                "kind": "incomplete_artifact",
+                "agent": cfg.name,
+                "output_key": cfg.output_key,
+                "missing_fields": ["executed_source_read"],
+            },
+        )
+        return True
+
     async def after_agent(callback_context: CallbackContext) -> None:
         value = callback_context.state.get(cfg.output_key)
         if cfg.name == final_answer_agent and is_explicit_abstention(value):
@@ -1173,6 +1248,8 @@ def _build_llm_agent(
                 }
             return
         if cfg.output_contract is None:
+            return
+        if reject_unread_artifact(callback_context.state, value):
             return
         closed = close_outer_object(value)
         if closed is not None:
@@ -1298,6 +1375,8 @@ def _build_llm_agent(
                     },
                 )
                 missing = repaired_missing or missing
+        if reject_unread_artifact(callback_context.state, value):
+            return
         if missing:
             append_execution_issue(
                 callback_context.state,
@@ -1309,6 +1388,7 @@ def _build_llm_agent(
                 },
             )
         else:
+            remember_file_artifact(callback_context.state, cfg)
             resolve_execution_issue(
                 callback_context.state,
                 {
@@ -1668,6 +1748,10 @@ def _build_llm_agent(
             }
             and not control_failure
         )
+        if not control_failure:
+            record_file_evidence(
+                tool_context.state, cfg.name, tool.name, args, tool_response
+            )
         if is_research_action:
             record_retrieval(tool_context.state, cfg.name, tool.name, args)
             evidence_root = tool_context.state.get(RESEARCH_EVIDENCE_ACTION_STATE_KEY)
