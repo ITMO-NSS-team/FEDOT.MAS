@@ -185,6 +185,40 @@ async def test_prose_then_abstention_reaches_pipeline_status_and_can_recover(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recovered", [False, True])
+async def test_empty_structured_refusal_is_incomplete_and_can_recover(
+    monkeypatch, recovered
+):
+    config = MAWConfig(
+        agents=[{"name": "answerer", "instruction": "Answer.", "output_key": "answer"}],
+        pipeline={"agent_name": "answerer"},
+    )
+    model = Capture(
+        output=json.dumps(
+            {
+                "first_date": None,
+                "first_year": None,
+                "first_close_price": None,
+                "evidence_url": ["https://example.org/history"],
+                "evidence_excerpt": "403: Access denied",
+                "notes": "Abstained: live and archived sources were inaccessible.",
+            }
+        )
+    )
+    monkeypatch.setattr(builder, "_resolve_llm", lambda *_: model)
+    tree = builder.build(config, autonomous=False)
+    result = await run_pipeline(tree, "Find the first year.")
+    assert result.status == "incomplete"
+    assert result.state[ABSTENTION_STATE_KEY]["status"] == "unresolved"
+    if recovered:
+        model.output = "<solution>2018</solution>"
+        result = await run_pipeline(
+            tree, "Find the first year.", initial_state=result.state
+        )
+        assert result.status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_single_agent_without_tools_uses_user_question(monkeypatch):
     config = MAWConfig.model_validate(
         {

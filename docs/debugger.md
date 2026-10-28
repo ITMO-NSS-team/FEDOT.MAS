@@ -60,6 +60,33 @@ The first type is framework exceptions. These are Python errors that crash the p
 
 The second type is logical errors. The pipeline completes without any exception, but the agent's output is wrong. For example, you asked the agent to return the number 5, but it returned 2. There is no crash, so the framework thinks everything is fine. To catch these problems, you write a check function that inspects the output and returns an error message if something is wrong.
 
+## Recovery from stalled retrieval
+
+Research convergence uses new retrieved content as a progress signal. Nonempty
+web/DOM reads count even without a search candidate entry; identical extracted
+text is deduplicated across tools and URLs, with at most eight fragment credits
+per agent. Successful nonempty file downloads also count once per source.
+Navigation messages, empty results, and tool error responses do not earn these
+credits. Retrieved content still needs factual verification.
+
+After consecutive research turns without progress, broad search and repeated
+reading methods are paused. A worker can try an unvisited known candidate or a
+different backend for an attempted source, passing the target explicitly. This
+allowance is limited to two alternative routes and two distinct tool methods per
+route. Changing only a selector or query does not create another method. The
+allowance persists in session state and consumes the existing turn/time budget;
+it does not override `discovery_only` or other tool restrictions.
+
+File retrieval requires the appropriate tools in the configured MCP server list.
+Include `download` alongside `document` when tasks require CSV/ZIP resources:
+download the file, then read or extract its local path. Browser navigation alone
+does not provide a downloaded file. Recovery cannot create an unavailable tool.
+
+A terminal JSON object with empty result fields and an explicit refusal in its
+notes/reason/explanation is `incomplete`, even if its schema uses task-specific
+answer keys. Evidence URLs and excerpts do not turn that refusal into an answer.
+A later concrete answer can resolve the incomplete status.
+
 ## Programmatic Checks
 
 ### Preserving identities across handoffs

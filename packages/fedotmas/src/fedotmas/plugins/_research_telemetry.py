@@ -39,6 +39,69 @@ MAX_CANDIDATE_TITLE_CHARS = 180
 MAX_CANDIDATE_SNIPPET_CHARS = 420
 MAX_CANDIDATE_INSPECTION_PROGRESS = 3
 MAX_DOCUMENT_FRAGMENT_PROGRESS = 8
+MAX_WEB_FRAGMENT_PROGRESS = 8
+
+
+def _retrieved_text(value: Any, depth: int = 0) -> str:
+    """Unwrap actual reader content; transport/error metadata is not evidence."""
+    if depth > 8 or value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, str):
+        try:
+            return _retrieved_text(json.loads(value), depth + 1)
+        except (ValueError, TypeError):
+            return value.strip()
+    if isinstance(value, list):
+        return "\n".join(_retrieved_text(v, depth + 1) for v in value[:128])
+    if isinstance(value, dict):
+        if _tool_failed(value) or value.get("success") is False:
+            return ""
+        for key in (
+            "structuredContent",
+            "structured_content",
+            "content",
+            "result",
+            "text",
+        ):
+            if key in value:
+                return _retrieved_text(value[key], depth + 1)
+        return "\n".join(
+            _retrieved_text(v, depth + 1)
+            for k, v in value.items()
+            if k not in {"isError", "type", "error", "status", "success"}
+        )
+    return str(value) if isinstance(value, (int, float)) else ""
+
+
+def _has_downloaded_file(value: Any, depth: int = 0) -> bool:
+    if depth > 8:
+        return False
+    if isinstance(value, str):
+        try:
+            return _has_downloaded_file(json.loads(value), depth + 1)
+        except ValueError:
+            return False
+    if isinstance(value, list):
+        return any(_has_downloaded_file(v, depth + 1) for v in value[:20])
+    if not isinstance(value, dict) or _tool_failed(value):
+        return False
+    if value.get("success") is True:
+        return (
+            bool(value.get("file_path"))
+            and type(value.get("file_size")) is int
+            and value["file_size"] > 0
+        )
+    return any(
+        _has_downloaded_file(value[k], depth + 1)
+        for k in (
+            "structuredContent",
+            "structured_content",
+            "content",
+            "result",
+            "text",
+        )
+        if k in value
+    )
 
 
 def _read_gate_state(state: Any, agent: str) -> dict[str, Any]:
@@ -610,6 +673,60 @@ class ResearchTelemetry(BasePlugin):
         self._mark_progress(state, agent, "document_fragment")
         return True
 
+    def _mark_web_progress(
+        self, state: Any, agent: str, tool: str, args: dict, result: dict
+    ) -> bool:
+        name = normalize_tool_name(strip_tool_name_prefix(tool))
+        if name not in {
+            "markdown",
+            "html",
+            "extract",
+            "eval",
+            "evaluate",
+            "structureddata",
+        }:
+            return False
+        text = re.sub(r"\s+", " ", _retrieved_text(result)).strip()
+        if not text:
+            return False
+        root = dict(state.get(RESEARCH_PROGRESS_STATE_KEY) or {})
+        progress = dict(root.get(agent) or {})
+        seen = list(progress.get("web_fragments") or [])
+        # Identical extracted text earns no extra credit through another tool or
+        # mirror. Different representations still share the bounded allowance.
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        if digest in seen or len(seen) >= MAX_WEB_FRAGMENT_PROGRESS:
+            return False
+        progress["web_fragments"] = [*seen, digest]
+        root[agent] = progress
+        state[RESEARCH_PROGRESS_STATE_KEY] = root
+        self._mark_progress(state, agent, "web_fragment")
+        return True
+
+    def _mark_download_progress(
+        self, state: Any, agent: str, tool: str, args: dict, result: dict
+    ) -> None:
+        if normalize_tool_name(strip_tool_name_prefix(tool)) not in {
+            "download",
+            "download_file",
+        }:
+            return
+        urls = args.get("urls") or args.get("url")
+        url = urls[0] if isinstance(urls, list) and len(urls) == 1 else urls
+        source = _sanitize_url(url)
+        if not source or not _has_downloaded_file(result):
+            return
+        root = dict(state.get(RESEARCH_PROGRESS_STATE_KEY) or {})
+        progress = dict(root.get(agent) or {})
+        seen = list(progress.get("downloaded_sources") or [])
+        digest = hashlib.sha256(source.encode()).hexdigest()
+        if digest in seen or len(seen) >= MAX_DOCUMENT_FRAGMENT_PROGRESS:
+            return
+        progress["downloaded_sources"] = [*seen, digest]
+        root[agent] = progress
+        state[RESEARCH_PROGRESS_STATE_KEY] = root
+        self._mark_progress(state, agent, "downloaded_file")
+
     def _sync_gate_state(
         self,
         state: Any,
@@ -701,6 +818,12 @@ class ResearchTelemetry(BasePlugin):
         if kind is None:
             return
         if kind in {"scraping", "browser_agent"}:
+            self._mark_download_progress(
+                tool_context.state, agent, tool.name, tool_args, result
+            )
+            self._mark_web_progress(
+                tool_context.state, agent, tool.name, tool_args, result
+            )
             self._mark_document_progress(
                 tool_context.state, agent, tool.name, tool_args, result
             )

@@ -34,6 +34,7 @@ from fedotmas.maw._artifact_repair import (
     repair_source,
 )
 from fedotmas.maw._validators import _find_terminal_node, agent_executes_in_loop
+from fedotmas.maw._research_fallback import allow_fallback, record_retrieval
 from fedotmas.maw.handoffs import (
     ABSTENTION_STATE_KEY,
     EXECUTION_METADATA_KEY,
@@ -1593,6 +1594,26 @@ def _build_llm_agent(
                     if isinstance(turns_root, dict):
                         turns_root[cfg.name] = turns
                         tool_context.state[RESEARCH_TURN_STATE_KEY] = turns_root
+        if (
+            blocked is not None
+            and blocked[0] == "RESEARCH_CONVERGENCE_REQUIRED"
+            and capability
+            in {
+                ToolCapability.URL_INSPECTION,
+                ToolCapability.DOCUMENT_INSPECTION,
+                ToolCapability.MEDIA_INSPECTION,
+            }
+            and cfg.research_mode != "discovery_only"
+            and allow_fallback(
+                tool_context.state,
+                cfg.name,
+                tool.name,
+                _candidate_context(tool_context.state, cfg.name),
+                args=args,
+                reserve=True,
+            )
+        ):
+            blocked = None
         if blocked is not None:
             _record_turn_tool_call(
                 tool_context.state,
@@ -1648,6 +1669,7 @@ def _build_llm_agent(
             and not control_failure
         )
         if is_research_action:
+            record_retrieval(tool_context.state, cfg.name, tool.name, args)
             evidence_root = tool_context.state.get(RESEARCH_EVIDENCE_ACTION_STATE_KEY)
             if not isinstance(evidence_root, dict):
                 evidence_root = {}
@@ -1869,6 +1891,13 @@ def _build_llm_agent(
                 }
             )
 
+        if turn_state["force_converge"] and cfg.research_mode != "discovery_only":
+            for name in inspection_names:
+                if not allow_fallback(
+                    state, cfg.name, llm_request.tools_dict[name].name, candidates
+                ):
+                    removed[name] = "stalled retrieval route; bounded alternatives only"
+
         surface_filter_names = set()
         for toolset in tools:
             filtered = getattr(toolset, "_fedotmas_filtered_diagnostic_tools", set())
@@ -1945,7 +1974,7 @@ def _build_llm_agent(
         if turn_state["force_converge"] and (research_agent or discovery_names):
             llm_request.append_instructions(
                 [
-                    "Several consecutive turns produced no semantic progress. Change strategy once, inspect/select existing evidence, or provide the best honest incomplete handoff. Do not repeat a low-value search."
+                    "Several consecutive turns produced no semantic progress. Broad search and repeated retrieval methods are paused. You may inspect an untried known candidate or use a different backend (for example document instead of web-scraping) for a previously attempted URL. At most two alternative routes, two different tool methods per route, remain within the existing turn/time budget. Pass the URL explicitly. If alternatives fail, return an explicit unresolved handoff or <abstain>reason</abstain>; do not repeat blocked calls."
                 ]
             )
 

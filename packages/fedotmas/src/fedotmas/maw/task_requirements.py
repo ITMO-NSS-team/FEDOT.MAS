@@ -23,6 +23,21 @@ Assign tools that can obtain the actual evidence modality. Reading HTML around
 an image or a caption is not inspecting the image itself. If image evidence is
 needed, an executed agent must have a working image-understanding tool; missing
 capabilities are unresolved dependencies, not permission to guess.
+Plan a retrieval fallback using the tools actually available: browser navigation
+is not downloading a CSV/ZIP/API response. Use download for file resources, then
+document tools to list/extract archives and read the returned local paths. Never
+treat a successful navigation message as downloaded data. For a blocked page,
+try an authoritative alternative or a different reading backend once; do not
+keep changing selectors on an access-denied/error page. An empty extraction
+does not prove that the requested fact is absent. Record failed sources so a
+downstream role can select an alternative without repeating the same attempts.
+For unfamiliar symbols or encodings, assign a computation tool to inspect their
+codepoints and a lookup tool to verify meanings; do not ask the user to supply
+information already present in the input. Tool-free roles must have sufficient
+evidence to complete their assigned task.
+When evidence is missing, use status=unresolved with a reason in an intermediate
+artifact, or the terminal abstention protocol. Null result fields plus prose are
+not a completed answer. Never use benchmark answer dumps as evidence for a fact.
 """.strip()
 
 

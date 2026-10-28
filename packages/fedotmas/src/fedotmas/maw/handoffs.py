@@ -113,6 +113,35 @@ _UNRESOLVED_TEXT = re.compile(
     re.IGNORECASE,
 )
 _ANSWER_NULL_KEYS = {"answer", "verified_answer", "value", "formatted_answer"}
+_NONANSWER_NOTES = re.compile(
+    r"^\s*(?:abstained\b|unresolved\b|unable to\b|could not\b|cannot\b)", re.IGNORECASE
+)
+_EVIDENCE_METADATA = {
+    "notes",
+    "reason",
+    "explanation",
+    "evidence",
+    "evidence_url",
+    "evidence_excerpt",
+    "sources",
+    "source_url",
+    "status",
+    "decision",
+}
+
+
+def _empty_answer_with_refusal(parsed: dict[str, Any]) -> bool:
+    # Null metadata alone is normal. Require an explicit refusal and no populated
+    # result fields, including schemas whose answer keys are task-specific.
+    fields = [value for key, value in parsed.items() if key not in _EVIDENCE_METADATA]
+    return (
+        bool(fields)
+        and all(value is None or value == "" for value in fields)
+        and any(
+            isinstance(parsed.get(key), str) and _NONANSWER_NOTES.search(parsed[key])
+            for key in ("notes", "reason", "explanation")
+        )
+    )
 
 
 def is_unresolved_answer(value: Any) -> bool:
@@ -120,9 +149,15 @@ def is_unresolved_answer(value: Any) -> bool:
     parsed_candidates = parse_artifact_candidates(value)
     if parsed_candidates:
         if any(
-            str(parsed.get("status", "")).casefold() == "unresolved"
+            any(
+                str(parsed.get(key, "")).casefold()
+                in {"unresolved", "abstained", "incomplete"}
+                for key in ("status", "decision")
+            )
             for parsed in parsed_candidates
         ):
+            return True
+        if any(_empty_answer_with_refusal(parsed) for parsed in parsed_candidates):
             return True
         # A null nested candidate is not evidence that the actual answer is
         # unresolved. Only a top-level answer field has that meaning.

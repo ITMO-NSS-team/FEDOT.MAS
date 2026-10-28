@@ -2140,7 +2140,9 @@ async def test_repeated_no_progress_turns_hide_broad_discovery_and_are_recorded(
     inspect_context._invocation_context.agent.name = "researcher"
     inspect_context.state = state
     await agent.before_agent_callback(context)
-    for _ in range(3):
+    # The first nonempty read now earns progress even without a search ledger;
+    # identical later content still stalls, including at different URLs.
+    for _ in range(4):
         request = _research_request(search, inspect)
         await agent.before_model_callback(context, request)
         await telemetry.before_tool_callback(
