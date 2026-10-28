@@ -547,7 +547,8 @@ async def test_valid_terminal_answer_survives_intermediate_diagnostics(
 
 
 @pytest.mark.asyncio
-async def test_explicit_terminal_abstention_remains_incomplete(tmp_path: Path):
+@pytest.mark.parametrize("prefix", ["", "I inspected the candidate pages.\n\n"])
+async def test_explicit_terminal_abstention_remains_incomplete(tmp_path: Path, prefix):
     class AbstainingMAW(_FakeMAW):
         async def run(
             self,
@@ -558,7 +559,7 @@ async def test_explicit_terminal_abstention_remains_incomplete(tmp_path: Path):
             initial_state: dict | None = None,
         ) -> dict[str, str]:
             self.last_result = PipelineResult(
-                state={"final_answer": "<abstain>Unable to solve</abstain>"},
+                state={"final_answer": prefix + "<abstain>Unable to solve</abstain>"},
                 status="incomplete",
             )
             return self.last_result.state
@@ -1301,7 +1302,11 @@ async def test_batch_keeps_failed_attempt_diagnostics_and_continues(
 ):
     import benchmarks.gaia.run_gaia as runner
 
-    diagnostics = {"_fedotmas_execution": {"research_progress": {"reader": {"no_progress_turns": 3}}}}
+    diagnostics = {
+        "_fedotmas_execution": {
+            "research_progress": {"reader": {"no_progress_turns": 3}}
+        }
+    }
 
     class BatchMAW(_FakeMAW):
         async def run(self, query: str, **kwargs):
@@ -1324,11 +1329,17 @@ async def test_batch_keeps_failed_attempt_diagnostics_and_continues(
 
     tasks = [
         SimpleNamespace(
-            task_id=name, question=question, ground_truth="42", difficulty="1",
-            file_path="", file_name="", metadata={},
+            task_id=name,
+            question=question,
+            ground_truth="42",
+            difficulty="1",
+            file_path="",
+            file_name="",
+            metadata={},
         )
         for name, question in [
-            ("failed", "Fail this task"), ("successful", "What is the answer?")
+            ("failed", "Fail this task"),
+            ("successful", "What is the answer?"),
         ]
     ]
 
@@ -1370,7 +1381,12 @@ async def test_batch_keeps_failed_attempt_diagnostics_and_continues(
         assert result["tokens"]["total_prompt"] == 12
         assert result["attempts"][0]["pipeline_status"] == status
     assert attempt["pipeline_diagnostics"] == diagnostics
-    assert json.loads((root / "task_failed/leaderboard.json").read_text())["model_answer"] == ""
+    assert (
+        json.loads((root / "task_failed/leaderboard.json").read_text())["model_answer"]
+        == ""
+    )
     assert successful["is_correct"] is True
     assert batch["metrics"]["overall"]["correct"] == 1
-    assert json.loads((root / "results.json").read_text())["results"] == batch["results"]
+    assert (
+        json.loads((root / "results.json").read_text())["results"] == batch["results"]
+    )

@@ -68,13 +68,42 @@ def merge_input_requirements(
 
 def is_explicit_abstention(value: Any) -> bool:
     """Recognize the runtime's explicit terminal abstention protocol."""
-    if isinstance(value, str):
-        return value.strip().startswith("<abstain>") and "</abstain>" in value
+    return explicit_abstention_reason(value) is not None
+
+
+def explicit_abstention_reason(value: Any) -> str | None:
+    """Read a terminal abstention, including one preceded by working notes.
+
+    A final solution supersedes earlier prose/abstentions. A quoted or fenced
+    example in the surrounding explanation is not a terminal protocol block.
+    """
     if isinstance(value, dict):
-        return value.get("status") == "abstained" and isinstance(
-            value.get("reason"), str
+        reason = value.get("reason")
+        return (
+            reason
+            if value.get("status") == "abstained" and isinstance(reason, str)
+            else None
         )
-    return False
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    try:
+        parsed = json.loads(text)
+    except (ValueError, TypeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        return explicit_abstention_reason(parsed)
+    solutions = list(re.finditer(r"<solution>(.*?)</solution>", text, re.DOTALL))
+    abstentions = list(re.finditer(r"<abstain>(.*?)</abstain>", text, re.DOTALL))
+    if not abstentions:
+        return None
+    last = abstentions[-1]
+    if solutions and solutions[-1].end() >= last.end():
+        # Also catches a refusal incorrectly placed inside a success wrapper.
+        return explicit_abstention_reason(solutions[-1].group(1))
+    if last.end() == len(text) or text.startswith("<abstain>"):
+        return last.group(1).strip()
+    return None
 
 
 _UNRESOLVED_TEXT = re.compile(

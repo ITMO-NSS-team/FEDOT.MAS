@@ -173,6 +173,26 @@ result = await ctrl.run_with_recovery(
 
 The default `fix_instruction` tool is replaced when you pass `fix_tools`. If you want to keep it alongside your custom tools, include it explicitly.
 
+## Final answers and explicit abstention
+
+When a caller supplies `final_answer_contract`, a terminal agent without tools
+answers the original user query using its referenced upstream artifacts. The
+runtime supplies this answer instruction instead of the generated presentation
+plan: a plan requesting a country and a person's name must not add a country to
+an answer when the user requested only the person. References and declared input
+requirements still supply evidence, and missing inputs still produce diagnostics.
+Input identities select the evidence; they do not mandate extra output fields.
+This does not add a model call or modify the saved configuration. Without a caller
+contract, the configured instruction is used as before. Terminal agents that
+still need tools retain their working instructions.
+
+A terminal `<abstain>reason</abstain>` is recognized even after explanatory prose,
+or inside an erroneous `<solution>` wrapper. It makes the pipeline `incomplete`
+and remains available to recovery; it is not scored as a successful answer. A
+later concrete `<solution>` can supersede an earlier abstention. These checks do
+not establish factual correctness or guarantee that a model follows the requested
+format; evaluate that separately on a new run.
+
 ## When to Use the Optimizer Instead
 
 The meta-debugger fixes specific errors. It takes one config, receives one error description, and produces one corrected config. This is the right tool when an agent crashes or fails a simple check.
