@@ -282,9 +282,11 @@ async def test_download_is_a_distinct_route_and_real_file_reopens_reading():
     assert not state.get(RESEARCH_PROGRESS_STATE_KEY)
     result = {
         "structuredContent": {
-            "result": [
+            "results": [
                 {"success": True, "file_size": 120, "file_path": "/tmp/data.zip"}
-            ]
+            ],
+            "success_count": 1,
+            "failed_count": 0,
         }
     }
     await telemetry.after_tool_callback(
@@ -294,7 +296,7 @@ async def test_download_is_a_distinct_route_and_real_file_reopens_reading():
         "downloaded_file"
     ]
     # A different downloaded filename for the same URL earns no second credit.
-    result["structuredContent"]["result"][0]["file_path"] = "/tmp/data_2.zip"
+    result["structuredContent"]["results"][0]["file_path"] = "/tmp/data_2.zip"
     await telemetry.after_tool_callback(
         tool=download, tool_args={"urls": [url]}, tool_context=ctx, result=result
     )

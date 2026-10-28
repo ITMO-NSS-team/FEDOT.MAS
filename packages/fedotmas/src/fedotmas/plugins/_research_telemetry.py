@@ -98,6 +98,7 @@ def _has_downloaded_file(value: Any, depth: int = 0) -> bool:
             "structured_content",
             "content",
             "result",
+            "results",
             "text",
         )
         if k in value
