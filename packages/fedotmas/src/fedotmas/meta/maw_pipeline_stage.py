@@ -74,6 +74,7 @@ class PipelineGenerator:
             max_retries=self._max_retries,
             allowed_models=[m.model for m in self._resolved_workers],
             plugins=self._plugins,
+            evidence_task=task,
             output_validator=partial(
                 validate_pipeline_output,
                 task=task,

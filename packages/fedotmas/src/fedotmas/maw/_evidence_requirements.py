@@ -25,6 +25,20 @@ The source reader must have inspection tools and a matching output_contract;
 search-only and download-only roles cannot fulfill source obligations. Wire its
 required fields into downstream input_requirements before computing an answer.
 Keep the final presentation stage separate from these structured extractions.
+source_field is relative to THIS reader's output JSON, not a state lookup:
+if a finder returns search_results.selected_url, the reader copies the URL it
+actually read into its OWN source_url field and declares source_field=source_url.
+Never set source_field to user_query or search_results.selected_url. The finder
+input is declared separately in the reader's input_requirements.
+For a task saying 'Watch the BBC Earth video Top 5 Silliest Animal Moments', use
+source='BBC Earth video Top 5 Silliest Animal Moments', source_kind=reference,
+and source_field=source_url. Use source_kind=url only when source itself is a
+literal HTTP(S) URL copied from the task. Do not replace the source with a state
+expression like 'video_url from search_result'. Copy task_quote exactly,
+including newlines, rather than rewriting the question as an instruction.
+Both reader and consumer must explicitly require source_url as well as EVERY
+required evidence path. A reader contract requiring speaker_segments alone does
+not guarantee speaker_segments[].text: declare that exact child path as well.
 Inventory archives before assigning contained files: a job description PDF and
 an applicant spreadsheet have different roles. Inspect XML structure before
 choosing tags; a visible label need not be an XML element name.

@@ -177,6 +177,22 @@ requirements must be declared by the planner; they are not inferred reliably
 from all natural-language task descriptions. Existing configurations with no
 `evidence_requirements` remain compatible and do not acquire them automatically.
 
+`source_field` is relative to the reader's own output JSON: use `source_url`,
+not `user_query` or another agent's `search_results.selected_url`. A named source
+whose URL must be discovered uses `source_kind="reference"`. Both the reader's
+output contract and its consumer's input requirements must include the locator
+and all required fact paths; a list container does not guarantee its children.
+
+If generation violates these rules, one targeted retry within the existing
+budget receives the complete failed JSON and validation error, including when
+ADK wraps a schema error in an error event. It may correct invalid source
+declarations and add missing required fields or evidence inputs. It cannot
+remove existing obligations/facts, change valid task references, or rewrite
+instructions, tools, models, identities or pipeline structure. A failed limited
+repair stops rather than falling back to an unrestricted rewrite. Usage from
+both attempts is counted; diagnostic file capture is not required. This checks
+the correction path, not whether a live model will choose a valid repair.
+
 During generation, a missing `identity_field_mapping` can use one targeted retry
 within the existing retry budget. It may only add the missing mappings; the
 instructions, tools, contracts and pipeline must remain unchanged. The runtime

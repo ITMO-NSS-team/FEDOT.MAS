@@ -174,11 +174,25 @@ class EvidenceRequirement(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    task_quote: str = Field(min_length=1)
-    source: str = Field(min_length=1)
-    source_kind: Literal["url", "file", "reference"]
-    source_field: str = Field(min_length=1)
-    required_fields: list[str] = Field(min_length=1)
+    task_quote: str = Field(
+        min_length=1,
+        description="Exact contiguous excerpt copied from the original task, including whitespace. Do not paraphrase.",
+    )
+    source: str = Field(
+        min_length=1,
+        description="Exact source reference within task_quote. For a named video/publication, copy its name, not an invented URL or a state reference.",
+    )
+    source_kind: Literal["url", "file", "reference"] = Field(
+        description="url only for a literal HTTP(S) URL in the task; file for its supplied host path; reference for a named source whose URL must be discovered."
+    )
+    source_field: str = Field(
+        min_length=1,
+        description="Path inside THIS reader's output JSON containing the URL/path actually read, e.g. source_url. Never user_query or another agent's output_key.field. Include this path in this reader's output_contract.required_fields and its consumer's input_requirements.required_fields.",
+    )
+    required_fields: list[str] = Field(
+        min_length=1,
+        description="Fact paths in THIS reader's output. Declare every path in output_contract.required_fields and downstream input_requirements.required_fields, including list-item paths, not just their container.",
+    )
 
     @model_validator(mode="after")
     def _validate_source(self) -> EvidenceRequirement:
