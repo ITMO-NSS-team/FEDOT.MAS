@@ -108,3 +108,29 @@ def validate_allowed_models(raw_output: Any, allowed_models: list[str]) -> None:
                 f"Agent '{agent.get('name', '?')}' uses model '{model}' "
                 f"not in allowed_models: {sorted(allowed)}"
             )
+
+
+def validate_pipeline_output(
+    raw_output: Any, *, available_tools: set[str], task: str | None = None
+) -> None:
+    """Reject contradictory handoffs and unavailable tools inside meta retries."""
+    from fedotmas.maw.contracts import handoff_contract_errors
+    from fedotmas.maw.models import MAWConfig
+
+    config = parse_llm_output(raw_output, MAWConfig)
+    from fedotmas.maw._evidence_requirements import evidence_flow_errors
+
+    if task is not None:
+        from fedotmas.maw._evidence_requirements import validate_task_evidence
+
+        validate_task_evidence(config, task)
+    errors = [*handoff_contract_errors(config), *evidence_flow_errors(config)]
+    for agent in config.agents:
+        unknown = set(agent.tools) - available_tools
+        if unknown:
+            errors.append(
+                f"Agent '{agent.name}' uses unavailable MCP servers {sorted(unknown)}. "
+                f"Available: {sorted(available_tools)}"
+            )
+    if errors:
+        raise ValueError("Invalid generated pipeline: " + "; ".join(errors))

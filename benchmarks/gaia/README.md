@@ -55,7 +55,13 @@ For a local text task, pass `--task-file PATH`; the complete UTF-8 file is inclu
 as the task and its resolved path is also supplied to workers for file-based tools.
 Custom tasks do not require Hugging Face credentials. Large generated configurations
 may need a higher `FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS` value than the default
-`8192`; increase it when the meta-agent reports output truncation.
+`8192`. To inspect truncation before changing the budget, optionally set
+`FEDOTMAS_META_RESPONSE_DIR=/path/to/private/diagnostics`. This saves each raw
+meta-agent answer, finish reason and token usage before structured-output
+validation, including invalid JSON responses. Capture is disabled by default;
+files use permissions `0600`, exclude reasoning parts and may contain task data.
+The retry prompt retains the provider's truncation signal even if JSON parsing
+subsequently fails.
 
 ### Arguments
 

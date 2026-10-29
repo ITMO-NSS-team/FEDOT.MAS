@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fedotmas._settings import validate_model_name
 from fedotmas.common.logging import get_logger
@@ -115,13 +115,98 @@ class ArtifactContract(BaseModel):
     identity_fields: list[str] = []
 
 
+class IdentityFieldMapping(BaseModel):
+    """An explicit identity relocation from an input artifact to this agent's output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str
+    output_path: str
+
+
 class ArtifactRequirement(BaseModel):
     """Fields a downstream agent expects from one upstream state artifact."""
 
     source_key: str
     required_fields: list[str] = []
     identity_fields: list[str] = []
+    identity_field_mapping: list[IdentityFieldMapping] = []
     purpose: str = ""
+
+    @model_validator(mode="after")
+    def _validate_identity_mapping(self) -> ArtifactRequirement:
+        """Map source identity paths to output paths without dropping identities."""
+        seen: set[str] = set()
+        for mapping in self.identity_field_mapping:
+            source, target = mapping.source_path, mapping.output_path
+            if source in seen:
+                raise ValueError(f"Duplicate identity mapping source {source!r}")
+            seen.add(source)
+            if source not in self.identity_fields:
+                raise ValueError(
+                    f"Identity mapping source {source!r} is not an identity field"
+                )
+            for path in (source, target):
+                if not re.fullmatch(
+                    r"[^.\[\]\s]+(?:\[\])?(?:\.[^.\[\]\s]+(?:\[\])?)*", path
+                ):
+                    raise ValueError(f"Invalid identity field path: {path!r}")
+            if source.count("[]") != target.count("[]"):
+                raise ValueError("Identity mapping must preserve list cardinality")
+        targets = [self.output_identity_path(path) for path in self.identity_fields]
+        if len(set(targets)) != len(set(self.identity_fields)):
+            raise ValueError("Identity mappings must not merge distinct identities")
+        return self
+
+    def output_identity_path(self, source_path: str) -> str:
+        return next(
+            (
+                mapping.output_path
+                for mapping in self.identity_field_mapping
+                if mapping.source_path == source_path
+            ),
+            source_path,
+        )
+
+
+class EvidenceRequirement(BaseModel):
+    """A source obligation retained independently of a repairable instruction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_quote: str = Field(
+        min_length=1,
+        description="Exact contiguous excerpt copied from the original task, including whitespace. Do not paraphrase.",
+    )
+    source: str = Field(
+        min_length=1,
+        description="Exact source reference within task_quote. For a named video/publication, copy its name, not an invented URL or a state reference.",
+    )
+    source_kind: Literal["url", "file", "reference"] = Field(
+        description="url only for a literal HTTP(S) URL in the task; file for its supplied host path; reference for a named source whose URL must be discovered."
+    )
+    source_field: str = Field(
+        min_length=1,
+        description="Path inside THIS reader's output JSON containing the URL/path actually read, e.g. source_url. Never user_query or another agent's output_key.field. Include this path in this reader's output_contract.required_fields and its consumer's input_requirements.required_fields.",
+    )
+    required_fields: list[str] = Field(
+        min_length=1,
+        description="Fact paths in THIS reader's output. Declare every path in output_contract.required_fields and downstream input_requirements.required_fields, including list-item paths, not just their container.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> EvidenceRequirement:
+        if not self.task_quote.strip() or not self.source.strip():
+            raise ValueError("Evidence source and task_quote must not be blank")
+        if self.source not in self.task_quote:
+            raise ValueError("Evidence source must occur verbatim in task_quote")
+        if self.source_kind == "url" and not self.source.startswith(
+            ("https://", "http://")
+        ):
+            raise ValueError("URL evidence requires an HTTP(S) source")
+        if any(not field.strip() for field in self.required_fields):
+            raise ValueError("Evidence required_fields must not contain blank paths")
+        return self
 
 
 class MAWAgentConfig(BaseModel):
@@ -136,6 +221,8 @@ class MAWAgentConfig(BaseModel):
     max_llm_turns: int | None = None
     output_contract: ArtifactContract | None = None
     input_requirements: list[ArtifactRequirement] = []
+    evidence_requirements: list[EvidenceRequirement] = []
+    calculation_result_field: str | None = None
     research_mode: Literal["discovery_only", "mixed", "inspection_only"] = "mixed"
     research_policy: Literal["independent", "evidence_first", "targeted_recovery"] = (
         "independent"
@@ -143,6 +230,19 @@ class MAWAgentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_turn_limit(self) -> MAWAgentConfig:
+        if self.calculation_result_field is not None:
+            if not re.fullmatch(r"[A-Za-z_]\w*", self.calculation_result_field):
+                raise ValueError(
+                    "calculation_result_field must be a top-level field name"
+                )
+            if (
+                self.output_contract is None
+                or self.calculation_result_field
+                not in self.output_contract.required_fields
+            ):
+                raise ValueError(
+                    "calculation_result_field must be required by output_contract"
+                )
         if self.max_llm_turns is not None and self.max_llm_turns < 1:
             raise ValueError("max_llm_turns must be >= 1")
         return self
@@ -152,6 +252,43 @@ class MAWAgentConfig(BaseModel):
         validate_model_name(self.model)
 
         self.instruction = _normalize_curly_state_refs(self.instruction)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_evidence_requirements(self) -> MAWAgentConfig:
+        if not self.evidence_requirements:
+            return self
+        from fedotmas.mcp.capabilities import ToolCapability, tool_capability
+
+        readers = {
+            ToolCapability.URL_INSPECTION,
+            ToolCapability.DOCUMENT_INSPECTION,
+            ToolCapability.MEDIA_INSPECTION,
+            ToolCapability.BROWSER_NAVIGATION,
+        }
+        if self.research_mode == "discovery_only" or not any(
+            (
+                tool_capability(tool) in readers
+                and tool not in {"download", "download_file"}
+            )
+            or tool in {"code-agent", "media"}
+            for tool in self.tools
+        ):
+            raise ValueError(
+                f"Agent '{self.name}' has source obligations but no inspection route; discovery or download alone is insufficient"
+            )
+        fields = (
+            set(self.output_contract.required_fields) if self.output_contract else set()
+        )
+        missing = {
+            field
+            for r in self.evidence_requirements
+            for field in [*r.required_fields, r.source_field]
+        } - fields
+        if missing:
+            raise ValueError(
+                f"Agent '{self.name}' must retain evidence fields in output_contract.required_fields: {sorted(missing)}"
+            )
         return self
 
 
@@ -295,6 +432,8 @@ class MAWConfig(BaseModel):
 
         # Unique output keys
         output_keys = [a.output_key for a in self.agents]
+        if "user_query" in output_keys:
+            raise ValueError("user_query is reserved for the original caller task")
         if len(set(output_keys)) != len(output_keys):
             seen_keys: set[str] = set()
             for a in self.agents:
@@ -322,7 +461,11 @@ class MAWConfig(BaseModel):
                 raise ValueError(
                     "final_answer_agent must be the pipeline's terminal agent"
                 )
+        from fedotmas.maw.handoffs import merge_input_requirements
+
         for agent in self.agents:
+            # Validate routes split across requirements for the same source too.
+            merge_input_requirements(agent.input_requirements)
             for requirement in agent.input_requirements:
                 if requirement.source_key not in state_keys:
                     raise ValueError(
@@ -330,7 +473,7 @@ class MAWConfig(BaseModel):
                         f"'{requirement.source_key}'"
                     )
             required_identity = {
-                field
+                requirement.output_identity_path(field)
                 for requirement in agent.input_requirements
                 for field in requirement.identity_fields
             }
@@ -338,8 +481,37 @@ class MAWConfig(BaseModel):
                 continue
             if required_identity:
                 contract = agent.output_contract or ArtifactContract()
+                for requirement in agent.input_requirements:
+                    for field in requirement.identity_fields:
+                        if (
+                            "[]" not in field
+                            or any(
+                                mapping.source_path == field
+                                for mapping in requirement.identity_field_mapping
+                            )
+                            or field in contract.identity_fields
+                        ):
+                            continue
+                        alternatives = [
+                            target
+                            for target in contract.identity_fields
+                            if target.rsplit(".", 1)[-1] == field.rsplit(".", 1)[-1]
+                            and target.count("[]") == field.count("[]")
+                        ]
+                        # A single replacement collection is ambiguous. Split
+                        # classifications may retain the original collection as
+                        # provenance; do not infer a mapping to one subset.
+                        if len(alternatives) == 1:
+                            raise ValueError(
+                                f"Agent '{agent.name}' has ambiguous identity paths: input "
+                                f"{field!r}, output {alternatives}. Declare identity_field_mapping "
+                                "for a relocated identity, or explicitly retain the original "
+                                "identity path in output_contract when these are different identities."
+                            )
                 normalized_identity = list(
-                    dict.fromkeys([*contract.identity_fields, *sorted(required_identity)])
+                    dict.fromkeys(
+                        [*contract.identity_fields, *sorted(required_identity)]
+                    )
                 )
                 if normalized_identity != contract.identity_fields:
                     agent.output_contract = contract.model_copy(

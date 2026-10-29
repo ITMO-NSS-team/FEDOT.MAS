@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from functools import partial
+
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService
 
-from fedotmas.common.logging import get_logger
 from fedotmas._settings import ModelConfig
+from fedotmas.common.logging import get_logger
+from fedotmas.maw.models import AgentPoolConfig, MAWConfig
 from fedotmas.mcp import MCPServerConfig
 from fedotmas.meta._adk_runner import LLMCallResult, run_meta_agent_call
 from fedotmas.meta._helpers import (
@@ -13,9 +16,9 @@ from fedotmas.meta._helpers import (
     parse_llm_output,
     resolve_meta_and_workers,
     resolve_tool_descriptions,
+    validate_pipeline_output,
 )
 from fedotmas.meta.maw_prompts import PIPELINE_AGENT_SYSTEM_PROMPT
-from fedotmas.maw.models import AgentPoolConfig, MAWConfig
 
 _log = get_logger("fedotmas.meta.maw_pipeline_stage")
 
@@ -71,6 +74,13 @@ class PipelineGenerator:
             max_retries=self._max_retries,
             allowed_models=[m.model for m in self._resolved_workers],
             plugins=self._plugins,
+            evidence_task=task,
+            output_validator=partial(
+                validate_pipeline_output,
+                task=task,
+                available_tools=set(descriptions)
+                | {tool for a in pool.agents for tool in a.tools},
+            ),
         )
 
         config = parse_llm_output(self.result.raw_output, MAWConfig)

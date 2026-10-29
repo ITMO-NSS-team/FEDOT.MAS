@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 from google.adk import Runner
@@ -13,12 +16,22 @@ from google.adk.planners import BuiltInPlanner
 from google.adk.plugins import BasePlugin
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from fedotmas._settings import ModelConfig
 from fedotmas.common.llm import make_llm
 from fedotmas.common.logging import get_logger
 from fedotmas.meta._helpers import validate_allowed_models
+from fedotmas.meta._identity_repair import (
+    identity_repair_payload,
+    identity_repair_message,
+    validate_identity_only_repair,
+)
+from fedotmas.meta._evidence_repair import (
+    evidence_repair_payload,
+    evidence_repair_message,
+    validate_evidence_only_repair,
+)
 
 _log = get_logger("fedotmas.meta._adk_runner")
 
@@ -39,8 +52,14 @@ class _MetaUsageTracker(BasePlugin):
     def __init__(self, usage_totals: dict[str, int | float]) -> None:
         super().__init__("fedotmas_meta_usage")
         self._usage_totals = usage_totals
+        self.raw_output: str | None = None
 
     async def after_model_callback(self, *, callback_context, llm_response):
+        parts = getattr(getattr(llm_response, "content", None), "parts", None) or []
+        text = "".join(p.text for p in parts if p.text and not p.thought)
+        if text:
+            self.raw_output = text
+        _save_response_diagnostic(llm_response)
         finish_reason = str(getattr(llm_response, "finish_reason", "")).lower()
         if "max_tokens" in finish_reason or "length" in finish_reason:
             self._usage_totals["truncation_warning"] = 1
@@ -80,6 +99,8 @@ async def run_meta_agent_call(
     allowed_models: list[str] | None = None,
     plugins: list[BasePlugin] | None = None,
     timeout_s: float | None = None,
+    output_validator: Callable[[Any], None] | None = None,
+    evidence_task: str | None = None,
 ) -> LLMCallResult:
     """Run a single ADK LlmAgent call and return the structured result.
 
@@ -98,7 +119,10 @@ async def run_meta_agent_call(
     failed_elapsed = 0.0
     effective_timeout_s = _resolve_timeout(timeout_s)
     max_output_tokens = _resolve_max_output_tokens()
+    identity_original = None
+    evidence_original = None
     for attempt in range(max_retries + 1):
+        attempt_raw_output = None
         attempt_usage: dict[str, int | float] = {
             "prompt": 0,
             "completion": 0,
@@ -124,6 +148,15 @@ async def run_meta_agent_call(
             else:
                 async with asyncio.timeout(effective_timeout_s):
                     result = await call
+            attempt_raw_output = result.raw_output
+            if output_validator is not None:
+                output_validator(result.raw_output)
+            if identity_original is not None:
+                validate_identity_only_repair(identity_original, result.raw_output)
+            if evidence_original is not None and evidence_task is not None:
+                validate_evidence_only_repair(
+                    evidence_original, result.raw_output, evidence_task
+                )
             return LLMCallResult(
                 raw_output=result.raw_output,
                 prompt_tokens=failed_prompt_tokens + result.prompt_tokens,
@@ -141,6 +174,10 @@ async def run_meta_agent_call(
             error_with_usage.prompt_tokens = failed_prompt_tokens
             error_with_usage.completion_tokens = failed_completion_tokens
             error_with_usage.elapsed = failed_elapsed
+            if identity_original is not None or evidence_original is not None:
+                # One targeted retry uses the existing retry budget. Never fall
+                # back to rewriting the plan when the restricted repair fails.
+                raise
             if isinstance(e, TimeoutError):
                 _log.error(
                     "{} timed out after {:.1f}s; not retrying the same prompt",
@@ -164,7 +201,27 @@ async def run_meta_agent_call(
                     delay,
                 )
                 await asyncio.sleep(delay)
-                effective_message = _retry_message(user_message, e)
+                effective_message = _retry_message(
+                    user_message,
+                    e,
+                    output_truncated=bool(attempt_usage.get("truncation_warning")),
+                )
+                if output_schema.__name__ == "MAWConfig":
+                    validation_error = getattr(e, "structured_validation_error", e)
+                    identity_original = identity_repair_payload(validation_error)
+                    if identity_original is not None:
+                        effective_message = identity_repair_message(
+                            user_message, identity_original, validation_error
+                        )
+                    elif evidence_task is not None:
+                        raw = getattr(e, "structured_output", attempt_raw_output)
+                        evidence_original = evidence_repair_payload(
+                            raw, validation_error
+                        )
+                        if evidence_original is not None:
+                            effective_message = evidence_repair_message(
+                                user_message, evidence_original, validation_error
+                            )
             else:
                 _log.error(
                     "{} failed after {} attempts: {}",
@@ -303,6 +360,16 @@ async def _execute_meta_call(
                 cleanup_error,
             )
     if primary_error is not None and not suppressed:
+        # ADK can turn Pydantic errors into error events, losing the original
+        # payload. Preserve the response captured before parsing, without logs
+        # or diagnostic files being required for a bounded corrective retry.
+        if usage_tracker is not None and usage_tracker.raw_output is not None:
+            captured_error = cast(Any, primary_error)
+            captured_error.structured_output = usage_tracker.raw_output
+            try:
+                output_schema.model_validate_json(usage_tracker.raw_output)
+            except ValidationError as validation_error:
+                captured_error.structured_validation_error = validation_error
         if usage_totals is not None and not (
             usage_totals["prompt"] or usage_totals["completion"]
         ):
@@ -362,9 +429,11 @@ async def _execute_meta_call(
     )
 
 
-def _retry_message(user_message: str, error: Exception) -> str:
+def _retry_message(
+    user_message: str, error: Exception, *, output_truncated: bool = False
+) -> str:
     details = str(error)
-    if _is_output_truncation(error):
+    if output_truncated or _is_output_truncation(error):
         feedback = (
             "The previous structured response was truncated by the output-token "
             "limit. Regenerate the complete valid configuration concisely. If this "
@@ -421,3 +490,30 @@ def _resolve_max_output_tokens() -> int | None:
         )
         resolved = 8192
     return resolved if resolved > 0 else None
+
+
+def _save_response_diagnostic(llm_response: Any) -> None:
+    """Opt-in capture before ADK parses JSON; keep raw answers out of logs."""
+    directory = os.getenv("FEDOTMAS_META_RESPONSE_DIR")
+    if not directory:
+        return
+    content = getattr(llm_response, "content", None)
+    parts = getattr(content, "parts", None) or []
+    text = "".join(part.text for part in parts if part.text and not part.thought)
+    usage = getattr(llm_response, "usage_metadata", None)
+    payload = {
+        "text": text,
+        "finish_reason": str(getattr(llm_response, "finish_reason", "")),
+        "prompt_tokens": getattr(usage, "prompt_token_count", None),
+        "completion_tokens": getattr(usage, "candidates_token_count", None),
+    }
+    try:
+        target = Path(directory).expanduser()
+        target.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = target / f"meta-response-{uuid.uuid4().hex}.json"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        _log.debug("Meta response diagnostic saved: {}", path)
+    except OSError as exc:
+        _log.warning("Cannot save meta response diagnostic: {}", type(exc).__name__)

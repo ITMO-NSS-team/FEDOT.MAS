@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.plugins import BasePlugin
@@ -27,14 +25,14 @@ class SkipCompletedPlugin(BasePlugin):
 
     async def before_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
-    ) -> Optional[types.Content]:
+    ) -> types.Content | None:
         if agent.name.startswith(_WORKFLOW_PREFIXES):
             return None
 
         if agent.name in self._completed:
             _log.debug("Skipping completed agent: {}", agent.name)
-            return types.Content(
-                role="model",
-                parts=[types.Part.from_text(text=f"[skipped {agent.name}]")],
-            )
+            # A non-None Content skips execution. ADK saves text returned here
+            # to LlmAgent.output_key, so even a diagnostic marker would destroy
+            # the checkpoint artifact (or fail output_schema validation).
+            return types.Content(role="model", parts=[])
         return None

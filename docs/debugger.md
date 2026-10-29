@@ -60,7 +60,146 @@ The first type is framework exceptions. These are Python errors that crash the p
 
 The second type is logical errors. The pipeline completes without any exception, but the agent's output is wrong. For example, you asked the agent to return the number 5, but it returned 2. There is no crash, so the framework thinks everything is fine. To catch these problems, you write a check function that inspects the output and returns an error message if something is wrong.
 
+## Recovery from stalled retrieval
+
+Research convergence uses new retrieved content as a progress signal. Nonempty
+web/DOM reads count even without a search candidate entry; identical extracted
+text is deduplicated across tools and URLs, with at most eight fragment credits
+per agent. Successful nonempty file downloads also count once per source.
+Navigation messages, empty results, and tool error responses do not earn these
+credits. Retrieved content still needs factual verification.
+
+After consecutive research turns without progress, broad search and repeated
+reading methods are paused. A worker can try an unvisited known candidate or a
+different backend for an attempted source, passing the target explicitly. This
+allowance is limited to two alternative routes and two distinct tool methods per
+route. Changing only a selector or query does not create another method. The
+allowance persists in session state and consumes the existing turn/time budget;
+it does not override `discovery_only` or other tool restrictions.
+
+File retrieval requires the appropriate tools in the configured MCP server list.
+Include `download` alongside `document` when tasks require CSV/ZIP resources:
+download the file, then read or extract its local path. Browser navigation alone
+does not provide a downloaded file. Recovery cannot create an unavailable tool.
+
+A terminal JSON object with empty result fields and an explicit refusal in its
+notes/reason/explanation is `incomplete`, even if its schema uses task-specific
+answer keys. Evidence URLs and excerpts do not turn that refusal into an answer.
+A later concrete answer can resolve the incomplete status.
+
 ## Programmatic Checks
+
+### Preserving identities across handoffs
+
+When an agent changes a collection name, declare how its input identity paths
+map to its output. For example, an inspector can consume `people[].id` and
+produce `web_counts[].id`:
+
+```python
+from fedotmas import ArtifactContract, ArtifactRequirement, IdentityFieldMapping
+
+requirement = ArtifactRequirement(
+    source_key="people",
+    required_fields=["people"],
+    identity_fields=["people[].id"],
+    identity_field_mapping=[
+        IdentityFieldMapping(
+            source_path="people[].id", output_path="web_counts[].id"
+        )
+    ],
+)
+output_contract = ArtifactContract(
+    required_fields=["web_counts"], identity_fields=["web_counts[].id"]
+)
+```
+
+The inspector's `input_requirements` contains `requirement`; its
+`output_contract` is the contract above. IDs must remain in their records and
+retain their original order. The runtime checks every ID and never fills
+missing record IDs by list position. A mapping changes paths, not values or
+cardinality. Without a mapping, identity paths retain their original names.
+
+`repair_agent_configs` preserves these routes. Relocating an output path during
+recovery requires a matching `output_field_renames` entry, updated output
+contract, and updated input mapping. Input-path renames remain separate and
+require `input_field_renames`. Adding inspection tools also requires changing
+`research_mode` when the role was `discovery_only`; tools alone do not override
+that mode.
+
+Every MAW worker receives the original caller task at model-request time,
+including its requested units and answer scope. `user_query` is reserved for
+that task and cannot be an agent output key; a checkpoint's `user_query` cannot
+override the current request. This preserves task context, but does not prove
+that a model's answer or chosen evidence is correct. Use task-specific checks
+for those properties.
+
+### Source obligations during generation and recovery
+
+An extraction agent can declare `evidence_requirements` separately from its
+editable instruction. For example:
+
+```python
+from fedotmas import EvidenceRequirement
+
+equation_source = EvidenceRequirement(
+    task_quote="Use the equation from https://example.org/paper",
+    source="https://example.org/paper",
+    source_kind="url",
+    source_field="source_url",
+    required_fields=["formula", "units", "variable_bindings"],
+)
+```
+
+Put this object in the reader's `evidence_requirements`. Its
+`output_contract.required_fields` must include `source_url`, `formula`, `units`
+and `variable_bindings`. Generation checks that the quote occurs in the original
+task, the reader has inspection tools, and downstream consumers explicitly
+require these fields after the reader executes. Explicit `Host file path:` task
+metadata must also have a file evidence requirement. Archive contents should be
+inventoried before choosing their roles or assuming filenames and XML tags.
+
+The runtime checks that the artifact's `source_field` points to an executed,
+nonempty read. A literal URL/file obligation must match that source, including
+recorded download-to-file and archive-to-member links. Navigation, search
+snippets, errors and tool calls written in model prose do not fulfill the
+obligation. Missing source evidence replaces the output with an unresolved
+marker and stops dependent agents. A later successful producer run can resolve
+the dependency. Keep structured extraction separate from final answer formatting.
+
+Instruction repair retains these obligations; replacing the agent/configuration
+cannot remove them or drop the required fields and reading capability. They are
+also appended at model-request time independently of the repaired instruction.
+For `source_kind="reference"`, `source` is the task's named source and
+`source_field` contains its resolved URL/path. The runtime checks that locator
+was read; it does **not** establish the semantic identity of the publication,
+correctness of a formula, units or every extracted value. Arbitrary named source
+requirements must be declared by the planner; they are not inferred reliably
+from all natural-language task descriptions. Existing configurations with no
+`evidence_requirements` remain compatible and do not acquire them automatically.
+
+`source_field` is relative to the reader's own output JSON: use `source_url`,
+not `user_query` or another agent's `search_results.selected_url`. A named source
+whose URL must be discovered uses `source_kind="reference"`. Both the reader's
+output contract and its consumer's input requirements must include the locator
+and all required fact paths; a list container does not guarantee its children.
+
+If generation violates these rules, one targeted retry within the existing
+budget receives the complete failed JSON and validation error, including when
+ADK wraps a schema error in an error event. It may correct invalid source
+declarations and add missing required fields or evidence inputs. It cannot
+remove existing obligations/facts, change valid task references, or rewrite
+instructions, tools, models, identities or pipeline structure. A failed limited
+repair stops rather than falling back to an unrestricted rewrite. Usage from
+both attempts is counted; diagnostic file capture is not required. This checks
+the correction path, not whether a live model will choose a valid repair.
+
+During generation, a missing `identity_field_mapping` can use one targeted retry
+within the existing retry budget. It may only add the missing mappings; the
+instructions, tools, contracts and pipeline must remain unchanged. The runtime
+does not guess that two identities are equivalent from their leaf names. An
+invalid or broader rewrite fails validation instead of weakening the contract.
+
+### Checking result values
 
 A check function receives the full pipeline state as a dictionary and returns either an error message (a string describing what went wrong) or `None` if the output is correct. The error message is passed directly to the meta-debugger, so write it as an instruction that explains what needs to be fixed.
 
@@ -126,6 +265,68 @@ result = await ctrl.run_with_recovery(
 ```
 
 The default `fix_instruction` tool is replaced when you pass `fix_tools`. If you want to keep it alongside your custom tools, include it explicitly.
+
+## Executed arithmetic
+
+For a numerical step, set `calculation_result_field` to a required top-level
+field of its `output_contract`, for example `"answer"`. This adds the built-in
+`calculate` tool; it does not require another MCP server. The worker supplies
+an expression, named numeric inputs as JSON, and optional `decimal_places`.
+The tool uses bounded decimal arithmetic with half-even rounding and records
+the inputs, expression, precision and result. It cannot execute arbitrary code.
+
+Before accepting the output, the runtime checks that the declared field equals
+the last successful calculation result from that agent. A missing calculation
+or a different value rejects the handoff and blocks dependent consumers.
+Recovery preserves this declaration. Existing configurations without the field
+remain compatible and do not gain this check automatically. The check confirms
+execution and numerical consistency, not the correctness of the chosen source
+values, units or formula; those still need evidence and task-specific checks.
+
+## Reusing validated checkpoints
+
+`RETRY_FAILED` and `RESTART_AFTER` reuse only unchanged agents with a validated,
+nonempty result, satisfied input/output contracts and no unresolved execution
+issue. A checkpoint is finalized after the agent's validation callbacks; a
+snapshot taken before validation cannot be reused. Changing an agent also
+invalidates its downstream dependents. An unaffected parallel branch can be
+retained. Changes to the workflow structure conservatively restart the whole
+workflow, and agents inside loops are always rerun. `RESTART_ALL` retains none.
+
+Only retained outputs and their file/calculation provenance are projected into
+the retry state. Rejected outputs, arbitrary session state, old completion
+markers and execution counters are not copied. Callers providing an external
+recovery loop must preserve original task inputs and pass the remaining shared
+time budget to each retry; checkpoint reuse does not enforce that outer budget.
+
+## Final answers and explicit abstention
+
+When a caller supplies `final_answer_contract`, a terminal agent without tools
+answers the original user query using its referenced upstream artifacts. The
+runtime supplies this answer instruction instead of the generated presentation
+plan: a plan requesting a country and a person's name must not add a country to
+an answer when the user requested only the person. References and declared input
+requirements still supply evidence, and missing inputs still produce diagnostics.
+Input identities select the evidence; they do not mandate extra output fields.
+This does not add a model call or modify the saved configuration. Without a caller
+contract, the configured instruction is used as before.
+
+A terminal agent with tools (including built-in calculation) first completes
+its research with its working instructions and structured output contract.
+After validation, a separate tools-free request formats that evidence for the
+original user task and caller contract. The presentation request does not
+receive the generated research instructions or conversation history. It uses
+the same model and consumes one of the agent's existing turns within the run
+deadline; its tokens are included in run usage. Unresolved research is not
+formatted. Exhausted turn budgets, empty or truncated presentation responses,
+and attempted tool calls produce an unresolved result rather than success.
+
+A terminal `<abstain>reason</abstain>` is recognized even after explanatory prose,
+or inside an erroneous `<solution>` wrapper. It makes the pipeline `incomplete`
+and remains available to recovery; it is not scored as a successful answer. A
+later concrete `<solution>` can supersede an earlier abstention. These checks do
+not establish factual correctness or guarantee that a model follows the requested
+format; evaluate that separately on a new run.
 
 ## When to Use the Optimizer Instead
 

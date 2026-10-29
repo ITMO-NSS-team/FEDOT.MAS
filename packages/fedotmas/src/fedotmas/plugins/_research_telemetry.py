@@ -38,6 +38,71 @@ MAX_CANDIDATES_PER_AGENT = 24
 MAX_CANDIDATE_TITLE_CHARS = 180
 MAX_CANDIDATE_SNIPPET_CHARS = 420
 MAX_CANDIDATE_INSPECTION_PROGRESS = 3
+MAX_DOCUMENT_FRAGMENT_PROGRESS = 8
+MAX_WEB_FRAGMENT_PROGRESS = 8
+
+
+def _retrieved_text(value: Any, depth: int = 0) -> str:
+    """Unwrap actual reader content; transport/error metadata is not evidence."""
+    if depth > 8 or value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, str):
+        try:
+            return _retrieved_text(json.loads(value), depth + 1)
+        except (ValueError, TypeError):
+            return value.strip()
+    if isinstance(value, list):
+        return "\n".join(_retrieved_text(v, depth + 1) for v in value[:128])
+    if isinstance(value, dict):
+        if _tool_failed(value) or value.get("success") is False:
+            return ""
+        for key in (
+            "structuredContent",
+            "structured_content",
+            "content",
+            "result",
+            "text",
+        ):
+            if key in value:
+                return _retrieved_text(value[key], depth + 1)
+        return "\n".join(
+            _retrieved_text(v, depth + 1)
+            for k, v in value.items()
+            if k not in {"isError", "type", "error", "status", "success"}
+        )
+    return str(value) if isinstance(value, (int, float)) else ""
+
+
+def _has_downloaded_file(value: Any, depth: int = 0) -> bool:
+    if depth > 8:
+        return False
+    if isinstance(value, str):
+        try:
+            return _has_downloaded_file(json.loads(value), depth + 1)
+        except ValueError:
+            return False
+    if isinstance(value, list):
+        return any(_has_downloaded_file(v, depth + 1) for v in value[:20])
+    if not isinstance(value, dict) or _tool_failed(value):
+        return False
+    if value.get("success") is True:
+        return (
+            bool(value.get("file_path"))
+            and type(value.get("file_size")) is int
+            and value["file_size"] > 0
+        )
+    return any(
+        _has_downloaded_file(value[k], depth + 1)
+        for k in (
+            "structuredContent",
+            "structured_content",
+            "content",
+            "result",
+            "results",
+            "text",
+        )
+        if k in value
+    )
 
 
 def _read_gate_state(state: Any, agent: str) -> dict[str, Any]:
@@ -65,12 +130,17 @@ def _inspection_has_content(value: Any, *, depth: int = 0) -> bool:
     if depth > 5:
         return False
     if isinstance(value, str):
+        if value.lstrip().startswith(("{", "[")):
+            try:
+                return _inspection_has_content(json.loads(value), depth=depth + 1)
+            except ValueError:
+                pass
         return bool(value.strip())
     if isinstance(value, list):
         return any(
             _inspection_has_content(item, depth=depth + 1) for item in value[:12]
         )
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or _tool_failed(value):
         return False
     content_keys = {
         "content",
@@ -83,12 +153,82 @@ def _inspection_has_content(value: Any, *, depth: int = 0) -> bool:
         "structuredcontent",
         "structured_content",
         "result",
+        "matches",
     }
     return any(
         _inspection_has_content(nested, depth=depth + 1)
         for key, nested in value.items()
         if str(key).casefold() in content_keys
     )
+
+
+def _document_payload(value: Any, depth: int = 0) -> dict | None:
+    """Unwrap native and MCP document replies, excluding errors and empty shells."""
+    if depth > 5:
+        return None
+    if isinstance(value, str):
+        try:
+            return _document_payload(json.loads(value), depth + 1)
+        except ValueError:
+            return None
+    if isinstance(value, list):
+        for item in value[:12]:
+            if (payload := _document_payload(item, depth + 1)) is not None:
+                return payload
+    if not isinstance(value, dict) or _tool_failed(value):
+        return None
+    if "matches" in value or (
+        isinstance(value.get("content"), str)
+        and any(
+            key in value for key in ("start_line", "next_start_char", "total_chars")
+        )
+    ):
+        return value
+    for key in ("structuredContent", "structured_content", "result", "content", "text"):
+        if (
+            key in value
+            and (payload := _document_payload(value[key], depth + 1)) is not None
+        ):
+            return payload
+    return None
+
+
+def _document_fragment(payload: dict, tool_name: str) -> dict | None:
+    if tool_name == "find_document":
+        matches = payload.get("matches")
+        if not isinstance(matches, list):
+            return None
+        lines = sorted(
+            {
+                match["line"]
+                for match in matches[:128]
+                if isinstance(match, dict)
+                and type(match.get("line")) is int
+                and match["line"] > 0
+                and isinstance(match.get("text"), str)
+                and match["text"].strip()
+            }
+        )
+        return {"lines": lines} if lines else None
+    content = payload.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return None
+    end = payload.get("next_start_char")
+    if end is None and payload.get("truncated") is False:
+        end = payload.get("total_chars")
+    if type(end) is int and end >= len(content):
+        unit, start = "char", end - len(content)
+    elif type(payload.get("start_line")) is int and payload["start_line"] >= 0:
+        unit, start = "line", payload["start_line"]
+        end = start + len(content.splitlines())
+    else:
+        return None
+    return {
+        "unit": unit,
+        "start": start,
+        "end": end,
+        "digest": hashlib.sha256(content.encode()).hexdigest(),
+    }
 
 
 class ResearchTelemetry(BasePlugin):
@@ -189,15 +329,9 @@ class ResearchTelemetry(BasePlugin):
         tool_args: dict[str, Any],
         tool_context: ToolContext,
     ) -> dict[str, Any] | None:
-        kind = _research_tool_kind(tool.name)
-        if (
-            kind is None
-            and tool_capability(
-                tool.name, description=getattr(tool, "description", "") or ""
-            )
-            == ToolCapability.DISCOVERY
-        ):
-            kind = "search"
+        kind = _research_tool_kind(
+            tool.name, description=getattr(tool, "description", "") or ""
+        )
         if kind is None:
             return None
         assert tool_context._invocation_context.agent is not None
@@ -429,7 +563,10 @@ class ResearchTelemetry(BasePlugin):
             return False
         candidate_url = _sanitize_url(url)
         for item in ledger:
-            if isinstance(item, dict) and item.get("url") == candidate_url:
+            if (
+                isinstance(item, dict)
+                and _sanitize_url(item.get("url", "")) == candidate_url
+            ):
                 was_usefully_inspected = item.get("inspection_status") == "success"
                 item["inspected"] = True
                 item["inspection_status"] = status
@@ -487,6 +624,111 @@ class ResearchTelemetry(BasePlugin):
         state[RESEARCH_PROGRESS_STATE_KEY] = root
         self._mark_progress(state, agent, "candidate_inspection")
         return True
+
+    def _mark_document_progress(
+        self, state: Any, agent: str, tool_name: str, args: dict, result: dict
+    ) -> bool:
+        name = normalize_tool_name(strip_tool_name_prefix(tool_name))
+        if name not in {"read_document", "find_document"}:
+            return False
+        source = args.get("file_path") or args.get("path") or args.get("url")
+        if not isinstance(source, str) or not source.strip():
+            return False
+        payload = _document_payload(result)
+        fragment = _document_fragment(payload, name) if payload is not None else None
+        if fragment is None:
+            return False
+        root = state.get(RESEARCH_PROGRESS_STATE_KEY)
+        if not isinstance(root, dict):
+            root = {}
+        progress: dict[str, Any] | None = root.get(agent)
+        if not isinstance(progress, dict):
+            progress = {"version": 0, "progress_events": []}
+        root[agent] = progress
+        fragments = progress.get("document_fragments", [])
+        if len(fragments) >= MAX_DOCUMENT_FRAGMENT_PROGRESS:
+            return False
+        source_id = hashlib.sha256(
+            (_sanitize_url(source) or source).encode()
+        ).hexdigest()
+        previous = [item for item in fragments if item["source"] == source_id]
+        if "lines" in fragment:
+            seen = {line for item in previous for line in item.get("lines", [])}
+            fragment["lines"] = [line for line in fragment["lines"] if line not in seen]
+            if not fragment["lines"]:
+                return False
+        else:
+            if any(item.get("digest") == fragment["digest"] for item in previous):
+                return False
+            covered_to = fragment["start"]
+            for item in sorted(
+                (item for item in previous if item.get("unit") == fragment["unit"]),
+                key=lambda item: item["start"],
+            ):
+                if item["start"] <= covered_to:
+                    covered_to = max(covered_to, item["end"])
+            if covered_to >= fragment["end"]:
+                return False
+        progress["document_fragments"] = [*fragments, {"source": source_id, **fragment}]
+        state[RESEARCH_PROGRESS_STATE_KEY] = root
+        self._mark_progress(state, agent, "document_fragment")
+        return True
+
+    def _mark_web_progress(
+        self, state: Any, agent: str, tool: str, args: dict, result: dict
+    ) -> bool:
+        name = normalize_tool_name(strip_tool_name_prefix(tool))
+        if name not in {
+            "markdown",
+            "html",
+            "extract",
+            "eval",
+            "evaluate",
+            "structureddata",
+            "tree",
+            "semantic_tree",
+        }:
+            return False
+        text = re.sub(r"\s+", " ", _retrieved_text(result)).strip()
+        if not text:
+            return False
+        root = dict(state.get(RESEARCH_PROGRESS_STATE_KEY) or {})
+        progress = dict(root.get(agent) or {})
+        seen = list(progress.get("web_fragments") or [])
+        # Identical extracted text earns no extra credit through another tool or
+        # mirror. Different representations still share the bounded allowance.
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        if digest in seen or len(seen) >= MAX_WEB_FRAGMENT_PROGRESS:
+            return False
+        progress["web_fragments"] = [*seen, digest]
+        root[agent] = progress
+        state[RESEARCH_PROGRESS_STATE_KEY] = root
+        self._mark_progress(state, agent, "web_fragment")
+        return True
+
+    def _mark_download_progress(
+        self, state: Any, agent: str, tool: str, args: dict, result: dict
+    ) -> None:
+        if normalize_tool_name(strip_tool_name_prefix(tool)) not in {
+            "download",
+            "download_file",
+        }:
+            return
+        urls = args.get("urls") or args.get("url")
+        url = urls[0] if isinstance(urls, list) and len(urls) == 1 else urls
+        source = _sanitize_url(url)
+        if not source or not _has_downloaded_file(result):
+            return
+        root = dict(state.get(RESEARCH_PROGRESS_STATE_KEY) or {})
+        progress = dict(root.get(agent) or {})
+        seen = list(progress.get("downloaded_sources") or [])
+        digest = hashlib.sha256(source.encode()).hexdigest()
+        if digest in seen or len(seen) >= MAX_DOCUMENT_FRAGMENT_PROGRESS:
+            return
+        progress["downloaded_sources"] = [*seen, digest]
+        root[agent] = progress
+        state[RESEARCH_PROGRESS_STATE_KEY] = root
+        self._mark_progress(state, agent, "downloaded_file")
 
     def _sync_gate_state(
         self,
@@ -549,15 +791,9 @@ class ResearchTelemetry(BasePlugin):
         tool_context: ToolContext,
         result: dict,
     ) -> None:
-        kind = _research_tool_kind(tool.name)
-        if (
-            kind is None
-            and tool_capability(
-                tool.name, description=getattr(tool, "description", "") or ""
-            )
-            == ToolCapability.DISCOVERY
-        ):
-            kind = "search"
+        kind = _research_tool_kind(
+            tool.name, description=getattr(tool, "description", "") or ""
+        )
         assert tool_context._invocation_context.agent is not None
         agent = tool_context._invocation_context.agent.name
         error_code = get_explicit_error_code(result)
@@ -585,6 +821,20 @@ class ResearchTelemetry(BasePlugin):
         if kind is None:
             return
         if kind in {"scraping", "browser_agent"}:
+            self._mark_download_progress(
+                tool_context.state, agent, tool.name, tool_args, result
+            )
+            self._mark_web_progress(
+                tool_context.state, agent, tool.name, tool_args, result
+            )
+            self._mark_document_progress(
+                tool_context.state, agent, tool.name, tool_args, result
+            )
+            structured_document = (
+                normalize_tool_name(strip_tool_name_prefix(tool.name))
+                in {"read_document", "find_document"}
+                and _document_payload(result) is not None
+            )
             url = _inspection_candidate_url(tool.name, tool_args, tool_context.state)
             if url:
                 # An attempted inspection counts as inspection even if the source
@@ -608,7 +858,11 @@ class ResearchTelemetry(BasePlugin):
                     error=_bounded_inspection_error(result),
                 )
                 self._mark_source_inspected(tool_context.state, agent, url)
-                if candidate_progress and inspection_has_content:
+                if (
+                    candidate_progress
+                    and inspection_has_content
+                    and not structured_document
+                ):
                     self._mark_candidate_inspection_progress(
                         tool_context.state, agent, url
                     )
@@ -810,7 +1064,9 @@ class ResearchTelemetry(BasePlugin):
         tool_context: ToolContext,
         error: Exception,
     ) -> None:
-        kind = _research_tool_kind(tool.name)
+        kind = _research_tool_kind(
+            tool.name, description=getattr(tool, "description", "") or ""
+        )
         if kind is not None:
             assert tool_context._invocation_context.agent is not None
             agent = tool_context._invocation_context.agent.name
@@ -946,7 +1202,11 @@ class ResearchTelemetry(BasePlugin):
         started = item.pop("started", time.monotonic())
         item["elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
         item["result_chars"] = len(json.dumps(result, ensure_ascii=False, default=str))
-        item["result_count"] = _result_count(result)
+        if is_discovery:
+            payload = _search_payload(result)
+            item["result_count"] = len(payload["results"]) if payload else None
+        else:
+            item["result_count"] = _result_count(result)
         code = get_explicit_error_code(result)
         error = str(result.get("error", result.get("message", "")))
         is_error = (
@@ -993,6 +1253,9 @@ def _search_payload(result: dict[str, Any]) -> dict[str, Any] | None:
                 try:
                     value = json.loads(item["text"])
                 except (ValueError, TypeError):
+                    found = _markdown_search_payload(item["text"])
+                    if found is not None:
+                        return found
                     continue
                 if isinstance(value, dict):
                     found = _search_payload(value)
@@ -1001,8 +1264,32 @@ def _search_payload(result: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _research_tool_kind(name: str) -> str | None:
-    capability = tool_capability(name)
+# Lightpanda emits numbered bold titles, a URL and an indented snippet. Only
+# result headers become candidates; arbitrary links inside snippets do not.
+_SEARCH_RESULT_HEADER = re.compile(
+    r"^\d+\. +\*\*(.+?)\*\* +— +(https?://\S+)[ \t]*$", re.MULTILINE
+)
+
+
+def _markdown_search_payload(text: str) -> dict[str, Any] | None:
+    headers = list(_SEARCH_RESULT_HEADER.finditer(text))
+    if not headers:
+        return None
+    results = []
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+        results.append(
+            {
+                "title": header.group(1).strip(),
+                "url": header.group(2),
+                "snippet": text[header.end() : end].strip(),
+            }
+        )
+    return {"results": results}
+
+
+def _research_tool_kind(name: str, *, description: str = "") -> str | None:
+    capability = tool_capability(name, description=description)
     if capability == ToolCapability.BROWSER_NAVIGATION:
         return "browser_agent"
     if capability == ToolCapability.COMPUTATION:

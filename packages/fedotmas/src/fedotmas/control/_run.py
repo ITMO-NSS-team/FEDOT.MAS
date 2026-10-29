@@ -20,6 +20,9 @@ def extract_failed_agent_name(error_message: str) -> str:
 class RunError:
     agent_name: str
     message: str
+    # Set from execution status, never from quoted model text. None retains
+    # the legacy heuristic for plain exception messages.
+    retryable: bool | None = None
 
 
 @dataclass

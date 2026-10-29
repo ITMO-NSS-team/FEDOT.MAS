@@ -1,0 +1,2259 @@
+[
+  {
+    "task_id": "0383a3ee-47a7-41a4-b493-519bdefe0488",
+    "task": "Question: On the BBC Earth YouTube video of the Top 5 Silliest Animal Moments, what species of bird is featured?",
+    "original": {
+      "agents": [
+        {
+          "name": "video_searcher",
+          "instruction": "Use websearch-tavily to locate the BBC Earth YouTube video titled (or clearly matching) \"Top 5 Silliest Animal Moments\". Return a JSON object containing at minimum: video_title (exact YouTube page title), video_url (full HTTPS URL), youtube_id (if retrievable), and a one-sentence rationale showing which search result you selected (e.g., matching title/channel). Write your result to the session state under the output_key.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "search_result",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "max_output_tokens": 1200,
+          "max_llm_turns": 1,
+          "output_contract": {
+            "description": "Canonical identification of the target YouTube video.",
+            "required_fields": [
+              "video_title",
+              "video_url"
+            ],
+            "identity_fields": [
+              "video_url"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "discovery_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "video_inspector",
+          "instruction": "Read {search_result} and locate the field video_url in that object. Using the video URL from {search_result}, inspect the BBC Earth YouTube video (use the media tool primarily; if needed, use download or web-scraping to retrieve captions/transcript or specific page elements). Identify whether a bird appears in the video and, if so, determine the species of that bird. Return a JSON object with these required fields: bird_species (common name; if a scientific name is available include it in parentheses), timestamp (the timestamp(s) where the bird appears, e.g., \"1:23-1:30\"), evidence_items (an array; each item should include kind: one of [\"frame_image_url\",\"timestamped_video_url\",\"transcript_snippet\"], value: the evidence URL or snippet, and short_description). If you used a transcript or captions, include the transcript snippet with its timestamp. Place your output in session state under the output_key.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "video_inspection",
+          "tools": [
+            "media",
+            "download",
+            "web-scraping"
+          ],
+          "max_output_tokens": 1600,
+          "max_llm_turns": 2,
+          "output_contract": {
+            "description": "Observed species and supporting evidence extracted from the video.",
+            "required_fields": [
+              "bird_species",
+              "timestamp",
+              "evidence_items"
+            ],
+            "identity_fields": [
+              "bird_species"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "search_result",
+              "required_fields": [
+                "video_url",
+                "video_title"
+              ],
+              "identity_fields": [
+                "video_url"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use the canonical video_url to download/inspect the video and to form timestamped evidence links."
+            }
+          ],
+          "evidence_requirements": [
+            {
+              "task_quote": "On the BBC Earth YouTube video of the Top 5 Silliest Animal Moments, what species of bird is featured?",
+              "source": "video_url field from {search_result}",
+              "source_kind": "url",
+              "source_field": "video_url",
+              "required_fields": [
+                "bird_species",
+                "timestamp",
+                "evidence_items"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "mixed",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "synthesizer",
+          "instruction": "Read {search_result} and {video_inspection}. Verify that the reported bird_species from {video_inspection} is supported by the provided evidence_items and by the video_url from {search_result}. If the species is clearly supported, produce a concise final answer that states the species (common name; include scientific name if available), the timestamp(s) where it appears, and 1-2 supporting evidence items (exact timestamped URL or transcript snippet). If the species cannot be confidently determined from the evidence, say 'unresolved' and list what is missing. Return plain JSON with fields: final_species (value or 'unresolved'), confidence (high/medium/low), support (array of cited evidence items copied from {video_inspection}), and notes (brief explanation). This agent's output is the terminal caller-facing answer.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": 800,
+          "max_llm_turns": 1,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "video_inspection",
+              "required_fields": [
+                "bird_species",
+                "timestamp",
+                "evidence_items"
+              ],
+              "identity_fields": [
+                "bird_species"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use extracted species and supporting evidence to form the final answer."
+            },
+            {
+              "source_key": "search_result",
+              "required_fields": [
+                "video_url",
+                "video_title"
+              ],
+              "identity_fields": [
+                "video_url"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use canonical video URL and title for citation and forming timestamped links."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "targeted_recovery"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_searcher",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "video_inspector",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "synthesizer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "synthesizer"
+    },
+    "repaired": {
+      "agents": [
+        {
+          "name": "video_searcher",
+          "instruction": "Use websearch-tavily to locate the BBC Earth YouTube video titled (or clearly matching) \"Top 5 Silliest Animal Moments\". Return a JSON object containing at minimum: video_title (exact YouTube page title), video_url (full HTTPS URL), youtube_id (if retrievable), and a one-sentence rationale showing which search result you selected (e.g., matching title/channel). Write your result to the session state under the output_key.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "search_result",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "max_output_tokens": 1200,
+          "max_llm_turns": 1,
+          "output_contract": {
+            "description": "Canonical identification of the target YouTube video.",
+            "required_fields": [
+              "video_title",
+              "video_url"
+            ],
+            "identity_fields": [
+              "video_url"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "discovery_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "video_inspector",
+          "instruction": "Read {search_result} and locate the field video_url in that object. Using the video URL from {search_result}, inspect the BBC Earth YouTube video (use the media tool primarily; if needed, use download or web-scraping to retrieve captions/transcript or specific page elements). Identify whether a bird appears in the video and, if so, determine the species of that bird. Return a JSON object with these required fields: bird_species (common name; if a scientific name is available include it in parentheses), timestamp (the timestamp(s) where the bird appears, e.g., \"1:23-1:30\"), evidence_items (an array; each item should include kind: one of [\"frame_image_url\",\"timestamped_video_url\",\"transcript_snippet\"], value: the evidence URL or snippet, and short_description). If you used a transcript or captions, include the transcript snippet with its timestamp. Place your output in session state under the output_key.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "video_inspection",
+          "tools": [
+            "media",
+            "download",
+            "web-scraping"
+          ],
+          "max_output_tokens": 1600,
+          "max_llm_turns": 2,
+          "output_contract": {
+            "description": "Observed species and supporting evidence extracted from the video.",
+            "required_fields": [
+              "bird_species",
+              "timestamp",
+              "evidence_items",
+              "video_url"
+            ],
+            "identity_fields": [
+              "bird_species"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "search_result",
+              "required_fields": [
+                "video_url",
+                "video_title"
+              ],
+              "identity_fields": [
+                "video_url"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use the canonical video_url to download/inspect the video and to form timestamped evidence links."
+            }
+          ],
+          "evidence_requirements": [
+            {
+              "task_quote": "On the BBC Earth YouTube video of the Top 5 Silliest Animal Moments, what species of bird is featured?",
+              "source": "BBC Earth YouTube video of the Top 5 Silliest Animal Moments",
+              "source_kind": "reference",
+              "source_field": "video_url",
+              "required_fields": [
+                "bird_species",
+                "timestamp",
+                "evidence_items"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "mixed",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "synthesizer",
+          "instruction": "Read {search_result} and {video_inspection}. Verify that the reported bird_species from {video_inspection} is supported by the provided evidence_items and by the video_url from {search_result}. If the species is clearly supported, produce a concise final answer that states the species (common name; include scientific name if available), the timestamp(s) where it appears, and 1-2 supporting evidence items (exact timestamped URL or transcript snippet). If the species cannot be confidently determined from the evidence, say 'unresolved' and list what is missing. Return plain JSON with fields: final_species (value or 'unresolved'), confidence (high/medium/low), support (array of cited evidence items copied from {video_inspection}), and notes (brief explanation). This agent's output is the terminal caller-facing answer.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": 800,
+          "max_llm_turns": 1,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "video_inspection",
+              "required_fields": [
+                "bird_species",
+                "timestamp",
+                "evidence_items",
+                "video_url"
+              ],
+              "identity_fields": [
+                "bird_species"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use extracted species and supporting evidence to form the final answer."
+            },
+            {
+              "source_key": "search_result",
+              "required_fields": [
+                "video_url",
+                "video_title"
+              ],
+              "identity_fields": [
+                "video_url"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use canonical video URL and title for citation and forming timestamped links."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "targeted_recovery"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_searcher",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "video_inspector",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "synthesizer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "synthesizer"
+    }
+  },
+  {
+    "task_id": "9d191bce-651d-4746-be2d-7ef8ecadb9c2",
+    "task": "Question: Examine the video at https://www.youtube.com/watch?v=1htKBjuUWec.\n\nWhat does Teal'c say in response to the question \"Isn't that hot?\"",
+    "original": {
+      "agents": [
+        {
+          "name": "video_reader",
+          "instruction": "Read and transcribe the video referenced in the user's query {user_query}. Use the media tool to retrieve and transcribe the audio from the URL (expected: a YouTube video). Identify speaker segments with timestamps. Specifically locate the exchange where a character asks \"Isn't that hot?\" and extract Teal'c's immediate verbal response verbatim, with the start timestamp. Return a JSON object containing: 1) video_url (the exact URL accessed), 2) speaker_segments (array of objects with speaker, start_time, end_time, text), 3) selected_snippet (object with speaker, start_time, end_time, text containing the lines around the question and Teal'c's response), and 4) transcription_confidence (qualitative or numeric estimate). Include source provenance (URLs) for any transcript fragments.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "video_transcript",
+          "tools": [
+            "media"
+          ],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": {
+            "description": "Extracted transcript evidence and the specific snippet showing Teal'c's response.",
+            "required_fields": [
+              "video_url",
+              "selected_snippet.text",
+              "selected_snippet.start_time",
+              "selected_snippet.speaker",
+              "speaker_segments",
+              "transcription_confidence"
+            ],
+            "identity_fields": []
+          },
+          "input_requirements": [],
+          "evidence_requirements": [
+            {
+              "task_quote": "Examine the video at https://www.youtube.com/watch?v=1htKBjuUWec.\n\nWhat does Teal'c say in response to the question \"Isn't that hot?\"",
+              "source": "https://www.youtube.com/watch?v=1htKBjuUWec",
+              "source_kind": "url",
+              "source_field": "video_url",
+              "required_fields": [
+                "video_url",
+                "speaker_segments[].speaker",
+                "speaker_segments[].start_time",
+                "speaker_segments[].text",
+                "selected_snippet.text",
+                "selected_snippet.start_time",
+                "transcription_confidence"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "answer_writer",
+          "instruction": "Using the extracted transcript artifact {video_transcript}, answer the user's question: \"What does Teal'c say in response to the question \\\"Isn't that hot?\\\"\" Produce a concise JSON result with fields: 1) quote — Teal'c's verbatim reply (exact words, do not paraphrase), 2) timestamp — the start_time from {video_transcript.selected_snippet}, 3) speaker — expected value 'Teal'c', 4) context — one or two surrounding transcript lines for provenance (with speaker labels and timestamps), and 5) confidence_explanation — brief note on how the quote was located and any uncertainty. If the snippet or speaker attribution cannot be established from {video_transcript}, return status='unresolved' and explain which evidence was missing.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "video_transcript",
+              "required_fields": [
+                "video_url",
+                "selected_snippet.text",
+                "selected_snippet.start_time",
+                "selected_snippet.speaker",
+                "speaker_segments",
+                "transcription_confidence"
+              ],
+              "identity_fields": [],
+              "identity_field_mapping": [],
+              "purpose": "Use the selected_snippet and surrounding speaker_segments to produce the final quoted answer with timestamp and provenance."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "answer_writer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "answer_writer"
+    },
+    "repaired": {
+      "agents": [
+        {
+          "name": "video_reader",
+          "instruction": "Read and transcribe the video referenced in the user's query {user_query}. Use the media tool to retrieve and transcribe the audio from the URL (expected: a YouTube video). Identify speaker segments with timestamps. Specifically locate the exchange where a character asks \"Isn't that hot?\" and extract Teal'c's immediate verbal response verbatim, with the start timestamp. Return a JSON object containing: 1) video_url (the exact URL accessed), 2) speaker_segments (array of objects with speaker, start_time, end_time, text), 3) selected_snippet (object with speaker, start_time, end_time, text containing the lines around the question and Teal'c's response), and 4) transcription_confidence (qualitative or numeric estimate). Include source provenance (URLs) for any transcript fragments.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "video_transcript",
+          "tools": [
+            "media"
+          ],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": {
+            "description": "Extracted transcript evidence and the specific snippet showing Teal'c's response.",
+            "required_fields": [
+              "video_url",
+              "selected_snippet.text",
+              "selected_snippet.start_time",
+              "selected_snippet.speaker",
+              "speaker_segments",
+              "transcription_confidence",
+              "speaker_segments[].speaker",
+              "speaker_segments[].start_time",
+              "speaker_segments[].text"
+            ],
+            "identity_fields": []
+          },
+          "input_requirements": [],
+          "evidence_requirements": [
+            {
+              "task_quote": "Examine the video at https://www.youtube.com/watch?v=1htKBjuUWec.\n\nWhat does Teal'c say in response to the question \"Isn't that hot?\"",
+              "source": "https://www.youtube.com/watch?v=1htKBjuUWec",
+              "source_kind": "url",
+              "source_field": "video_url",
+              "required_fields": [
+                "video_url",
+                "speaker_segments[].speaker",
+                "speaker_segments[].start_time",
+                "speaker_segments[].text",
+                "selected_snippet.text",
+                "selected_snippet.start_time",
+                "transcription_confidence"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "answer_writer",
+          "instruction": "Using the extracted transcript artifact {video_transcript}, answer the user's question: \"What does Teal'c say in response to the question \\\"Isn't that hot?\\\"\" Produce a concise JSON result with fields: 1) quote — Teal'c's verbatim reply (exact words, do not paraphrase), 2) timestamp — the start_time from {video_transcript.selected_snippet}, 3) speaker — expected value 'Teal'c', 4) context — one or two surrounding transcript lines for provenance (with speaker labels and timestamps), and 5) confidence_explanation — brief note on how the quote was located and any uncertainty. If the snippet or speaker attribution cannot be established from {video_transcript}, return status='unresolved' and explain which evidence was missing.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "video_transcript",
+              "required_fields": [
+                "video_url",
+                "selected_snippet.text",
+                "selected_snippet.start_time",
+                "selected_snippet.speaker",
+                "speaker_segments",
+                "transcription_confidence",
+                "speaker_segments[].speaker",
+                "speaker_segments[].start_time",
+                "speaker_segments[].text"
+              ],
+              "identity_fields": [],
+              "identity_field_mapping": [],
+              "purpose": "Use the selected_snippet and surrounding speaker_segments to produce the final quoted answer with timestamp and provenance."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "answer_writer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "answer_writer"
+    }
+  },
+  {
+    "task_id": "a1e91b78-d3d8-4675-bb8d-62741b4b68a6",
+    "task": "Question: In the video https://www.youtube.com/watch?v=L1vXCYZAYYM, what is the highest number of bird species to be on camera simultaneously?",
+    "original": {
+      "agents": [
+        {
+          "name": "video_reader",
+          "instruction": "Read and inspect the video referenced in the user's query: {user_query}. Extract the canonical video URL and YouTube ID, download the video (or stream frames), locate all segments where birds are visible, and produce a compact, machine-readable extraction containing: video_id (YouTube ID), video_url, a list video_frames_or_clips[] where each item includes a timestamp range, a short description, and a local file path or media handle for the frame/clip; and visual_evidence_for_identification[] containing cropped image files or frame file paths suitable for species identification. Return only the required fields in JSON form and include provenance (how frames were selected). Use available media analysis tools to capture frame images. Do not attempt to identify species — only produce visual evidence and timestamps that downstream agents will use.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "video_extraction",
+          "tools": [
+            "download",
+            "media"
+          ],
+          "max_output_tokens": 1200,
+          "max_llm_turns": 4,
+          "output_contract": {
+            "description": "Video-level extraction and visual evidence for downstream species identification.",
+            "required_fields": [
+              "video_id",
+              "video_url",
+              "video_frames_or_clips",
+              "visual_evidence_for_identification"
+            ],
+            "identity_fields": [
+              "video_id"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [
+            {
+              "task_quote": "Question: In the video https://www.youtube.com/watch?v=L1vXCYZAYYM, what is the highest number of bird species to be on camera simultaneously?",
+              "source": "https://www.youtube.com/watch?v=L1vXCYZAYYM",
+              "source_kind": "url",
+              "source_field": "video_url",
+              "required_fields": [
+                "video_id",
+                "video_url",
+                "video_frames_or_clips",
+                "visual_evidence_for_identification"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "species_identifier",
+          "instruction": "Using the visual evidence and frames provided in {video_extraction}, examine each frame/clip and identify bird species present. For every video_frames_or_clips[] item from {video_extraction}, produce an entry with: timestamp (matching the frame/clip), frame_id or file path, species_detected[] where each item contains species_name (common name; include scientific name if confidently known), a short justification/evidence statement referencing the visual evidence (describe distinguishing marks, plumage, size, or other cues), and a confidence score (high/medium/low) for the identification. Also produce unique_species_list[] (alphabetical) and ensure you preserve the video_id identity field. Use the media tool to inspect the provided images/clips; do not re-run broad web searches for species unless a clear visual match cannot be determined (note such unresolved items). Return JSON with the required fields.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "identifications",
+          "tools": [
+            "media"
+          ],
+          "max_output_tokens": 1600,
+          "max_llm_turns": 6,
+          "output_contract": {
+            "description": "Per-frame species identifications derived from the visual evidence.",
+            "required_fields": [
+              "per_frame_species",
+              "unique_species_list",
+              "video_id"
+            ],
+            "identity_fields": [
+              "video_id"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "video_extraction",
+              "required_fields": [
+                "video_frames_or_clips",
+                "visual_evidence_for_identification",
+                "video_id"
+              ],
+              "identity_fields": [
+                "video_id"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use these frames and visual crops to identify species per timestamp."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "aggregator_calculator",
+          "instruction": "Compute the highest number of distinct bird species visible on camera simultaneously using the per-frame species lists in {identifications}. Treat entries with the same timestamp (or overlapping timestamp ranges) as simultaneous; if identifications are per-frame, use each frame timestamp as an instant. Return: max_simultaneous_species (integer count), timestamps[] (list of timestamp(s) where this maximum occurs), species_at_max[] (the list of species present at the time(s) of maximum), and video_id (copied from {identifications}). Explain briefly how ties were handled and list any unresolved identifications that prevent a conclusive maximum. Use a short, exact numeric result and include the supporting timestamps and species lists. Perform the numeric computation programmatically or with sandbox-light as needed and set calculation_result_field to max_simultaneous_species.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "max_species_result",
+          "tools": [
+            "sandbox-light"
+          ],
+          "max_output_tokens": 800,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "Numeric and supporting result: highest simultaneous species count with timestamps and species lists.",
+            "required_fields": [
+              "max_simultaneous_species",
+              "timestamps",
+              "species_at_max",
+              "video_id"
+            ],
+            "identity_fields": [
+              "video_id"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "identifications",
+              "required_fields": [
+                "per_frame_species",
+                "unique_species_list",
+                "video_id"
+              ],
+              "identity_fields": [
+                "video_id"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Compute the maximum number of distinct species visible at the same time from the per-frame identifications."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": "max_simultaneous_species",
+          "research_mode": "inspection_only",
+          "research_policy": "targeted_recovery"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "species_identifier",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "aggregator_calculator",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "aggregator_calculator"
+    },
+    "repaired": {
+      "agents": [
+        {
+          "name": "video_reader",
+          "instruction": "Read and inspect the video referenced in the user's query: {user_query}. Extract the canonical video URL and YouTube ID, download the video (or stream frames), locate all segments where birds are visible, and produce a compact, machine-readable extraction containing: video_id (YouTube ID), video_url, a list video_frames_or_clips[] where each item includes a timestamp range, a short description, and a local file path or media handle for the frame/clip; and visual_evidence_for_identification[] containing cropped image files or frame file paths suitable for species identification. Return only the required fields in JSON form and include provenance (how frames were selected). Use available media analysis tools to capture frame images. Do not attempt to identify species — only produce visual evidence and timestamps that downstream agents will use.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "video_extraction",
+          "tools": [
+            "download",
+            "media"
+          ],
+          "max_output_tokens": 1200,
+          "max_llm_turns": 4,
+          "output_contract": {
+            "description": "Video-level extraction and visual evidence for downstream species identification.",
+            "required_fields": [
+              "video_id",
+              "video_url",
+              "video_frames_or_clips",
+              "visual_evidence_for_identification"
+            ],
+            "identity_fields": [
+              "video_id"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [
+            {
+              "task_quote": "Question: In the video https://www.youtube.com/watch?v=L1vXCYZAYYM, what is the highest number of bird species to be on camera simultaneously?",
+              "source": "https://www.youtube.com/watch?v=L1vXCYZAYYM",
+              "source_kind": "url",
+              "source_field": "video_url",
+              "required_fields": [
+                "video_id",
+                "video_url",
+                "video_frames_or_clips",
+                "visual_evidence_for_identification"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "species_identifier",
+          "instruction": "Using the visual evidence and frames provided in {video_extraction}, examine each frame/clip and identify bird species present. For every video_frames_or_clips[] item from {video_extraction}, produce an entry with: timestamp (matching the frame/clip), frame_id or file path, species_detected[] where each item contains species_name (common name; include scientific name if confidently known), a short justification/evidence statement referencing the visual evidence (describe distinguishing marks, plumage, size, or other cues), and a confidence score (high/medium/low) for the identification. Also produce unique_species_list[] (alphabetical) and ensure you preserve the video_id identity field. Use the media tool to inspect the provided images/clips; do not re-run broad web searches for species unless a clear visual match cannot be determined (note such unresolved items). Return JSON with the required fields.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "identifications",
+          "tools": [
+            "media"
+          ],
+          "max_output_tokens": 1600,
+          "max_llm_turns": 6,
+          "output_contract": {
+            "description": "Per-frame species identifications derived from the visual evidence.",
+            "required_fields": [
+              "per_frame_species",
+              "unique_species_list",
+              "video_id"
+            ],
+            "identity_fields": [
+              "video_id"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "video_extraction",
+              "required_fields": [
+                "video_frames_or_clips",
+                "visual_evidence_for_identification",
+                "video_id",
+                "video_url"
+              ],
+              "identity_fields": [
+                "video_id"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use these frames and visual crops to identify species per timestamp."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "aggregator_calculator",
+          "instruction": "Compute the highest number of distinct bird species visible on camera simultaneously using the per-frame species lists in {identifications}. Treat entries with the same timestamp (or overlapping timestamp ranges) as simultaneous; if identifications are per-frame, use each frame timestamp as an instant. Return: max_simultaneous_species (integer count), timestamps[] (list of timestamp(s) where this maximum occurs), species_at_max[] (the list of species present at the time(s) of maximum), and video_id (copied from {identifications}). Explain briefly how ties were handled and list any unresolved identifications that prevent a conclusive maximum. Use a short, exact numeric result and include the supporting timestamps and species lists. Perform the numeric computation programmatically or with sandbox-light as needed and set calculation_result_field to max_simultaneous_species.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "max_species_result",
+          "tools": [
+            "sandbox-light"
+          ],
+          "max_output_tokens": 800,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "Numeric and supporting result: highest simultaneous species count with timestamps and species lists.",
+            "required_fields": [
+              "max_simultaneous_species",
+              "timestamps",
+              "species_at_max",
+              "video_id"
+            ],
+            "identity_fields": [
+              "video_id"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "identifications",
+              "required_fields": [
+                "per_frame_species",
+                "unique_species_list",
+                "video_id"
+              ],
+              "identity_fields": [
+                "video_id"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Compute the maximum number of distinct species visible at the same time from the per-frame identifications."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": "max_simultaneous_species",
+          "research_mode": "inspection_only",
+          "research_policy": "targeted_recovery"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "species_identifier",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "aggregator_calculator",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "aggregator_calculator"
+    }
+  },
+  {
+    "task_id": "cabe07ed-9eca-40ea-8ead-410ef5e83f91",
+    "task": "Question: What is the surname of the equine veterinarian mentioned in 1.E Exercises from the chemistry materials licensed by Marisa Alviar-Agnew & Henry Agnew under the CK-12 license in LibreText's Introductory Chemistry materials as compiled 08/21/2023?",
+    "original": {
+      "agents": [
+        {
+          "name": "source_finder",
+          "instruction": "Search the web to find the LibreTexts 'Introductory Chemistry' materials that match the description in the user query: compiled 08/21/2023 and licensed (CK-12) to Marisa Alviar-Agnew & Henry Agnew. Return up to 5 candidate pages that could be the compiled Introductory Chemistry material or pages within that compilation. For each candidate provide: title, url, a short snippet that shows the compile date or the license/author text (if present), and one-sentence reason why this candidate matches. Output a JSON object with key 'candidates' containing objects {title, url, snippet, match_reason}. Do not attempt deep extraction beyond the snippet.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "search_results",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": {
+            "description": "Candidate pages for the requested LibreTexts compilation",
+            "required_fields": [
+              "candidates"
+            ],
+            "identity_fields": []
+          },
+          "input_requirements": [],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "discovery_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "document_reader",
+          "instruction": "Use {search_results} to identify the single candidate URL that best matches the LibreTexts 'Introductory Chemistry' compilation described (compiled 08/21/2023; licensed CK-12 to Marisa Alviar-Agnew & Henry Agnew). Using the document tool, read that page (or pages) and locate the section heading '1.E Exercises' (or the nearest heading labeled 1.E). Extract the exact sentence(s) or paragraph in that section that mention an 'equine veterinarian' and the name given. Return a JSON object with: 1) 'equine_vet_full_name' (the full name string exactly as printed, or null if not found), 2) 'equine_vet_surname' (the surname only, or null if not found), 3) 'text_snippet' (the exact extracted sentence/paragraph verbatim), 4) 'source_url' (the URL you read), and 5) 'section_heading' (the heading you found, or null). If you cannot find the compilation page or the '1.E Exercises' section or any veterinarian mention, set the fields to null and include 'unresolved_reason' explaining why (e.g., page not found, section absent, no veterinarian mention).",
+          "model": "openai/gpt-5-mini",
+          "output_key": "document_extraction",
+          "tools": [
+            "document"
+          ],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": {
+            "description": "Extraction of the equine veterinarian mention from the specified LibreTexts section",
+            "required_fields": [
+              "equine_vet_full_name",
+              "equine_vet_surname",
+              "text_snippet",
+              "source_url",
+              "section_heading"
+            ],
+            "identity_fields": []
+          },
+          "input_requirements": [
+            {
+              "source_key": "search_results",
+              "required_fields": [
+                "candidates"
+              ],
+              "identity_fields": [],
+              "identity_field_mapping": [],
+              "purpose": "Select the most-likely LibreTexts Introductory Chemistry compiled page (08/21/2023) from the candidates and read it with the document tool."
+            }
+          ],
+          "evidence_requirements": [
+            {
+              "task_quote": "What is the surname of the equine veterinarian mentioned in 1.E Exercises from the chemistry materials licensed by Marisa Alviar-Agnew & Henry Agnew under the CK-12 license in LibreText's Introductory Chemistry materials as compiled 08/21/2023?",
+              "source": "LibreTexts Introductory Chemistry materials compiled 08/21/2023",
+              "source_kind": "reference",
+              "source_field": "search_results.candidates[].url",
+              "required_fields": [
+                "equine_vet_full_name",
+                "equine_vet_surname",
+                "text_snippet",
+                "source_url"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "final_answer_agent",
+          "instruction": "Read {document_extraction} and provide the surname of the equine veterinarian mentioned in '1.E Exercises'. Include one-line provenance: the 'source_url' and a short quoted snippet showing the name. If {document_extraction} reports unresolved, state that and include the 'unresolved_reason'. Return the result in concise plain text.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "document_extraction",
+              "required_fields": [
+                "equine_vet_full_name",
+                "equine_vet_surname",
+                "text_snippet",
+                "source_url",
+                "section_heading"
+              ],
+              "identity_fields": [],
+              "identity_field_mapping": [],
+              "purpose": "Produce the final caller-facing surname and concise provenance from the documented extraction."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "mixed",
+          "research_policy": "targeted_recovery"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "source_finder",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "document_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "final_answer_agent",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "final_answer_agent"
+    },
+    "repaired": {
+      "agents": [
+        {
+          "name": "source_finder",
+          "instruction": "Search the web to find the LibreTexts 'Introductory Chemistry' materials that match the description in the user query: compiled 08/21/2023 and licensed (CK-12) to Marisa Alviar-Agnew & Henry Agnew. Return up to 5 candidate pages that could be the compiled Introductory Chemistry material or pages within that compilation. For each candidate provide: title, url, a short snippet that shows the compile date or the license/author text (if present), and one-sentence reason why this candidate matches. Output a JSON object with key 'candidates' containing objects {title, url, snippet, match_reason}. Do not attempt deep extraction beyond the snippet.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "search_results",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": {
+            "description": "Candidate pages for the requested LibreTexts compilation",
+            "required_fields": [
+              "candidates"
+            ],
+            "identity_fields": []
+          },
+          "input_requirements": [],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "discovery_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "document_reader",
+          "instruction": "Use {search_results} to identify the single candidate URL that best matches the LibreTexts 'Introductory Chemistry' compilation described (compiled 08/21/2023; licensed CK-12 to Marisa Alviar-Agnew & Henry Agnew). Using the document tool, read that page (or pages) and locate the section heading '1.E Exercises' (or the nearest heading labeled 1.E). Extract the exact sentence(s) or paragraph in that section that mention an 'equine veterinarian' and the name given. Return a JSON object with: 1) 'equine_vet_full_name' (the full name string exactly as printed, or null if not found), 2) 'equine_vet_surname' (the surname only, or null if not found), 3) 'text_snippet' (the exact extracted sentence/paragraph verbatim), 4) 'source_url' (the URL you read), and 5) 'section_heading' (the heading you found, or null). If you cannot find the compilation page or the '1.E Exercises' section or any veterinarian mention, set the fields to null and include 'unresolved_reason' explaining why (e.g., page not found, section absent, no veterinarian mention).",
+          "model": "openai/gpt-5-mini",
+          "output_key": "document_extraction",
+          "tools": [
+            "document"
+          ],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": {
+            "description": "Extraction of the equine veterinarian mention from the specified LibreTexts section",
+            "required_fields": [
+              "equine_vet_full_name",
+              "equine_vet_surname",
+              "text_snippet",
+              "source_url",
+              "section_heading"
+            ],
+            "identity_fields": []
+          },
+          "input_requirements": [
+            {
+              "source_key": "search_results",
+              "required_fields": [
+                "candidates"
+              ],
+              "identity_fields": [],
+              "identity_field_mapping": [],
+              "purpose": "Select the most-likely LibreTexts Introductory Chemistry compiled page (08/21/2023) from the candidates and read it with the document tool."
+            }
+          ],
+          "evidence_requirements": [
+            {
+              "task_quote": "What is the surname of the equine veterinarian mentioned in 1.E Exercises from the chemistry materials licensed by Marisa Alviar-Agnew & Henry Agnew under the CK-12 license in LibreText's Introductory Chemistry materials as compiled 08/21/2023?",
+              "source": "LibreText's Introductory Chemistry materials as compiled 08/21/2023",
+              "source_kind": "reference",
+              "source_field": "source_url",
+              "required_fields": [
+                "equine_vet_full_name",
+                "equine_vet_surname",
+                "text_snippet",
+                "source_url"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "final_answer_agent",
+          "instruction": "Read {document_extraction} and provide the surname of the equine veterinarian mentioned in '1.E Exercises'. Include one-line provenance: the 'source_url' and a short quoted snippet showing the name. If {document_extraction} reports unresolved, state that and include the 'unresolved_reason'. Return the result in concise plain text.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "document_extraction",
+              "required_fields": [
+                "equine_vet_full_name",
+                "equine_vet_surname",
+                "text_snippet",
+                "source_url",
+                "section_heading"
+              ],
+              "identity_fields": [],
+              "identity_field_mapping": [],
+              "purpose": "Produce the final caller-facing surname and concise provenance from the documented extraction."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "mixed",
+          "research_policy": "targeted_recovery"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "source_finder",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "document_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "final_answer_agent",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "final_answer_agent"
+    }
+  },
+  {
+    "task_id": "9d191bce-651d-4746-be2d-7ef8ecadb9c2-other-attempt",
+    "task": "Question: Examine the video at https://www.youtube.com/watch?v=1htKBjuUWec.\n\nWhat does Teal'c say in response to the question \"Isn't that hot?\"",
+    "original": {
+      "agents": [
+        {
+          "name": "video_reader",
+          "instruction": "Read and analyze the video referenced in {user_query}. Locate the URL in the text of {user_query} and download or stream the video at that URL. Produce a speaker-segment-level transcription covering the portion where the phrase \"Isn't that hot?\" occurs and surrounding context (at least 5 seconds before and after). For each segment include: speaker (identify the speaker name when possible, e.g., Teal'c), start_time (ISO 8601 or seconds from start), end_time (seconds from start or ISO 8601), and text (verbatim transcript for that segment). Also return the exact video URL you used and any caption/source metadata. Output a JSON object under the key {video_segments} with a field \"speaker_segments\" which is an array of objects with keys: speaker, start_time, end_time, text. If automatic captions are used, note that in a separate field. If the video cannot be accessed or transcription cannot be produced, return a status=unresolved and explain why.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "video_segments",
+          "tools": [
+            "media",
+            "web-scraping"
+          ],
+          "max_output_tokens": 2000,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "Speaker-segment transcription and provenance extracted from the supplied video URL.",
+            "required_fields": [
+              "speaker_segments[].speaker",
+              "speaker_segments[].start_time",
+              "speaker_segments[].text",
+              "source_url"
+            ],
+            "identity_fields": [
+              "speaker_segments[].start_time"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [
+            {
+              "task_quote": "Examine the video at https://www.youtube.com/watch?v=1htKBjuUWec. What does Teal'c say in response to the question \"Isn't that hot?\"",
+              "source": "https://www.youtube.com/watch?v=1htKBjuUWec",
+              "source_kind": "url",
+              "source_field": "user_query",
+              "required_fields": [
+                "speaker_segments[].speaker",
+                "speaker_segments[].start_time",
+                "speaker_segments[].text"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "verifier",
+          "instruction": "Using the transcription output in {video_segments}, locate the segment where someone asks or says \"Isn't that hot?\" and identify the immediate verbal response attributed to the speaker Teal'c. Confirm the attribution by checking surrounding speaker segments and provide: (1) tealc_response.text — the exact verbatim text Teal'c says in response (quote it exactly), (2) tealc_response.start_time — the start_time of that response segment as provided in {video_segments}, (3) tealc_response.end_time, (4) confirmation_evidence — a short list of up to three speaker_segments from {video_segments} (with speaker, start_time, text) that show the question and Teal'c's reply to support the attribution, and (5) source_url copied from {video_segments}. If the speaker cannot be confidently identified as Teal'c, set status=unresolved and explain the ambiguity and what is missing.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "verification",
+          "tools": [],
+          "max_output_tokens": 1200,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "Verified extraction of Teal'c's response to the question.",
+            "required_fields": [
+              "tealc_response.text",
+              "tealc_response.start_time",
+              "tealc_response.end_time",
+              "confirmation_evidence[]",
+              "source_url"
+            ],
+            "identity_fields": [
+              "tealc_response.start_time"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "video_segments",
+              "required_fields": [
+                "speaker_segments[].speaker",
+                "speaker_segments[].start_time",
+                "speaker_segments[].end_time",
+                "speaker_segments[].text",
+                "source_url"
+              ],
+              "identity_fields": [
+                "speaker_segments[].start_time"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Find and verify the Teal'c response to the question 'Isn't that hot?' using the supplied speaker segments."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "final_answerer",
+          "instruction": "Read the verified extraction in {verification}. Produce the final user-facing answer: a single short response that gives the exact quoted text Teal'c says in response to the question \"Isn't that hot?\", followed by a parenthetical timestamp of when it occurs (use tealc_response.start_time) and the source URL. If {verification} has status=unresolved, explain succinctly that the reply could not be confirmed and why. Keep the answer concise—one or two sentences maximum.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": 300,
+          "max_llm_turns": 2,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "verification",
+              "required_fields": [
+                "tealc_response.text",
+                "tealc_response.start_time",
+                "source_url"
+              ],
+              "identity_fields": [
+                "tealc_response.start_time"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Format the verified response as the final concise answer to the user's question."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "targeted_recovery"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "verifier",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "final_answerer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "final_answerer"
+    },
+    "repaired": {
+      "agents": [
+        {
+          "name": "video_reader",
+          "instruction": "Read and analyze the video referenced in {user_query}. Locate the URL in the text of {user_query} and download or stream the video at that URL. Produce a speaker-segment-level transcription covering the portion where the phrase \"Isn't that hot?\" occurs and surrounding context (at least 5 seconds before and after). For each segment include: speaker (identify the speaker name when possible, e.g., Teal'c), start_time (ISO 8601 or seconds from start), end_time (seconds from start or ISO 8601), and text (verbatim transcript for that segment). Also return the exact video URL you used and any caption/source metadata. Output a JSON object under the key {video_segments} with a field \"speaker_segments\" which is an array of objects with keys: speaker, start_time, end_time, text. If automatic captions are used, note that in a separate field. If the video cannot be accessed or transcription cannot be produced, return a status=unresolved and explain why.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "video_segments",
+          "tools": [
+            "media",
+            "web-scraping"
+          ],
+          "max_output_tokens": 2000,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "Speaker-segment transcription and provenance extracted from the supplied video URL.",
+            "required_fields": [
+              "speaker_segments[].speaker",
+              "speaker_segments[].start_time",
+              "speaker_segments[].text",
+              "source_url",
+              "speaker_segments[].end_time"
+            ],
+            "identity_fields": [
+              "speaker_segments[].start_time"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [
+            {
+              "task_quote": "Examine the video at https://www.youtube.com/watch?v=1htKBjuUWec.\n\nWhat does Teal'c say in response to the question \"Isn't that hot?\"",
+              "source": "https://www.youtube.com/watch?v=1htKBjuUWec",
+              "source_kind": "url",
+              "source_field": "source_url",
+              "required_fields": [
+                "speaker_segments[].speaker",
+                "speaker_segments[].start_time",
+                "speaker_segments[].text"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "verifier",
+          "instruction": "Using the transcription output in {video_segments}, locate the segment where someone asks or says \"Isn't that hot?\" and identify the immediate verbal response attributed to the speaker Teal'c. Confirm the attribution by checking surrounding speaker segments and provide: (1) tealc_response.text — the exact verbatim text Teal'c says in response (quote it exactly), (2) tealc_response.start_time — the start_time of that response segment as provided in {video_segments}, (3) tealc_response.end_time, (4) confirmation_evidence — a short list of up to three speaker_segments from {video_segments} (with speaker, start_time, text) that show the question and Teal'c's reply to support the attribution, and (5) source_url copied from {video_segments}. If the speaker cannot be confidently identified as Teal'c, set status=unresolved and explain the ambiguity and what is missing.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "verification",
+          "tools": [],
+          "max_output_tokens": 1200,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "Verified extraction of Teal'c's response to the question.",
+            "required_fields": [
+              "tealc_response.text",
+              "tealc_response.start_time",
+              "tealc_response.end_time",
+              "confirmation_evidence[]",
+              "source_url"
+            ],
+            "identity_fields": [
+              "tealc_response.start_time"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "video_segments",
+              "required_fields": [
+                "speaker_segments[].speaker",
+                "speaker_segments[].start_time",
+                "speaker_segments[].end_time",
+                "speaker_segments[].text",
+                "source_url"
+              ],
+              "identity_fields": [
+                "speaker_segments[].start_time"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Find and verify the Teal'c response to the question 'Isn't that hot?' using the supplied speaker segments."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "final_answerer",
+          "instruction": "Read the verified extraction in {verification}. Produce the final user-facing answer: a single short response that gives the exact quoted text Teal'c says in response to the question \"Isn't that hot?\", followed by a parenthetical timestamp of when it occurs (use tealc_response.start_time) and the source URL. If {verification} has status=unresolved, explain succinctly that the reply could not be confirmed and why. Keep the answer concise—one or two sentences maximum.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": 300,
+          "max_llm_turns": 2,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "verification",
+              "required_fields": [
+                "tealc_response.text",
+                "tealc_response.start_time",
+                "source_url"
+              ],
+              "identity_fields": [
+                "tealc_response.start_time"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Format the verified response as the final concise answer to the user's question."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "targeted_recovery"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "verifier",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "final_answerer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "final_answerer"
+    }
+  },
+  {
+    "task_id": "cabe07ed-9eca-40ea-8ead-410ef5e83f91-other-attempt",
+    "task": "Question: What is the surname of the equine veterinarian mentioned in 1.E Exercises from the chemistry materials licensed by Marisa Alviar-Agnew & Henry Agnew under the CK-12 license in LibreText's Introductory Chemistry materials as compiled 08/21/2023?",
+    "original": {
+      "agents": [
+        {
+          "name": "source_finder",
+          "instruction": "Search the web for the LibreTexts Introductory Chemistry page (compiled 08/21/2023) that contains the chapter/section '1.E Exercises' in the chemistry materials licensed by Marisa Alviar-Agnew & Henry Agnew under the CK-12 license. Return a short ranked list of candidate URLs (title, URL, one-line snippet) and choose one recommended URL as selected_url. Put the recommended URL in the field selected_url. Be concise.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "search_results",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "max_output_tokens": 1200,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "List of candidate pages and the selected URL for the page reader.",
+            "required_fields": [
+              "selected_url",
+              "title",
+              "candidates"
+            ],
+            "identity_fields": [
+              "selected_url"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "discovery_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "page_reader",
+          "instruction": "Using the selected URL at {search_results}, read the page and locate the section heading '1.E Exercises' (or equivalent exercise list labeled 1.E). Extract the exercise text for 1.E Exercises and identify any person described as an 'equine veterinarian' or an exercise that names an equine veterinarian. Return a structured JSON with fields: exercise_text (the extracted text for 1.E Exercises), equine_veterinarian_full_name (full name as it appears, or null if not found), equine_veterinarian_surname (surname only, or null if not found), and location_in_page (page section, paragraph number, and the source URL). If images or figures contain the name, describe their caption text. Use the URL from {search_results.selected_url} as the source to read.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "page_extraction",
+          "tools": [
+            "document"
+          ],
+          "max_output_tokens": 1600,
+          "max_llm_turns": 5,
+          "output_contract": {
+            "description": "Structured extraction of the 1.E Exercises section and any equine veterinarian name found.",
+            "required_fields": [
+              "exercise_text",
+              "equine_veterinarian_full_name",
+              "equine_veterinarian_surname",
+              "location_in_page"
+            ],
+            "identity_fields": [
+              "location_in_page"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "search_results",
+              "required_fields": [
+                "selected_url"
+              ],
+              "identity_fields": [
+                "selected_url"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Read the selected LibreTexts page URL returned by the source_finder."
+            }
+          ],
+          "evidence_requirements": [
+            {
+              "task_quote": "Retrieve the equine veterinarian's name from 1.E Exercises in the chemistry materials licensed by Marisa Alviar-Agnew & Henry Agnew under the CK-12 license in LibreText's Introductory Chemistry materials as compiled 08/21/2023.",
+              "source": "the chemistry materials licensed by Marisa Alviar-Agnew & Henry Agnew under the CK-12 license in LibreText's Introductory Chemistry materials as compiled 08/21/2023",
+              "source_kind": "reference",
+              "source_field": "search_results.selected_url",
+              "required_fields": [
+                "exercise_text",
+                "equine_veterinarian_full_name",
+                "equine_veterinarian_surname",
+                "location_in_page"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "verifier",
+          "instruction": "Verify the extracted equine veterinarian name from {page_extraction}. Confirm that the surname is present verbatim in the source text and that it refers to an equine veterinarian in the 1.E Exercises context. If the page_extraction shows a full name, split and return surname and full_name. If no equine veterinarian name was found, report 'unresolved' with a brief reason and include the relevant excerpt and the source URL. Return JSON with fields: decision (one of 'verified' or 'unresolved'), full_name, surname, excerpt (the smallest surrounding text supporting the decision), and source_url.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "verified_name",
+          "tools": [],
+          "max_output_tokens": 800,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "Verification of the candidate equine veterinarian name and final surname.",
+            "required_fields": [
+              "decision",
+              "surname",
+              "full_name",
+              "source_url"
+            ],
+            "identity_fields": [
+              "full_name"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "page_extraction",
+              "required_fields": [
+                "equine_veterinarian_full_name",
+                "equine_veterinarian_surname",
+                "exercise_text",
+                "location_in_page"
+              ],
+              "identity_fields": [
+                "location_in_page"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Confirm the extracted name and provide a verified surname for the final answer."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "targeted_recovery"
+        },
+        {
+          "name": "final_answer",
+          "instruction": "Using {verified_name}, produce the final caller-facing answer: the surname of the equine veterinarian mentioned in 1.E Exercises. If unresolved, state that the name could not be verified and include the short reason. Keep the answer concise and include the source URL from {verified_name.source_url}. Return a JSON object with fields: answer_text and source_url.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": 200,
+          "max_llm_turns": 1,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "verified_name",
+              "required_fields": [
+                "decision",
+                "surname",
+                "source_url"
+              ],
+              "identity_fields": [
+                "surname"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Produce the final succinct answer for the user."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "independent"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "source_finder",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "page_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "verifier",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "final_answer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "final_answer"
+    },
+    "repaired": {
+      "agents": [
+        {
+          "name": "source_finder",
+          "instruction": "Search the web for the LibreTexts Introductory Chemistry page (compiled 08/21/2023) that contains the chapter/section '1.E Exercises' in the chemistry materials licensed by Marisa Alviar-Agnew & Henry Agnew under the CK-12 license. Return a short ranked list of candidate URLs (title, URL, one-line snippet) and choose one recommended URL as selected_url. Put the recommended URL in the field selected_url. Be concise.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "search_results",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "max_output_tokens": 1200,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "List of candidate pages and the selected URL for the page reader.",
+            "required_fields": [
+              "selected_url",
+              "title",
+              "candidates"
+            ],
+            "identity_fields": [
+              "selected_url"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "discovery_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "page_reader",
+          "instruction": "Using the selected URL at {search_results}, read the page and locate the section heading '1.E Exercises' (or equivalent exercise list labeled 1.E). Extract the exercise text for 1.E Exercises and identify any person described as an 'equine veterinarian' or an exercise that names an equine veterinarian. Return a structured JSON with fields: exercise_text (the extracted text for 1.E Exercises), equine_veterinarian_full_name (full name as it appears, or null if not found), equine_veterinarian_surname (surname only, or null if not found), and location_in_page (page section, paragraph number, and the source URL). If images or figures contain the name, describe their caption text. Use the URL from {search_results.selected_url} as the source to read.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "page_extraction",
+          "tools": [
+            "document"
+          ],
+          "max_output_tokens": 1600,
+          "max_llm_turns": 5,
+          "output_contract": {
+            "description": "Structured extraction of the 1.E Exercises section and any equine veterinarian name found.",
+            "required_fields": [
+              "exercise_text",
+              "equine_veterinarian_full_name",
+              "equine_veterinarian_surname",
+              "location_in_page",
+              "source_url"
+            ],
+            "identity_fields": [
+              "location_in_page"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "search_results",
+              "required_fields": [
+                "selected_url"
+              ],
+              "identity_fields": [
+                "selected_url"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Read the selected LibreTexts page URL returned by the source_finder."
+            }
+          ],
+          "evidence_requirements": [
+            {
+              "task_quote": "What is the surname of the equine veterinarian mentioned in 1.E Exercises from the chemistry materials licensed by Marisa Alviar-Agnew & Henry Agnew under the CK-12 license in LibreText's Introductory Chemistry materials as compiled 08/21/2023?",
+              "source": "the chemistry materials licensed by Marisa Alviar-Agnew & Henry Agnew under the CK-12 license in LibreText's Introductory Chemistry materials as compiled 08/21/2023",
+              "source_kind": "reference",
+              "source_field": "source_url",
+              "required_fields": [
+                "exercise_text",
+                "equine_veterinarian_full_name",
+                "equine_veterinarian_surname",
+                "location_in_page"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "verifier",
+          "instruction": "Verify the extracted equine veterinarian name from {page_extraction}. Confirm that the surname is present verbatim in the source text and that it refers to an equine veterinarian in the 1.E Exercises context. If the page_extraction shows a full name, split and return surname and full_name. If no equine veterinarian name was found, report 'unresolved' with a brief reason and include the relevant excerpt and the source URL. Return JSON with fields: decision (one of 'verified' or 'unresolved'), full_name, surname, excerpt (the smallest surrounding text supporting the decision), and source_url.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "verified_name",
+          "tools": [],
+          "max_output_tokens": 800,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "Verification of the candidate equine veterinarian name and final surname.",
+            "required_fields": [
+              "decision",
+              "surname",
+              "full_name",
+              "source_url"
+            ],
+            "identity_fields": [
+              "full_name"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "page_extraction",
+              "required_fields": [
+                "equine_veterinarian_full_name",
+                "equine_veterinarian_surname",
+                "exercise_text",
+                "location_in_page",
+                "source_url"
+              ],
+              "identity_fields": [
+                "location_in_page"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Confirm the extracted name and provide a verified surname for the final answer."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "targeted_recovery"
+        },
+        {
+          "name": "final_answer",
+          "instruction": "Using {verified_name}, produce the final caller-facing answer: the surname of the equine veterinarian mentioned in 1.E Exercises. If unresolved, state that the name could not be verified and include the short reason. Keep the answer concise and include the source URL from {verified_name.source_url}. Return a JSON object with fields: answer_text and source_url.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": 200,
+          "max_llm_turns": 1,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "verified_name",
+              "required_fields": [
+                "decision",
+                "surname",
+                "source_url"
+              ],
+              "identity_fields": [
+                "surname"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Produce the final succinct answer for the user."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "independent"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "source_finder",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "page_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "verifier",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "final_answer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "final_answer"
+    }
+  },
+  {
+    "task_id": "0383a3ee-47a7-41a4-b493-519bdefe0488-other-attempt",
+    "task": "Question: On the BBC Earth YouTube video of the Top 5 Silliest Animal Moments, what species of bird is featured?",
+    "original": {
+      "agents": [
+        {
+          "name": "video_finder",
+          "instruction": "Search the web (prioritize BBC Earth and YouTube) for the BBC Earth YouTube video titled (or clearly matching) \"Top 5 Silliest Animal Moments\". Return a small JSON object with: video_url (the canonical YouTube URL you will use), video_title (YouTube title), channel (should be BBC Earth if matched), and a one-line reason why you selected that URL (e.g., exact title match, channel match). Keep results concise and include at least one candidate URL. Use the websearch-tavily tool for discovery.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "finder_result",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": {
+            "description": "Selected candidate video URL and minimal identifying metadata for downstream inspection.",
+            "required_fields": [
+              "video_url",
+              "video_title"
+            ],
+            "identity_fields": [
+              "video_url"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "discovery_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "video_inspector",
+          "instruction": "Inspect the candidate video from {finder_result}. Using the value(s) in {finder_result.video_url} (or the first video_url if multiple), do the following evidence-first: (1) Load and scrape the YouTube page to extract the video description, visible transcript (YouTube transcript), and any captions/description lines that mention animals or bird names. (2) Use the media tool to analyze the video (via the URL) and examine frames around timestamps where birds appear to produce short image descriptions that support species identification. (3) Combine visual observations, transcript lines, and description text to identify the species of bird featured in the clip (give common name and scientific name if available). Return a structured JSON object with these required fields: video_url, identified_species (object with common_name and scientific_name if found; if uncertain mark unresolved), evidence_timestamps (list of timestamps with short reason), transcript_excerpts (list of timestamped transcript lines used), image_descriptions (list of timestamped frame descriptions from media analysis), and sources (list of source URLs used, including the YouTube URL). If you cannot confirm species from these sources, mark identified_species as unresolved and explain what is missing. Use web-scraping for page/text extraction and media for frame-level inspection. Prioritize direct evidence from the video (visual frames and transcript) over secondary pages.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "inspector_result",
+          "tools": [
+            "web-scraping",
+            "media"
+          ],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": {
+            "description": "Species identification and supporting evidence extracted from the YouTube video and its transcript/frames.",
+            "required_fields": [
+              "video_url",
+              "identified_species",
+              "evidence_timestamps",
+              "transcript_excerpts",
+              "image_descriptions",
+              "sources"
+            ],
+            "identity_fields": [
+              "video_url"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "finder_result",
+              "required_fields": [
+                "video_url",
+                "video_title"
+              ],
+              "identity_fields": [
+                "video_url"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use the selected YouTube URL and title as the target to inspect."
+            }
+          ],
+          "evidence_requirements": [
+            {
+              "task_quote": "On the BBC Earth YouTube video of the Top 5 Silliest Animal Moments, what species of bird is featured?",
+              "source": "the BBC Earth YouTube video of the Top 5 Silliest Animal Moments",
+              "source_kind": "url",
+              "source_field": "finder_result.video_url",
+              "required_fields": [
+                "identified_species",
+                "evidence_timestamps",
+                "transcript_excerpts",
+                "image_descriptions",
+                "video_url"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "mixed",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "answer_writer",
+          "instruction": "Read {inspector_result} and produce a concise user-facing answer to the original question: state clearly which species of bird is featured in the BBC Earth video (common name and scientific name if available), include one short supporting line referencing a timestamp or transcript excerpt, and provide the source URL. If the inspector marked the species unresolved, say that and briefly state what evidence was missing. Return a short plain-text answer suitable for directly giving to the user.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "inspector_result",
+              "required_fields": [
+                "identified_species",
+                "evidence_timestamps",
+                "sources"
+              ],
+              "identity_fields": [],
+              "identity_field_mapping": [],
+              "purpose": "Use the inspector's identified_species and evidence to compose the final concise answer."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "independent"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_finder",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "video_inspector",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "answer_writer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "answer_writer"
+    },
+    "repaired": {
+      "agents": [
+        {
+          "name": "video_finder",
+          "instruction": "Search the web (prioritize BBC Earth and YouTube) for the BBC Earth YouTube video titled (or clearly matching) \"Top 5 Silliest Animal Moments\". Return a small JSON object with: video_url (the canonical YouTube URL you will use), video_title (YouTube title), channel (should be BBC Earth if matched), and a one-line reason why you selected that URL (e.g., exact title match, channel match). Keep results concise and include at least one candidate URL. Use the websearch-tavily tool for discovery.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "finder_result",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": {
+            "description": "Selected candidate video URL and minimal identifying metadata for downstream inspection.",
+            "required_fields": [
+              "video_url",
+              "video_title"
+            ],
+            "identity_fields": [
+              "video_url"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "discovery_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "video_inspector",
+          "instruction": "Inspect the candidate video from {finder_result}. Using the value(s) in {finder_result.video_url} (or the first video_url if multiple), do the following evidence-first: (1) Load and scrape the YouTube page to extract the video description, visible transcript (YouTube transcript), and any captions/description lines that mention animals or bird names. (2) Use the media tool to analyze the video (via the URL) and examine frames around timestamps where birds appear to produce short image descriptions that support species identification. (3) Combine visual observations, transcript lines, and description text to identify the species of bird featured in the clip (give common name and scientific name if available). Return a structured JSON object with these required fields: video_url, identified_species (object with common_name and scientific_name if found; if uncertain mark unresolved), evidence_timestamps (list of timestamps with short reason), transcript_excerpts (list of timestamped transcript lines used), image_descriptions (list of timestamped frame descriptions from media analysis), and sources (list of source URLs used, including the YouTube URL). If you cannot confirm species from these sources, mark identified_species as unresolved and explain what is missing. Use web-scraping for page/text extraction and media for frame-level inspection. Prioritize direct evidence from the video (visual frames and transcript) over secondary pages.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "inspector_result",
+          "tools": [
+            "web-scraping",
+            "media"
+          ],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": {
+            "description": "Species identification and supporting evidence extracted from the YouTube video and its transcript/frames.",
+            "required_fields": [
+              "video_url",
+              "identified_species",
+              "evidence_timestamps",
+              "transcript_excerpts",
+              "image_descriptions",
+              "sources"
+            ],
+            "identity_fields": [
+              "video_url"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "finder_result",
+              "required_fields": [
+                "video_url",
+                "video_title"
+              ],
+              "identity_fields": [
+                "video_url"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use the selected YouTube URL and title as the target to inspect."
+            }
+          ],
+          "evidence_requirements": [
+            {
+              "task_quote": "On the BBC Earth YouTube video of the Top 5 Silliest Animal Moments, what species of bird is featured?",
+              "source": "the BBC Earth YouTube video of the Top 5 Silliest Animal Moments",
+              "source_kind": "reference",
+              "source_field": "video_url",
+              "required_fields": [
+                "identified_species",
+                "evidence_timestamps",
+                "transcript_excerpts",
+                "image_descriptions",
+                "video_url"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "mixed",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "answer_writer",
+          "instruction": "Read {inspector_result} and produce a concise user-facing answer to the original question: state clearly which species of bird is featured in the BBC Earth video (common name and scientific name if available), include one short supporting line referencing a timestamp or transcript excerpt, and provide the source URL. If the inspector marked the species unresolved, say that and briefly state what evidence was missing. Return a short plain-text answer suitable for directly giving to the user.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": null,
+          "max_llm_turns": null,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "inspector_result",
+              "required_fields": [
+                "identified_species",
+                "evidence_timestamps",
+                "sources",
+                "video_url",
+                "transcript_excerpts",
+                "image_descriptions"
+              ],
+              "identity_fields": [],
+              "identity_field_mapping": [],
+              "purpose": "Use the inspector's identified_species and evidence to compose the final concise answer."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "independent"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_finder",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "video_inspector",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "answer_writer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "answer_writer"
+    }
+  },
+  {
+    "task_id": "a1e91b78-d3d8-4675-bb8d-62741b4b68a6-other-attempt",
+    "task": "Question: In the video https://www.youtube.com/watch?v=L1vXCYZAYYM, what is the highest number of bird species to be on camera simultaneously?",
+    "original": {
+      "agents": [
+        {
+          "name": "video_reader",
+          "instruction": "You are given the user's question in {user_query}. Inspect and analyze the referenced YouTube video URL inside that query. Use the media tool to watch and analyze the video frames. Your primary goal is to determine the single highest number of distinct bird species that appear simultaneously on camera at any time in the video. Produce a JSON object (not free text) with the following fields: \n\n- highest_simultaneous_species_count (integer): the maximum number of distinct bird species visible on screen at the same moment.\n- timestamps (array of objects): each object should have {start, end} in HH:MM:SS or seconds where the maximum occurs (if multiple separate moments tie for the maximum, include each).\n- species_list (array of strings): the common names of all distinct species that are visible together at one of the maximum timestamps. If multiple max moments have different compositions, include one species_list per timestamp in the same order as timestamps.\n- evidence_clips (array of local file paths or media-tool clip identifiers): the short video frame(s) or clip file paths showing the maximum moment(s). If the media tool returns thumbnail/frame captures, include their paths.\n- method_and_uncertainty (string): short note describing how you identified species (visual markers, audio if used), any ambiguous IDs and confidence level per ambiguous species.\n\nNotes: prioritize direct visual evidence from the video (frames/clips). When reporting species names, use common English names and include scientific name only if identification is ambiguous. If you cannot access or analyze the video, return a JSON with these fields set to null and an explanation in method_and_uncertainty. Output must satisfy the output_contract required fields exactly.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "video_analysis",
+          "tools": [
+            "media"
+          ],
+          "max_output_tokens": 1500,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "Structured extraction of the peak simultaneous bird-species observation from the supplied video.",
+            "required_fields": [
+              "highest_simultaneous_species_count",
+              "timestamps",
+              "species_list",
+              "evidence_clips",
+              "method_and_uncertainty"
+            ],
+            "identity_fields": [
+              "timestamps"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [
+            {
+              "task_quote": "Question: In the video https://www.youtube.com/watch?v=L1vXCYZAYYM, what is the highest number of bird species to be on camera simultaneously?",
+              "source": "https://www.youtube.com/watch?v=L1vXCYZAYYM",
+              "source_kind": "url",
+              "source_field": "user_query",
+              "required_fields": [
+                "video_frames_or_clips",
+                "timestamps",
+                "visual_evidence_for_identification"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "answerer",
+          "instruction": "Read the structured video analysis artifact in {video_analysis}. Produce a concise, user-facing answer to the original question in plain text. The answer must start with the numeric highest number (e.g., 'Highest simultaneous species on camera: 4') followed by: (1) the timestamp(s) where that maximum occurs, (2) the list of species seen together at that timestamp (common names), and (3) a one- or two-sentence summary of the evidence (referencing the evidence_clips paths). If any required field from {video_analysis} is null or unresolved, state that the result is unresolved and explain why using the method_and_uncertainty field. Use the video_analysis fields only; do not perform new web searches.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": 800,
+          "max_llm_turns": 2,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "video_analysis",
+              "required_fields": [
+                "highest_simultaneous_species_count",
+                "timestamps",
+                "species_list",
+                "evidence_clips",
+                "method_and_uncertainty"
+              ],
+              "identity_fields": [
+                "timestamps"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use the structured findings and evidence paths from the video analysis to produce the final user-facing answer."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "answerer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "answerer"
+    },
+    "repaired": {
+      "agents": [
+        {
+          "name": "video_reader",
+          "instruction": "You are given the user's question in {user_query}. Inspect and analyze the referenced YouTube video URL inside that query. Use the media tool to watch and analyze the video frames. Your primary goal is to determine the single highest number of distinct bird species that appear simultaneously on camera at any time in the video. Produce a JSON object (not free text) with the following fields: \n\n- highest_simultaneous_species_count (integer): the maximum number of distinct bird species visible on screen at the same moment.\n- timestamps (array of objects): each object should have {start, end} in HH:MM:SS or seconds where the maximum occurs (if multiple separate moments tie for the maximum, include each).\n- species_list (array of strings): the common names of all distinct species that are visible together at one of the maximum timestamps. If multiple max moments have different compositions, include one species_list per timestamp in the same order as timestamps.\n- evidence_clips (array of local file paths or media-tool clip identifiers): the short video frame(s) or clip file paths showing the maximum moment(s). If the media tool returns thumbnail/frame captures, include their paths.\n- method_and_uncertainty (string): short note describing how you identified species (visual markers, audio if used), any ambiguous IDs and confidence level per ambiguous species.\n\nNotes: prioritize direct visual evidence from the video (frames/clips). When reporting species names, use common English names and include scientific name only if identification is ambiguous. If you cannot access or analyze the video, return a JSON with these fields set to null and an explanation in method_and_uncertainty. Output must satisfy the output_contract required fields exactly.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "video_analysis",
+          "tools": [
+            "media"
+          ],
+          "max_output_tokens": 1500,
+          "max_llm_turns": 3,
+          "output_contract": {
+            "description": "Structured extraction of the peak simultaneous bird-species observation from the supplied video.",
+            "required_fields": [
+              "highest_simultaneous_species_count",
+              "timestamps",
+              "species_list",
+              "evidence_clips",
+              "method_and_uncertainty",
+              "source_url",
+              "video_frames_or_clips",
+              "visual_evidence_for_identification"
+            ],
+            "identity_fields": [
+              "timestamps"
+            ]
+          },
+          "input_requirements": [],
+          "evidence_requirements": [
+            {
+              "task_quote": "Question: In the video https://www.youtube.com/watch?v=L1vXCYZAYYM, what is the highest number of bird species to be on camera simultaneously?",
+              "source": "https://www.youtube.com/watch?v=L1vXCYZAYYM",
+              "source_kind": "url",
+              "source_field": "source_url",
+              "required_fields": [
+                "video_frames_or_clips",
+                "timestamps",
+                "visual_evidence_for_identification"
+              ]
+            }
+          ],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "answerer",
+          "instruction": "Read the structured video analysis artifact in {video_analysis}. Produce a concise, user-facing answer to the original question in plain text. The answer must start with the numeric highest number (e.g., 'Highest simultaneous species on camera: 4') followed by: (1) the timestamp(s) where that maximum occurs, (2) the list of species seen together at that timestamp (common names), and (3) a one- or two-sentence summary of the evidence (referencing the evidence_clips paths). If any required field from {video_analysis} is null or unresolved, state that the result is unresolved and explain why using the method_and_uncertainty field. Use the video_analysis fields only; do not perform new web searches.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "max_output_tokens": 800,
+          "max_llm_turns": 2,
+          "output_contract": null,
+          "input_requirements": [
+            {
+              "source_key": "video_analysis",
+              "required_fields": [
+                "highest_simultaneous_species_count",
+                "timestamps",
+                "species_list",
+                "evidence_clips",
+                "method_and_uncertainty",
+                "source_url",
+                "video_frames_or_clips",
+                "visual_evidence_for_identification"
+              ],
+              "identity_fields": [
+                "timestamps"
+              ],
+              "identity_field_mapping": [],
+              "purpose": "Use the structured findings and evidence paths from the video analysis to produce the final user-facing answer."
+            }
+          ],
+          "evidence_requirements": [],
+          "calculation_result_field": null,
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "agent_name": null,
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "video_reader",
+            "children": [],
+            "max_iterations": null
+          },
+          {
+            "type": "agent",
+            "agent_name": "answerer",
+            "children": [],
+            "max_iterations": null
+          }
+        ],
+        "max_iterations": null
+      },
+      "final_answer_agent": "answerer"
+    }
+  }
+]

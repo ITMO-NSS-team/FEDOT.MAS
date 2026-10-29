@@ -547,7 +547,8 @@ async def test_valid_terminal_answer_survives_intermediate_diagnostics(
 
 
 @pytest.mark.asyncio
-async def test_explicit_terminal_abstention_remains_incomplete(tmp_path: Path):
+@pytest.mark.parametrize("prefix", ["", "I inspected the candidate pages.\n\n"])
+async def test_explicit_terminal_abstention_remains_incomplete(tmp_path: Path, prefix):
     class AbstainingMAW(_FakeMAW):
         async def run(
             self,
@@ -558,7 +559,7 @@ async def test_explicit_terminal_abstention_remains_incomplete(tmp_path: Path):
             initial_state: dict | None = None,
         ) -> dict[str, str]:
             self.last_result = PipelineResult(
-                state={"final_answer": "<abstain>Unable to solve</abstain>"},
+                state={"final_answer": prefix + "<abstain>Unable to solve</abstain>"},
                 status="incomplete",
             )
             return self.last_result.state
@@ -1292,3 +1293,100 @@ async def test_outer_gaia_timeout_is_recorded_as_incomplete(tmp_path: Path):
     assert artifact["pipeline_status"] == "timed_out"
     assert artifact["attempt_status"] == "incomplete"
     assert artifact["response"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["incomplete", "timed_out"])
+async def test_batch_keeps_failed_attempt_diagnostics_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str
+):
+    import benchmarks.gaia.run_gaia as runner
+
+    diagnostics = {
+        "_fedotmas_execution": {
+            "research_progress": {"reader": {"no_progress_turns": 3}}
+        }
+    }
+
+    class BatchMAW(_FakeMAW):
+        async def run(self, query: str, **kwargs):
+            if "Fail this task" not in query:
+                return await super().run(query, **kwargs)
+            self.last_result = PipelineResult(
+                state={
+                    "final_answer": (
+                        "<abstain>No evidence available</abstain>"
+                        if status == "incomplete"
+                        else "<solution>42</solution>"
+                    ),
+                    **diagnostics,
+                },
+                status=status,
+                total_prompt_tokens=9,
+                total_completion_tokens=4,
+            )
+            return self.last_result.state
+
+    tasks = [
+        SimpleNamespace(
+            task_id=name,
+            question=question,
+            ground_truth="42",
+            difficulty="1",
+            file_path="",
+            file_name="",
+            metadata={},
+        )
+        for name, question in [
+            ("failed", "Fail this task"),
+            ("successful", "What is the answer?"),
+        ]
+    ]
+
+    class CachedBenchmark:
+        def __init__(self, settings):
+            pass
+
+        def download(self):
+            pass
+
+        def __iter__(self):
+            return iter(tasks)
+
+        @staticmethod
+        def is_correct_answer(answer, truth):
+            return answer == truth
+
+    monkeypatch.setattr(runner, "__file__", str(tmp_path / "run_gaia.py"))
+    monkeypatch.setattr(runner, "MAW", BatchMAW)
+    monkeypatch.setattr(runner, "GaiaBenchmark", CachedBenchmark)
+    monkeypatch.setattr(runner, "preflight_startup_models", AsyncMock())
+    monkeypatch.setenv("FEDOTMAS_GAIA_TASK_ATTEMPTS", "1")
+    monkeypatch.setenv("FEDOTMAS_GAIA_MCP_SERVERS", "sandbox-light")
+
+    batch = await runner.run_gaia("all", "validation", enable_langfuse=False)
+    failed, successful = batch["results"]
+    root = tmp_path / "gaia_logs" / f"run_{runner.RUN_ID}"
+    persisted = json.loads((root / "task_failed/result.json").read_text())
+    attempt = json.loads((root / "task_failed/attempts/attempt_01.json").read_text())
+
+    for result in (failed, persisted):
+        assert result["pipeline_status"] == status
+        assert result["attempt_status"] == "incomplete"
+        assert result["pipeline_diagnostics"] == diagnostics
+        assert result["attempt_artifact"] == "attempts/attempt_01.json"
+        assert result["attempt"] == 1
+        assert result["response"] == ""
+        assert result["is_correct"] is False
+        assert result["tokens"]["total_prompt"] == 12
+        assert result["attempts"][0]["pipeline_status"] == status
+    assert attempt["pipeline_diagnostics"] == diagnostics
+    assert (
+        json.loads((root / "task_failed/leaderboard.json").read_text())["model_answer"]
+        == ""
+    )
+    assert successful["is_correct"] is True
+    assert batch["metrics"]["overall"]["correct"] == 1
+    assert (
+        json.loads((root / "results.json").read_text())["results"] == batch["results"]
+    )

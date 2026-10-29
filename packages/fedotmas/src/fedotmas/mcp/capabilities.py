@@ -29,6 +29,7 @@ _URL_INSPECTION = frozenset(
     {
         "goto",
         "markdown",
+        "html",
         "extract",
         "links",
         "eval",
@@ -46,9 +47,14 @@ _URL_INSPECTION = frozenset(
         "scroll",
         "selectoption",
         "semantic_tree",
+        "tree",
+        "geturl",
+        "save",
         "setchecked",
         "structureddata",
         "waitforselector",
+        "waitforstate",
+        "waitforscript",
     }
 )
 _DOCUMENT_INSPECTION = frozenset(
@@ -74,9 +80,21 @@ _MEDIA_INSPECTION = frozenset(
     }
 )
 _BROWSER = frozenset({"complete_browser_task"})
-_COMPUTATION = frozenset({"solve_with_code", "run_python", "execute_code"})
+_COMPUTATION = frozenset({"solve_with_code", "run_python", "execute_code", "calculate"})
 _DIAGNOSTIC = frozenset(
-    {"telemetry", "health", "health_check", "get_metrics", "diagnostics"}
+    {
+        "telemetry",
+        "health",
+        "health_check",
+        "get_metrics",
+        "diagnostics",
+        "getcookies",
+        "getenv",
+        "consolelogs",
+        "session_list",
+        "session_new",
+        "session_close",
+    }
 )
 _DISCOVERY_SERVERS = frozenset({"websearch_tavily", "websearch_searxng"})
 _INSPECTION_SERVERS = frozenset(
@@ -89,23 +107,33 @@ def normalize_tool_name(name: str) -> str:
     normalized = name.rsplit("__", 1)[-1].lower().replace("-", "_").replace(".", "_")
     # MCP server prefixes are conventionally prepended with an underscore. Strip
     # a prefix only when the suffix is a known capability-bearing tool name.
-    for known in (
-        *_DISCOVERY,
-        *_URL_INSPECTION,
-        *_DOCUMENT_INSPECTION,
-        *_MEDIA_INSPECTION,
-        *_BROWSER,
-        *_COMPUTATION,
-        *_DIAGNOSTIC,
-        *_DISCOVERY_SERVERS,
-        *_INSPECTION_SERVERS,
+    for known in sorted(
+        (
+            *_DISCOVERY,
+            *_URL_INSPECTION,
+            *_DOCUMENT_INSPECTION,
+            *_MEDIA_INSPECTION,
+            *_BROWSER,
+            *_COMPUTATION,
+            *_DIAGNOSTIC,
+            *_DISCOVERY_SERVERS,
+            *_INSPECTION_SERVERS,
+        ),
+        key=lambda name: len(name),
+        reverse=True,
     ):
         if normalized == known or normalized.endswith(f"_{known}"):
             return known
+    # Bare search is ambiguous: normalize its prefix, then use the description
+    # or server identity to distinguish web discovery from local/domain search.
+    if normalized.endswith("_search"):
+        return "search"
     return normalized
 
 
-def tool_capability(name: str, *, description: str = "", server: str = "") -> ToolCapability:
+def tool_capability(
+    name: str, *, description: str = "", server: str = ""
+) -> ToolCapability:
     """Return the runtime capability for a bare, prefixed, or namespaced tool."""
     raw = name.lower().replace("-", "_").replace(".", "_")
     server_name = server.lower().replace("-", "_").replace(".", "_")
@@ -118,9 +146,32 @@ def tool_capability(name: str, *, description: str = "", server: str = "") -> To
     ):
         return ToolCapability.DISCOVERY
     if normalized == "search":
-        hints = ("web search", "search the web", "search the internet", "internet search", "search engine", "search broadly", "search for independent", "search sources", "tavily", "searx")
-        return ToolCapability.DISCOVERY if any(hint in description.casefold() for hint in hints) else ToolCapability.OTHER
-    if normalized in {"web_search", "websearch", "google_search", "searxng_search", "tavily_search"} or normalized.endswith(("_web_search", "_google_search", "_searxng_search", "_tavily_search")):
+        hints = (
+            "web search",
+            "search the web",
+            "search the internet",
+            "internet search",
+            "search engine",
+            "search broadly",
+            "search for independent",
+            "search sources",
+            "tavily",
+            "searx",
+        )
+        return (
+            ToolCapability.DISCOVERY
+            if any(hint in description.casefold() for hint in hints)
+            else ToolCapability.OTHER
+        )
+    if normalized in {
+        "web_search",
+        "websearch",
+        "google_search",
+        "searxng_search",
+        "tavily_search",
+    } or normalized.endswith(
+        ("_web_search", "_google_search", "_searxng_search", "_tavily_search")
+    ):
         return ToolCapability.DISCOVERY
     if normalized == "web_scraping" or normalized in _URL_INSPECTION:
         return ToolCapability.URL_INSPECTION
@@ -132,10 +183,7 @@ def tool_capability(name: str, *, description: str = "", server: str = "") -> To
         return ToolCapability.BROWSER_NAVIGATION
     if normalized in _COMPUTATION:
         return ToolCapability.COMPUTATION
-    if (
-        normalized in _DIAGNOSTIC
-        or normalized.endswith(("_telemetry", "_diagnostics"))
-    ):
+    if normalized in _DIAGNOSTIC or normalized.endswith(("_telemetry", "_diagnostics")):
         return ToolCapability.DIAGNOSTIC
     return ToolCapability.OTHER
 

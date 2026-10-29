@@ -9,21 +9,101 @@ from typing import Any
 
 from google.adk.sessions.state import State
 
-from fedotmas.maw.models import ArtifactContract, ArtifactRequirement
+from fedotmas.maw.models import (
+    ArtifactContract,
+    ArtifactRequirement,
+    IdentityFieldMapping,
+)
 
 EXECUTION_METADATA_KEY = "_fedotmas_execution"
 ABSTENTION_STATE_KEY = "__fedotmas_completion"
 
 
+def merge_input_requirements(
+    requirements: list[ArtifactRequirement],
+) -> list[ArtifactRequirement]:
+    """Combine obligations for one source before evaluating or resolving issues.
+
+    Runtime issues are keyed by source, not individual requirement. A successful
+    subset must not clear another subset's missing fields or identity mismatch.
+    Return fresh models so building an agent leaves the caller's config intact.
+    """
+    grouped: dict[str, list[ArtifactRequirement]] = {}
+    for requirement in requirements:
+        grouped.setdefault(requirement.source_key, []).append(requirement)
+    mappings: dict[str, dict[str, str]] = {}
+    for source, items in grouped.items():
+        mapping: dict[str, str] = {}
+        for item in items:
+            for field in item.identity_fields:
+                target = item.output_identity_path(field)
+                if field in mapping and mapping[field] != target:
+                    raise ValueError(
+                        f"Conflicting identity mappings for {source}.{field}"
+                    )
+                mapping[field] = target
+        mappings[source] = {
+            field: target for field, target in mapping.items() if field != target
+        }
+    return [
+        ArtifactRequirement(
+            source_key=source,
+            required_fields=list(
+                dict.fromkeys(field for item in items for field in item.required_fields)
+            ),
+            identity_fields=list(
+                dict.fromkeys(field for item in items for field in item.identity_fields)
+            ),
+            purpose="\n".join(
+                dict.fromkeys(item.purpose for item in items if item.purpose)
+            ),
+            identity_field_mapping=[
+                IdentityFieldMapping(source_path=field, output_path=target)
+                for field, target in mappings[source].items()
+            ],
+        )
+        for source, items in grouped.items()
+    ]
+
+
 def is_explicit_abstention(value: Any) -> bool:
     """Recognize the runtime's explicit terminal abstention protocol."""
-    if isinstance(value, str):
-        return value.strip().startswith("<abstain>") and "</abstain>" in value
+    return explicit_abstention_reason(value) is not None
+
+
+def explicit_abstention_reason(value: Any) -> str | None:
+    """Read a terminal abstention, including one preceded by working notes.
+
+    A final solution supersedes earlier prose/abstentions. A quoted or fenced
+    example in the surrounding explanation is not a terminal protocol block.
+    """
     if isinstance(value, dict):
-        return value.get("status") == "abstained" and isinstance(
-            value.get("reason"), str
+        reason = value.get("reason")
+        return (
+            reason
+            if value.get("status") == "abstained" and isinstance(reason, str)
+            else None
         )
-    return False
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    try:
+        parsed = json.loads(text)
+    except (ValueError, TypeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        return explicit_abstention_reason(parsed)
+    solutions = list(re.finditer(r"<solution>(.*?)</solution>", text, re.DOTALL))
+    abstentions = list(re.finditer(r"<abstain>(.*?)</abstain>", text, re.DOTALL))
+    if not abstentions:
+        return None
+    last = abstentions[-1]
+    if solutions and solutions[-1].end() >= last.end():
+        # Also catches a refusal incorrectly placed inside a success wrapper.
+        return explicit_abstention_reason(solutions[-1].group(1))
+    if last.end() == len(text) or text.startswith("<abstain>"):
+        return last.group(1).strip()
+    return None
 
 
 _UNRESOLVED_TEXT = re.compile(
@@ -33,6 +113,35 @@ _UNRESOLVED_TEXT = re.compile(
     re.IGNORECASE,
 )
 _ANSWER_NULL_KEYS = {"answer", "verified_answer", "value", "formatted_answer"}
+_NONANSWER_NOTES = re.compile(
+    r"^\s*(?:abstained\b|unresolved\b|unable to\b|could not\b|cannot\b)", re.IGNORECASE
+)
+_EVIDENCE_METADATA = {
+    "notes",
+    "reason",
+    "explanation",
+    "evidence",
+    "evidence_url",
+    "evidence_excerpt",
+    "sources",
+    "source_url",
+    "status",
+    "decision",
+}
+
+
+def _empty_answer_with_refusal(parsed: dict[str, Any]) -> bool:
+    # Null metadata alone is normal. Require an explicit refusal and no populated
+    # result fields, including schemas whose answer keys are task-specific.
+    fields = [value for key, value in parsed.items() if key not in _EVIDENCE_METADATA]
+    return (
+        bool(fields)
+        and all(value is None or value == "" for value in fields)
+        and any(
+            isinstance(parsed.get(key), str) and _NONANSWER_NOTES.search(parsed[key])
+            for key in ("notes", "reason", "explanation")
+        )
+    )
 
 
 def is_unresolved_answer(value: Any) -> bool:
@@ -40,9 +149,15 @@ def is_unresolved_answer(value: Any) -> bool:
     parsed_candidates = parse_artifact_candidates(value)
     if parsed_candidates:
         if any(
-            str(parsed.get("status", "")).casefold() == "unresolved"
+            any(
+                str(parsed.get(key, "")).casefold()
+                in {"unresolved", "abstained", "incomplete"}
+                for key in ("status", "decision")
+            )
             for parsed in parsed_candidates
         ):
+            return True
+        if any(_empty_answer_with_refusal(parsed) for parsed in parsed_candidates):
             return True
         # A null nested candidate is not evidence that the actual answer is
         # unresolved. Only a top-level answer field has that meaning.

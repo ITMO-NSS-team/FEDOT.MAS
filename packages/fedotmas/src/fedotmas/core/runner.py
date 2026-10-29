@@ -111,9 +111,10 @@ async def run_pipeline(
     session_id = session_id or uuid.uuid4().hex
 
     # Pre-populate state with user_query + any caller-supplied keys.
-    state: dict[str, Any] = {"user_query": user_query}
-    if initial_state:
-        state.update(initial_state)
+    state: dict[str, Any] = dict(initial_state or {})
+    # A checkpoint may contain a previous query; the current caller request is
+    # authoritative for both the user message and per-agent task requirements.
+    state["user_query"] = user_query
 
     session = await session_service.create_session(
         app_name=effective_name,
@@ -144,7 +145,9 @@ async def run_pipeline(
             try:
                 deadline = state.get("_fedotmas_task_deadline_monotonic")
                 if not isinstance(deadline, int | float):
-                    deadline = time.monotonic() + timeout if timeout and timeout > 0 else None
+                    deadline = (
+                        time.monotonic() + timeout if timeout and timeout > 0 else None
+                    )
                 with llm_request_deadline(deadline):
                     await _consume_with_timeout(
                         runner=runner,
@@ -187,8 +190,10 @@ async def run_pipeline(
     metadata = final_session.state.get("_fedotmas_execution", {})
     if not isinstance(metadata, dict):
         metadata = {}
-    repair_usage = metadata.get("contract_repair_tokens", {})
-    if isinstance(repair_usage, dict):
+    for extra_usage_key in ("contract_repair_tokens", "terminal_format_tokens"):
+        repair_usage = metadata.get(extra_usage_key, {})
+        if not isinstance(repair_usage, dict):
+            continue
         prompt_tokens = repair_usage.get("prompt_tokens", 0)
         completion_tokens = repair_usage.get("completion_tokens", 0)
         if isinstance(prompt_tokens, int) and not isinstance(prompt_tokens, bool):
@@ -212,7 +217,8 @@ async def run_pipeline(
         status = "limited"
     elif (
         isinstance(final_session.state.get(ABSTENTION_STATE_KEY), dict)
-        and final_session.state[ABSTENTION_STATE_KEY].get("status") in {"abstained", "unresolved"}
+        and final_session.state[ABSTENTION_STATE_KEY].get("status")
+        in {"abstained", "unresolved"}
     ) or unresolved_execution_issues(final_session.state):
         status = "incomplete"
     else:

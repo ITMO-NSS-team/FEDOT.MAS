@@ -1,0 +1,525 @@
+[
+  {
+    "task_id": "7bd855d8-463d-4ed5-93ca-5fe35145f733",
+    "config": {
+      "agents": [
+        {
+          "name": "excel_reader",
+          "instruction": "Read the exact host path /home/nssuser1/.cache/huggingface/hub/datasets--gaia-benchmark--GAIA/blobs/96946fc8eb7ff5f1052e11028dee0636f7aaba40 using document.read_document or document.find_document. Page through all sheets and extract every row that represents menu-item sales. For each row produce an object with these fields: item_name (string), category (string or null), quantity (number or null), unit_price (number or null), sales_usd (number). If sales_usd is not explicitly present, compute it as quantity * unit_price when both are available. If currency is specified and is not USD, convert to USD and note the original currency; if currency is not specified, assume USD. Also include provenance for each extracted row as source:{\"host_path\": \"/home/nssuser1/.cache/huggingface/hub/datasets--gaia-benchmark--GAIA/blobs/96946fc8eb7ff5f1052e11028dee0636f7aaba40\", \"sheet\": <sheet_name>, \"row_index\": <row_index>}. Return a single JSON object under the key \"items\" (an array). Ensure numeric values are numbers (not strings). Do not drop rows; if a numeric value cannot be parsed, set the numeric field to null and add a note field explaining the issue for that row.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "extracted_items",
+          "tools": [
+            "document"
+          ],
+          "output_contract": {
+            "description": "Structured extraction of rows with item name, category, and numeric sales values (USD).",
+            "required_fields": [
+              "items[].item_name",
+              "items[].category",
+              "items[].sales_usd"
+            ],
+            "identity_fields": [
+              "items[].item_name"
+            ]
+          },
+          "input_requirements": [],
+          "research_mode": "inspection_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "food_sales_calculator",
+          "instruction": "Using the extracted items in {extracted_items?}, compute the total sales in USD for food items only (exclude drinks). Follow this procedure: 1) For each item in {extracted_items?}.items, decide whether it is a drink. Use the row's category if present (case-insensitive match for words like 'drink', 'beverage', 'soda', 'coffee', 'tea', 'juice', 'milkshake', 'water'). If category is missing or ambiguous, inspect item_name for those keywords (case-insensitive). 2) Classify an item as 'drink' if category or item_name matches any drink keyword; classify as 'food' if category explicitly indicates food ('food', 'entrée', 'meal', 'sandwich', 'burger', 'side', 'fries', 'salad', 'dessert', etc.) or item_name indicates food. If classification remains uncertain (no clear keywords and no category), do NOT include that item's sales in the food total; list it under uncertain_items with a brief reason. 3) For each item confidently classified as food, use sales_usd (numeric). If sales_usd is null but quantity and unit_price are present, compute sales_usd=quantity*unit_price. If sales_usd cannot be determined for an included food item, exclude it and list it under excluded_items with reason. 4) Sum sales_usd for all included food items to produce total_usd. Return a JSON object with these fields: total_usd (number), currency (\"USD\"), included_items_count (integer), included_items (array of objects with item_name and sales_usd), excluded_items (array with item_name and reason), uncertain_items (array with item_name and reason). Round total_usd to at least cents precision (two decimals). Use only the data in {extracted_items?}; do not try to re-open the file. Execute any numeric aggregation inside the sandbox-light tool when useful, but pass the extracted data to the sandbox as inline input rather than a file path.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "food_total",
+          "tools": [
+            "sandbox-light"
+          ],
+          "output_contract": {
+            "description": "Aggregated total sales for items confidently classified as food, plus lists of included, excluded, and uncertain items.",
+            "required_fields": [
+              "total_usd"
+            ],
+            "identity_fields": [
+              "items[].item_name"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "extracted_items",
+              "required_fields": [
+                "items[].item_name",
+                "items[].category",
+                "items[].sales_usd"
+              ],
+              "identity_fields": [
+                "items[].item_name"
+              ],
+              "purpose": "Use the extracted rows and numeric sales values to classify items and sum sales for food-only items."
+            }
+          ],
+          "research_mode": "mixed",
+          "research_policy": "independent"
+        },
+        {
+          "name": "final_formatter",
+          "instruction": "Read the aggregation result in {food_total?} and produce the final, caller-facing answer: a single line stating the total sales from food (not including drinks) in USD formatted with two decimal places (e.g., \"$1234.56\"). Also include a one-sentence summary of any excluded or uncertain items (if any) and their total excluded amount. Return only JSON with keys: answer (string) and details (object with included_items_count, excluded_total_usd, uncertain_total_usd).",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_answer",
+          "tools": [],
+          "input_requirements": [
+            {
+              "source_key": "food_total",
+              "required_fields": [
+                "total_usd"
+              ],
+              "identity_fields": [],
+              "purpose": "Format the numeric total into the user-facing USD answer with two decimals and report simple details about excluded/uncertain items."
+            }
+          ],
+          "research_mode": "mixed",
+          "research_policy": "independent"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "excel_reader",
+            "children": []
+          },
+          {
+            "type": "agent",
+            "agent_name": "food_sales_calculator",
+            "children": []
+          },
+          {
+            "type": "agent",
+            "agent_name": "final_formatter",
+            "children": []
+          }
+        ]
+      },
+      "final_answer_agent": "final_formatter"
+    },
+    "failed_agent": "food_sales_calculator",
+    "references": [
+      "{extracted_items?}",
+      "{extracted_items?}",
+      "{extracted_items?}"
+    ]
+  },
+  {
+    "task_id": "8e867cd7-cff9-4e6c-867a-ff5ddc2550be",
+    "config": {
+      "agents": [
+        {
+          "name": "wiki_finder",
+          "instruction": "Search English Wikipedia (en.wikipedia.org) for Mercedes Sosa's main page and/or discography page that lists her albums. Use websearch to locate the best candidate English Wikipedia URL that contains a Discography or Studio albums section. Prefer the page revision closest to 2022 when that is clearly indicated; if you cannot reliably select a 2022 revision, return the current en.wikipedia.org page URL but note that in the snippet. Return a JSON object with fields: url (string), title (string), snippet (one-sentence justification why this page is the right source and whether it references a 2022 revision). Keep the result minimal and cite the exact URL you want the extractor to fetch.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "wikipedia_candidate",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "output_contract": {
+            "description": "A single selected English Wikipedia page candidate (preferably 2022 revision) for Mercedes Sosa discography or artist page.",
+            "required_fields": [
+              "url",
+              "title",
+              "snippet"
+            ],
+            "identity_fields": [
+              "url"
+            ]
+          },
+          "input_requirements": [],
+          "research_mode": "discovery_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "page_extractor",
+          "instruction": "Fetch and inspect the English Wikipedia page at {wikipedia_candidate?}. If the candidate includes an explicit 2022 revision URL or an oldid parameter referencing a 2022 revision, fetch that revision; otherwise fetch the current en.wikipedia.org page. Locate the Discography or Studio albums section and extract a structured list of studio album releases. Return JSON with key \"studio_albums\": an array of objects each with fields: {\"title\": \"<album title>\", \"year\": <4-digit year or null if unavailable>, \"line_snippet\": \"<text excerpt showing title and year>\", \"source_url\": \"<exact URL or revision used>\"}. If an album's release year is ambiguous (range, circa, or missing), set year to null and include the textual year evidence in line_snippet. Also include a short \"notes\" string if you had to infer anything (e.g., compilation vs studio). Do not include non-studio releases (live, compilations) unless the page labels them as studio. Provide exact source_url(s) used.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "extracted_albums",
+          "tools": [
+            "web-scraping"
+          ],
+          "output_contract": {
+            "description": "Structured extraction of studio albums with title and year (if present), citing the exact source URL used.",
+            "required_fields": [
+              "studio_albums"
+            ],
+            "identity_fields": [
+              "url"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "wikipedia_candidate",
+              "required_fields": [
+                "url"
+              ],
+              "identity_fields": [
+                "url"
+              ],
+              "purpose": "Use the selected Wikipedia URL (preferably a 2022 revision) as the page to fetch and extract the studio albums list from."
+            }
+          ],
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "counter",
+          "instruction": "Using the structured extraction in {extracted_albums?}, count how many unique studio albums have a release year in the inclusive range 2000 through 2009. Treat an album as in-range only if its extracted \"year\" is an integer between 2000 and 2009 inclusive. If an album has year=null but the line_snippet clearly indicates a 2000-2009 release (e.g., contains a 4-digit year in that range), include it and set a field explaining the inference. If any album's type is ambiguous (compilation, live), do not count it unless the extractor explicitly labeled it as a studio album. Return JSON with fields: \"count\" (integer), \"albums_in_range\" (array of objects with title, year_used, source_url, inference_note), and \"method\" (short description of counting rules applied) and include the original {extracted_albums?} reference for traceability.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_count",
+          "tools": [],
+          "input_requirements": [
+            {
+              "source_key": "extracted_albums",
+              "required_fields": [
+                "studio_albums"
+              ],
+              "identity_fields": [],
+              "purpose": "Use the extracted studio_albums to determine which fall between 2000 and 2009 inclusive and produce a traceable count."
+            }
+          ],
+          "research_mode": "mixed",
+          "research_policy": "evidence_first"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "wiki_finder",
+            "children": []
+          },
+          {
+            "type": "agent",
+            "agent_name": "page_extractor",
+            "children": []
+          },
+          {
+            "type": "agent",
+            "agent_name": "counter",
+            "children": []
+          }
+        ]
+      },
+      "final_answer_agent": "counter"
+    },
+    "failed_agent": "page_extractor",
+    "references": [
+      "{wikipedia_candidate?}"
+    ]
+  },
+  {
+    "task_id": "17b5a6a3-bc87-42e8-b0fb-6ab0781ef2cc",
+    "config": {
+      "agents": [
+        {
+          "name": "usgs_finder",
+          "instruction": "Using the websearch-tavily tool, locate authoritative USGS pages (Nonindigenous Aquatic Species / USGS species pages or USGS factsheets) that report nonnative occurrences of the clownfish popularized in Finding Nemo (search for Amphiprion ocellaris and Amphiprion percula). Return a concise JSON object with a top-level field \"candidates\" containing an array of candidate items: {\"title\", \"url\", \"snippet\"}. Prioritize USGS NAS occurrence pages and any USGS occurrence records. Stop after collecting the most relevant USGS pages (no more than 10).",
+          "model": "openai/gpt-5-mini",
+          "output_key": "usgs_candidates",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "output_contract": {
+            "description": "A short ranked list of USGS candidate pages to inspect for nonnative clownfish occurrences.",
+            "required_fields": [
+              "candidates"
+            ],
+            "identity_fields": []
+          },
+          "input_requirements": [],
+          "research_mode": "discovery_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "usgs_extractor",
+          "instruction": "Open and inspect each URL listed in {usgs_candidates?}. Using web-scraping, extract all USGS-reported nonnative occurrence records for Amphiprion ocellaris or Amphiprion percula. For each occurrence include: place_name (city/locality), county (if available), state, latitude, longitude, observation_date (ISO format if possible), and the exact source URL where the record appears. Exclude any records with observation dates in 2020 or later (keep only records dated before 2020). Return a JSON object with field \"occurrences\" containing an array of these occurrence objects and a field \"source_urls\" listing the inspected USGS pages. If a record lacks a precise city but has coordinates, include coordinates and a best-effort place_name (e.g., nearest named locality shown on the page). Do not invent records — only extract what the USGS pages show.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "usgs_extractor",
+          "tools": [
+            "web-scraping"
+          ],
+          "output_contract": {
+            "description": "Structured occurrence records extracted from USGS sources with dates filtered to before 2020.",
+            "required_fields": [
+              "occurrences"
+            ],
+            "identity_fields": []
+          },
+          "input_requirements": [
+            {
+              "source_key": "usgs_candidates",
+              "required_fields": [
+                "candidates"
+              ],
+              "identity_fields": [],
+              "purpose": "Inspect the listed USGS pages to extract occurrence records and their dates/locations."
+            }
+          ],
+          "research_mode": "inspection_only",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "zip_finder",
+          "instruction": "For each occurrence in {usgs_extractor?}.occurrences, determine the five-digit US ZIP code that corresponds to the reported place. Prefer authoritative sources (USPS, official city websites, or well-known postal/municipal directories). For occurrences that provide coordinates but not a city, search for the nearest named locality or municipality and obtain that locality's primary ZIP code. Use websearch-tavily for each place (search queries like \"{place_name?} {state?} ZIP code\" or \"ZIP code for {place_name?}, {state?}\"). Return JSON with field \"zip_map\" containing an array of objects: {\"place_name\",\"state\",\"zip\",\"source_url\"} — where source_url is the page used to confirm the ZIP. If you cannot determine a reliable five-digit ZIP for a place, omit that place from the results but note it in an optional \"skipped\" list.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "zip_results",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "output_contract": {
+            "description": "Mapping from extracted USGS place names to authoritative five-digit ZIP codes.",
+            "required_fields": [
+              "zip_map"
+            ],
+            "identity_fields": []
+          },
+          "input_requirements": [
+            {
+              "source_key": "usgs_extractor",
+              "required_fields": [
+                "occurrences"
+              ],
+              "identity_fields": [],
+              "purpose": "Use the extracted occurrence place names and coordinates as the basis for ZIP code lookup."
+            }
+          ],
+          "research_mode": "discovery_only",
+          "research_policy": "targeted_recovery"
+        },
+        {
+          "name": "synthesizer",
+          "instruction": "Read {zip_results?}.zip_map and produce the final caller-facing answer: a single string containing the unique five-digit ZIP codes (no duplicates), sorted ascending and separated by commas if there is more than one. If no ZIP codes could be determined, return the string: \"No zip codes found\". Output JSON with a single field \"zip_list\" containing that string. Ensure you only include ZIP codes that you sourced in {zip_results?}.zip_map.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_zips",
+          "tools": [],
+          "input_requirements": [
+            {
+              "source_key": "zip_results",
+              "required_fields": [
+                "zip_map"
+              ],
+              "identity_fields": [],
+              "purpose": "Assemble the final, deduplicated comma-separated ZIP code list from the ZIP lookup results."
+            }
+          ],
+          "research_mode": "mixed",
+          "research_policy": "independent"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "usgs_finder",
+            "children": []
+          },
+          {
+            "type": "agent",
+            "agent_name": "usgs_extractor",
+            "children": []
+          },
+          {
+            "type": "agent",
+            "agent_name": "zip_finder",
+            "children": []
+          },
+          {
+            "type": "agent",
+            "agent_name": "synthesizer",
+            "children": []
+          }
+        ]
+      },
+      "final_answer_agent": "synthesizer"
+    },
+    "failed_agent": "usgs_extractor",
+    "references": [
+      "{usgs_candidates?}"
+    ]
+  },
+  {
+    "task_id": "676e5e31-a554-4acc-9286-b60d90a92d26",
+    "config": {
+      "agents": [
+        {
+          "name": "find_1959_doc",
+          "instruction": "Use websearch-tavily to locate the authoritative 1959 document titled exactly \"United States Standards for Grades of Processed Fruits, Vegetables, and Certain Other Products\" dated July 2, 1959. Return a short JSON array of candidate sources (PDFs or official pages) with title, URL, mime (pdf/html), and a one-line snippet describing where the cataloged sections (especially a Dried/Dehydrated section and a Frozen/Chilled section) appear. Place that array in the output key.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "1959_doc_candidates",
+          "tools": [
+            "websearch-tavily"
+          ],
+          "output_contract": {
+            "description": "Discovery results for the 1959 standards doc.",
+            "required_fields": [
+              "1959_doc_candidates"
+            ],
+            "identity_fields": []
+          },
+          "input_requirements": [],
+          "research_mode": "discovery_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "extract_dehydrated_items",
+          "instruction": "Using the candidate sources found in {1959_doc_candidates?}, open the authoritative 1959 standard (prefer the PDF or USDA-hosted page). Inspect the table of contents and the Dried and Dehydrated section and the Frozen/Chilled section. Produce a JSON array named \"dehydrated_items\" containing every item that meets either of these criteria: (A) appears in the Dried and Dehydrated section and is explicitly labeled or marked as \"dehydrated\" in the 1959 text; OR (B) appears in the Frozen/Chilled section where the entry's name contains the whole name of the item from (A) (exact whole-word match), and is NOT marked as \"Chilled\" (exclude entries explicitly marked Chilled). For each item include: {\"name\": <exact item name as in 1959>, \"section\": \"Dried and Dehydrated\" or \"Frozen/Chilled\", \"page_or_location\": <page number or heading>, \"source_url\": <source URL used>, \"source_snippet\": <short snippet showing the label 'dehydrated' or the exact line from Frozen/Chilled>}. If the 1959 doc lists variations (e.g., ’apricots, dehydrated (sulphured)’), preserve the exact listed name as a single item. If you cannot find the 1959 doc, state that and return an empty array. Use the document and web-scraping tools to read pages or PDF text as needed.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "dehydrated_items",
+          "tools": [
+            "document",
+            "web-scraping"
+          ],
+          "output_contract": {
+            "description": "List of items from the 1959 standards that meet the dehydrated-selection criteria.",
+            "required_fields": [
+              "dehydrated_items"
+            ],
+            "identity_fields": [
+              "dehydrated_items[].name"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "1959_doc_candidates",
+              "required_fields": [
+                "1959_doc_candidates"
+              ],
+              "identity_fields": [],
+              "purpose": "Use the discovered candidate URL(s) to fetch and read the 1959 document and extract the Dried/Dehydrated and Frozen/Chilled entries."
+            }
+          ],
+          "research_mode": "inspection_only",
+          "research_policy": "independent"
+        },
+        {
+          "name": "check_current_status",
+          "instruction": "For each item in {dehydrated_items?}, determine whether the 1959 standard for that specific item has been superseded by a newer standard as of August 2023. For each item, search authoritative sources (USDA AMS standards pages, Federal Register entries, or equivalent AMS/USDA pages) to find the current standard text or a replacement standard. Return a JSON array named \"status_list\" with one object per item: {\"name\": <item name as in {dehydrated_items?}>, \"current_standard_url\": <URL of the current standard or null if none found>, \"last_revision_date\": <ISO date string of the latest standard revision or publication that supersedes the 1959 version, or null>, \"superseded\": <true if a post-1959 official standard replaces or updates the 1959 standard, false otherwise>, \"evidence\": [ {\"url\": <source url>, \"snippet\": <short quote or note supporting the supersession decision>} ] }. Use websearch-tavily first; inspect pages with web-scraping or document reader. Prioritize AMS/USDA authoritative pages and include direct evidence URLs. If an item has no separate modern standard and the 1959 listing remains the current official standard by AMS with no replacement, set superseded to false and last_revision_date to null. If you cannot determine status for an item, include it with superseded=null and a short note in evidence. Return the full list.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "status_list",
+          "tools": [
+            "websearch-tavily",
+            "web-scraping",
+            "document"
+          ],
+          "output_contract": {
+            "description": "Status for each 1959 item indicating whether it has been superseded since 1959.",
+            "required_fields": [
+              "status_list"
+            ],
+            "identity_fields": [
+              "status_list[].name",
+              "dehydrated_items[].name"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "dehydrated_items",
+              "required_fields": [
+                "dehydrated_items"
+              ],
+              "identity_fields": [
+                "dehydrated_items[].name"
+              ],
+              "purpose": "Use the extracted item names as the subjects to check for current standards and revision history."
+            }
+          ],
+          "research_mode": "mixed",
+          "research_policy": "evidence_first"
+        },
+        {
+          "name": "synthesizer_calculator",
+          "instruction": "Read {status_list?}. Count how many items have \"superseded\": true, how many have false, and how many are unknown (superseded is null). Compute the percent (nearest integer percent) of items that have superseded=true out of the total number of items for which a decision (true or false) can be made. Also compute the percent of superseded items out of the total items including unknowns (report both percentages). Return a JSON object in the output key named \"final_result\" with fields: {\"total_items\": <int>, \"superseded_count\": <int>, \"not_superseded_count\": <int>, \"unknown_count\": <int>, \"percent_superseded_decidable\": <int percent nearest>, \"percent_superseded_including_unknowns\": <int percent nearest>, \"method_notes\": <short note on how unknowns were handled>, \"superseded_list\": [names...], \"not_superseded_list\": [names...], \"unknown_list\": [names...]}",
+          "model": "openai/gpt-5-mini",
+          "output_key": "final_result",
+          "tools": [],
+          "output_contract": {
+            "description": "Computed counts and percentages of superseded standards.",
+            "required_fields": [
+              "final_result"
+            ],
+            "identity_fields": [
+              "status_list[].name"
+            ]
+          },
+          "input_requirements": [
+            {
+              "source_key": "status_list",
+              "required_fields": [
+                "status_list"
+              ],
+              "identity_fields": [
+                "status_list[].name"
+              ],
+              "purpose": "Use the status_list to compute counts and percentages."
+            }
+          ],
+          "research_mode": "mixed",
+          "research_policy": "independent"
+        },
+        {
+          "name": "final_writer",
+          "instruction": "Using {final_result?}, produce the concise caller-facing answer: state the single percentage (to the nearest percent) requested by the user that answers 'As of August 2023, what percent of those standards have been superseded since July 2, 1959?' If unknown items affect the defensible answer, state the chosen convention (decidable-only or including unknowns) and give the single percent the user asked for (prefer the percent computed on decidable items unless instructed otherwise). Also include one-line counts: superseded, not_superseded, unknown. Provide no extraneous commentary beyond that short summary.",
+          "model": "openai/gpt-5-mini",
+          "output_key": "answer",
+          "tools": [],
+          "input_requirements": [
+            {
+              "source_key": "final_result",
+              "required_fields": [
+                "final_result"
+              ],
+              "identity_fields": [],
+              "purpose": "Format the computed percentage and counts into the caller-facing answer."
+            }
+          ],
+          "research_mode": "mixed",
+          "research_policy": "independent"
+        }
+      ],
+      "pipeline": {
+        "type": "sequential",
+        "children": [
+          {
+            "type": "agent",
+            "agent_name": "find_1959_doc",
+            "children": []
+          },
+          {
+            "type": "agent",
+            "agent_name": "extract_dehydrated_items",
+            "children": []
+          },
+          {
+            "type": "agent",
+            "agent_name": "check_current_status",
+            "children": []
+          },
+          {
+            "type": "agent",
+            "agent_name": "synthesizer_calculator",
+            "children": []
+          },
+          {
+            "type": "agent",
+            "agent_name": "final_writer",
+            "children": []
+          }
+        ]
+      },
+      "final_answer_agent": "final_writer"
+    },
+    "failed_agent": "extract_dehydrated_items",
+    "references": [
+      "{1959_doc_candidates?}"
+    ]
+  }
+]
