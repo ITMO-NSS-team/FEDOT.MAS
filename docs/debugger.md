@@ -250,6 +250,39 @@ result = await ctrl.run_with_recovery(
 
 The default `fix_instruction` tool is replaced when you pass `fix_tools`. If you want to keep it alongside your custom tools, include it explicitly.
 
+## Executed arithmetic
+
+For a numerical step, set `calculation_result_field` to a required top-level
+field of its `output_contract`, for example `"answer"`. This adds the built-in
+`calculate` tool; it does not require another MCP server. The worker supplies
+an expression, named numeric inputs as JSON, and optional `decimal_places`.
+The tool uses bounded decimal arithmetic with half-even rounding and records
+the inputs, expression, precision and result. It cannot execute arbitrary code.
+
+Before accepting the output, the runtime checks that the declared field equals
+the last successful calculation result from that agent. A missing calculation
+or a different value rejects the handoff and blocks dependent consumers.
+Recovery preserves this declaration. Existing configurations without the field
+remain compatible and do not gain this check automatically. The check confirms
+execution and numerical consistency, not the correctness of the chosen source
+values, units or formula; those still need evidence and task-specific checks.
+
+## Reusing validated checkpoints
+
+`RETRY_FAILED` and `RESTART_AFTER` reuse only unchanged agents with a validated,
+nonempty result, satisfied input/output contracts and no unresolved execution
+issue. A checkpoint is finalized after the agent's validation callbacks; a
+snapshot taken before validation cannot be reused. Changing an agent also
+invalidates its downstream dependents. An unaffected parallel branch can be
+retained. Changes to the workflow structure conservatively restart the whole
+workflow, and agents inside loops are always rerun. `RESTART_ALL` retains none.
+
+Only retained outputs and their file/calculation provenance are projected into
+the retry state. Rejected outputs, arbitrary session state, old completion
+markers and execution counters are not copied. Callers providing an external
+recovery loop must preserve original task inputs and pass the remaining shared
+time budget to each retry; checkpoint reuse does not enforce that outer budget.
+
 ## Final answers and explicit abstention
 
 When a caller supplies `final_answer_contract`, a terminal agent without tools
@@ -260,8 +293,17 @@ an answer when the user requested only the person. References and declared input
 requirements still supply evidence, and missing inputs still produce diagnostics.
 Input identities select the evidence; they do not mandate extra output fields.
 This does not add a model call or modify the saved configuration. Without a caller
-contract, the configured instruction is used as before. Terminal agents that
-still need tools retain their working instructions.
+contract, the configured instruction is used as before.
+
+A terminal agent with tools (including built-in calculation) first completes
+its research with its working instructions and structured output contract.
+After validation, a separate tools-free request formats that evidence for the
+original user task and caller contract. The presentation request does not
+receive the generated research instructions or conversation history. It uses
+the same model and consumes one of the agent's existing turns within the run
+deadline; its tokens are included in run usage. Unresolved research is not
+formatted. Exhausted turn budgets, empty or truncated presentation responses,
+and attempted tool calls produce an unresolved result rather than success.
 
 A terminal `<abstain>reason</abstain>` is recognized even after explanatory prose,
 or inside an erroneous `<solution>` wrapper. It makes the pipeline `incomplete`

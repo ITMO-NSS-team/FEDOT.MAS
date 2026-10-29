@@ -19,6 +19,7 @@ _EDITABLE_FIELDS = {
     "output_contract",
     "input_requirements",
     "research_mode",
+    "calculation_result_field",
 }
 
 
@@ -52,6 +53,7 @@ class AgentConfigRepair(BaseModel):
     research_mode: Literal["discovery_only", "mixed", "inspection_only"] | None = None
     output_contract: ArtifactContract | None = None
     input_requirements: list[ArtifactRequirement] | None = None
+    calculation_result_field: str | None = None
     output_field_renames: list[OutputFieldRename] | None = None
     input_field_renames: list[InputFieldRename] | None = None
 
@@ -320,6 +322,9 @@ async def fix_agent_configs(
             agents[name].update({key: update[key] for key in fields & _EDITABLE_FIELDS})
             touched.add(name)
         candidate = MAWConfig.model_validate(payload)
+        from fedotmas.maw._evidence_requirements import preserve_task_evidence
+
+        preserve_task_evidence(config, candidate)
         old_agents = {agent.name: agent for agent in config.agents}
         for agent in candidate.agents:
             if agent.name in input_updates:

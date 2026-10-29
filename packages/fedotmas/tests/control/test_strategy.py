@@ -38,9 +38,7 @@ class TestRetryFailed:
         old = _config("a", "b", "c")
         new = _config("a", "b", "c")
 
-        state, completed = resolve_initial_state(
-            Strategy.RETRY_FAILED, cps, old, new
-        )
+        state, completed = resolve_initial_state(Strategy.RETRY_FAILED, cps, old, new)
 
         assert state == {"a": "output_a", "b": "output_b"}
         assert completed == {"a", "b"}
@@ -48,9 +46,7 @@ class TestRetryFailed:
     def test_empty_checkpoints(self):
         old = _config("a", "b")
         new = _config("a", "b")
-        state, completed = resolve_initial_state(
-            Strategy.RETRY_FAILED, [], old, new
-        )
+        state, completed = resolve_initial_state(Strategy.RETRY_FAILED, [], old, new)
         assert state is None
         assert completed == set()
 
@@ -72,32 +68,26 @@ class TestRestartAfter:
             ),
         )
 
-        state, completed = resolve_initial_state(
-            Strategy.RESTART_AFTER, cps, old, new
-        )
+        state, completed = resolve_initial_state(Strategy.RESTART_AFTER, cps, old, new)
 
         assert state == {"a": "output_a"}
         assert completed == {"a"}
 
-    def test_cuts_at_removed_agent(self):
+    def test_changed_workflow_requires_fresh_execution(self):
         cps = _checkpoints("a", "b")
         old = _config("a", "b", "c")
         new = _config("a", "c")
 
-        state, completed = resolve_initial_state(
-            Strategy.RESTART_AFTER, cps, old, new
-        )
+        state, completed = resolve_initial_state(Strategy.RESTART_AFTER, cps, old, new)
 
-        assert state == {"a": "output_a"}
-        assert completed == {"a"}
+        assert state is None
+        assert completed == set()
 
     def test_all_unchanged(self):
         cps = _checkpoints("a", "b")
         cfg = _config("a", "b", "c")
 
-        state, completed = resolve_initial_state(
-            Strategy.RESTART_AFTER, cps, cfg, cfg
-        )
+        state, completed = resolve_initial_state(Strategy.RESTART_AFTER, cps, cfg, cfg)
 
         assert state == {"a": "output_a", "b": "output_b"}
         assert completed == {"a", "b"}
@@ -118,9 +108,7 @@ class TestRestartAfter:
             ),
         )
 
-        state, completed = resolve_initial_state(
-            Strategy.RESTART_AFTER, cps, old, new
-        )
+        state, completed = resolve_initial_state(Strategy.RESTART_AFTER, cps, old, new)
 
         assert state is None
         assert completed == set()
@@ -131,9 +119,7 @@ class TestRestartAll:
         cps = _checkpoints("a", "b")
         cfg = _config("a", "b", "c")
 
-        state, completed = resolve_initial_state(
-            Strategy.RESTART_ALL, cps, cfg, cfg
-        )
+        state, completed = resolve_initial_state(Strategy.RESTART_ALL, cps, cfg, cfg)
 
         assert state is None
         assert completed == set()

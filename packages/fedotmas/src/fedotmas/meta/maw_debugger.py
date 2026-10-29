@@ -215,6 +215,10 @@ async def diagnose_and_fix(
         proposed["evidence_requirements"] = [
             r.model_dump() for r in failing_agent.evidence_requirements
         ]
+        if failing_agent.calculation_result_field:
+            proposed["calculation_result_field"] = (
+                failing_agent.calculation_result_field
+            )
         MAWAgentConfig.model_validate(proposed)
 
     result = await run_meta_agent_call(
@@ -257,6 +261,8 @@ async def diagnose_and_fix(
     payload["evidence_requirements"] = [
         r.model_dump() for r in failing_agent.evidence_requirements
     ]
+    if failing_agent.calculation_result_field:
+        payload["calculation_result_field"] = failing_agent.calculation_result_field
     fixed = MAWAgentConfig.model_validate(payload)
 
     _log.info(

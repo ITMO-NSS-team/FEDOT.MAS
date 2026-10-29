@@ -208,6 +208,7 @@ class MAWAgentConfig(BaseModel):
     output_contract: ArtifactContract | None = None
     input_requirements: list[ArtifactRequirement] = []
     evidence_requirements: list[EvidenceRequirement] = []
+    calculation_result_field: str | None = None
     research_mode: Literal["discovery_only", "mixed", "inspection_only"] = "mixed"
     research_policy: Literal["independent", "evidence_first", "targeted_recovery"] = (
         "independent"
@@ -215,6 +216,19 @@ class MAWAgentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_turn_limit(self) -> MAWAgentConfig:
+        if self.calculation_result_field is not None:
+            if not re.fullmatch(r"[A-Za-z_]\w*", self.calculation_result_field):
+                raise ValueError(
+                    "calculation_result_field must be a top-level field name"
+                )
+            if (
+                self.output_contract is None
+                or self.calculation_result_field
+                not in self.output_contract.required_fields
+            ):
+                raise ValueError(
+                    "calculation_result_field must be required by output_contract"
+                )
         if self.max_llm_turns is not None and self.max_llm_turns < 1:
             raise ValueError("max_llm_turns must be >= 1")
         return self

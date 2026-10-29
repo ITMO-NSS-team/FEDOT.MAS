@@ -35,6 +35,14 @@ a maximum rate. Missing units or conversion factors remain unresolved.
 Recovery may change retrieval routes and fix schema wiring; it cannot delete
 source obligations or turn assumed values into observed facts. Return unresolved
 when a required source or field cannot be established.
+
+For arithmetic, ratios, unit conversions and rounding, set the computing agent's
+calculation_result_field to a top-level required output_contract field. The
+runtime supplies a built-in calculate tool (do not put it in the MCP tools list).
+Use that tool with evidence-backed named inputs and the requested decimal_places;
+the declared output must match its last successful result. Use an actual code
+execution tool for table filtering or algorithms, then calculate for any final
+arithmetic. Keep numerical work separate from final presentation.
 """.strip()
 
 
@@ -78,9 +86,16 @@ def validate_task_evidence(config: MAWConfig, task: str) -> None:
 def preserve_task_evidence(old: MAWConfig, new: MAWConfig) -> None:
     agents = {a.name: a for a in new.agents}
     for previous in old.agents:
+        replacement = agents.get(previous.name)
+        if previous.calculation_result_field and (
+            replacement is None
+            or replacement.calculation_result_field != previous.calculation_result_field
+        ):
+            raise ValueError(
+                f"Recovery must preserve calculation requirement for '{previous.name}'"
+            )
         if not previous.evidence_requirements:
             continue
-        replacement = agents.get(previous.name)
         if replacement is None or any(
             r not in replacement.evidence_requirements
             for r in previous.evidence_requirements

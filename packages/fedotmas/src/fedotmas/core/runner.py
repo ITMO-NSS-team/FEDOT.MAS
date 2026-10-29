@@ -190,8 +190,10 @@ async def run_pipeline(
     metadata = final_session.state.get("_fedotmas_execution", {})
     if not isinstance(metadata, dict):
         metadata = {}
-    repair_usage = metadata.get("contract_repair_tokens", {})
-    if isinstance(repair_usage, dict):
+    for extra_usage_key in ("contract_repair_tokens", "terminal_format_tokens"):
+        repair_usage = metadata.get(extra_usage_key, {})
+        if not isinstance(repair_usage, dict):
+            continue
         prompt_tokens = repair_usage.get("prompt_tokens", 0)
         completion_tokens = repair_usage.get("completion_tokens", 0)
         if isinstance(prompt_tokens, int) and not isinstance(prompt_tokens, bool):

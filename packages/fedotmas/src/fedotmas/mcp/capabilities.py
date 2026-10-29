@@ -80,7 +80,7 @@ _MEDIA_INSPECTION = frozenset(
     }
 )
 _BROWSER = frozenset({"complete_browser_task"})
-_COMPUTATION = frozenset({"solve_with_code", "run_python", "execute_code"})
+_COMPUTATION = frozenset({"solve_with_code", "run_python", "execute_code", "calculate"})
 _DIAGNOSTIC = frozenset(
     {
         "telemetry",

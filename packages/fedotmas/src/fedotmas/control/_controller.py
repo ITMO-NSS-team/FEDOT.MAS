@@ -21,7 +21,11 @@ from fedotmas.common.llm import make_llm
 from fedotmas.common.logging import get_logger
 from fedotmas.control._iterable import IterableRun
 from fedotmas.control._run import ControlledRun, RunError, extract_failed_agent_name
-from fedotmas.control._strategy import Strategy, resolve_initial_state
+from fedotmas.control._strategy import (
+    Strategy,
+    resolve_initial_state,
+    checkpoint_usable,
+)
 from fedotmas.core.runner import PipelineExecutionError, run_pipeline
 from fedotmas.maw.handoffs import ABSTENTION_STATE_KEY, unresolved_execution_issues
 from fedotmas.maw.maw import MAW
@@ -516,12 +520,9 @@ class Controller:
                 default=str,
             )
             # A checkpoint for an unfinished agent must never be skipped on resume.
-            checkpoints = []
-            if failed != "unknown":
-                for item in checkpoint.checkpoints:
-                    if item.agent_name == failed:
-                        break
-                    checkpoints.append(item)
+            checkpoints = [
+                cp for cp in checkpoint.checkpoints if checkpoint_usable(cp, config)
+            ]
             return ControlledRun(
                 config=config,
                 status="error",

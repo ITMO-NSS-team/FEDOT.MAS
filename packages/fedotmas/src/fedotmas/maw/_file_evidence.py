@@ -132,6 +132,7 @@ def record_file_evidence(
     entry = dict(agents.get(agent) or {})
     payload = _unwrap(response)
     aliases = dict(root.get("source_aliases") or {})
+    alias_owners = dict(root.get("alias_owners") or {})
     source = args.get("file_path") or args.get("path") or args.get("url")
     if name in {"goto", "navigate"}:
         # A failed navigation must not lend its URL to a later DOM read.
@@ -154,6 +155,7 @@ def record_file_evidence(
             origin = item.get("url") or (urls[0] if len(urls) == 1 else None)
             if origin and len(aliases) < 256:
                 aliases[_digest(item["file_path"])] = [_digest(origin)]
+                alias_owners[_digest(item["file_path"])] = agent
     if name == "extract_zip" and isinstance(payload, dict) and source:
         directory = payload.get("output_dir")
         for path in payload.get("files") or []:
@@ -165,7 +167,11 @@ def record_file_evidence(
                 aliases[
                     _digest(posixpath.normpath(posixpath.join(directory, path)))
                 ] = [_digest(source), *aliases.get(_digest(source), [])]
+                alias_owners[
+                    _digest(posixpath.normpath(posixpath.join(directory, path)))
+                ] = agent
     root["source_aliases"] = aliases
+    root["alias_owners"] = alias_owners
     if name in _PREPARATION:
         entry["prepared"] = True
         # A file locator may legitimately hand off paths/names returned by a

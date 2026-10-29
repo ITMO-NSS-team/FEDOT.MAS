@@ -34,6 +34,7 @@ from fedotmas.maw._artifact_repair import (
     repair_source,
 )
 from fedotmas.maw._file_evidence import (
+    FILE_EVIDENCE_STATE_KEY,
     begin_file_evidence,
     record_file_evidence,
     reject_file_artifact,
@@ -43,8 +44,14 @@ from fedotmas.maw._file_evidence import (
     missing_source_evidence,
 )
 from fedotmas.maw._evidence_requirements import evidence_instruction
+from fedotmas.maw._calculation import CALCULATIONS_KEY, calculate, result_matches
+from fedotmas.maw._terminal_format import format_answer
 from fedotmas.maw._validators import _find_terminal_node, agent_executes_in_loop
-from fedotmas.maw._research_fallback import allow_fallback, record_retrieval
+from fedotmas.maw._research_fallback import (
+    allow_fallback,
+    record_retrieval,
+    RETRIEVAL_STATE_KEY,
+)
 from fedotmas.maw.handoffs import (
     ABSTENTION_STATE_KEY,
     EXECUTION_METADATA_KEY,
@@ -61,6 +68,7 @@ from fedotmas.maw.handoffs import (
     parse_artifact_candidates,
     resolve_execution_issue,
     validate_output_contract,
+    unresolved_execution_issues,
 )
 from fedotmas.maw.models import MAWAgentConfig, MAWConfig, MAWStepConfig
 from fedotmas.maw.task_requirements import task_requirements_instruction
@@ -784,6 +792,10 @@ def _start_invocation(callback_context: CallbackContext) -> None:
             RESEARCH_EVIDENCE_ACTION_STATE_KEY,
             RESEARCH_CONTROLLER_STATE_KEY,
             CODE_AGENT_POLICY_STATE_KEY,
+            FILE_EVIDENCE_STATE_KEY,
+            RETRIEVAL_STATE_KEY,
+            CALCULATIONS_KEY,
+            "__fedotmas_terminal_research",
         ):
             state[key] = {}
         metadata = {}
@@ -947,14 +959,26 @@ def _build_llm_agent(
     tools: list = []
     for tool_name in cfg.tools:
         tools.append(create_toolset(tool_name, registry=mcp_registry))
+    if cfg.calculation_result_field:
+        tools.append(calculate)
 
     model = _resolve_llm(cfg.model, worker_models)
     _log.debug("Built agent | name={} model={}", cfg.name, model)
     terminal_boundary = (
         final_answer_contract is not None and cfg.name == final_answer_agent
     )
-    answer_only = terminal_boundary and not cfg.tools
+    needs_format = terminal_boundary and bool(cfg.tools or cfg.calculation_result_field)
+    answer_only = terminal_boundary and not needs_format
     instruction_text = cfg.instruction
+    if cfg.calculation_result_field:
+        instruction_text += (
+            "\nUse calculate for the requested numerical result, with explicit inputs "
+            "from the evidence and requested rounding. Return the last successful "
+            f"calculate result in JSON field '{cfg.calculation_result_field}'. "
+            "Do not calculate in prose or substitute assumed inputs."
+        )
+    if needs_format:
+        instruction_text += "\nReturn the supported findings and required structured evidence. Final presentation is performed separately."
     if "document" in cfg.tools:
         instruction_text += (
             "\n\nFile evidence: listing, downloading or extracting an archive only "
@@ -1026,9 +1050,9 @@ def _build_llm_agent(
             "that exposes a concrete implementation defect, one targeted correction. "
             "Then finalize ACCEPT, REJECT, or UNRESOLVED."
         )
-    if cfg.output_contract is not None and not terminal_boundary:
+    if cfg.output_contract is not None and (not terminal_boundary or needs_format):
         instruction_text += _contract_instruction(cfg)
-    if terminal_boundary:
+    if terminal_boundary and not needs_format:
         instruction_text = (
             f"{instruction_text}\n\nFINAL ANSWER CONTRACT (terminal stage only):\n"
             "This caller contract takes precedence over any conflicting JSON, "
@@ -1076,7 +1100,7 @@ def _build_llm_agent(
             output_key=cfg.output_key,
             input_requirements=cfg.input_requirements,
             research_policy=cfg.research_policy,
-            terminal_answer=terminal_boundary,
+            terminal_answer=terminal_boundary and not needs_format,
         )
         if _STATE_REF_RE.search(instruction_text) or cfg.input_requirements
         else instruction_text
@@ -1125,6 +1149,10 @@ def _build_llm_agent(
                 role="model", parts=[genai_types.Part(text=value)]
             )
         begin_file_evidence(callback_context.state, cfg.name)
+        if cfg.calculation_result_field:
+            calculations = dict(callback_context.state.get(CALCULATIONS_KEY) or {})
+            calculations[cfg.name] = []
+            callback_context.state[CALCULATIONS_KEY] = calculations
         _seed_upstream_candidates(callback_context.state, cfg)
         modes = callback_context.state.get(RESEARCH_MODE_STATE_KEY)
         if not isinstance(modes, dict):
@@ -1212,8 +1240,106 @@ def _build_llm_agent(
         )
         return True
 
+    async def present_terminal(callback_context: CallbackContext) -> None:
+        state = callback_context.state
+        draft = state.get(cfg.output_key)
+        if _is_blank(draft):
+            state[ABSTENTION_STATE_KEY] = {
+                "status": "unresolved",
+                "agent": cfg.name,
+                "reason": "No research result to present",
+            }
+            return
+        if is_explicit_abstention(draft) or is_unresolved_answer(draft):
+            return
+        if unresolved_execution_issues(state):
+            state[ABSTENTION_STATE_KEY] = {
+                "status": "unresolved",
+                "agent": cfg.name,
+                "reason": "Evidence obligations remain unresolved",
+            }
+            return
+        metadata = dict(state.get(EXECUTION_METADATA_KEY) or {})
+        turns = dict(metadata.get("agent_llm_turns") or {})
+        used = turns.get(cfg.name, 0)
+        if used >= per_agent_limit:
+            metadata.setdefault("limited_agents", {})[cfg.name] = {
+                "limit": per_agent_limit,
+                "turns": used,
+                "node": cfg.name,
+            }
+            state[EXECUTION_METADATA_KEY] = metadata
+            state[ABSTENTION_STATE_KEY] = {
+                "status": "unresolved",
+                "agent": cfg.name,
+                "reason": "No remaining model turn for final presentation",
+            }
+            return
+        turns[cfg.name] = used + 1
+        metadata["agent_llm_turns"] = turns
+        usage = metadata.setdefault(
+            "terminal_format_tokens", {"prompt_tokens": 0, "completion_tokens": 0}
+        )
+        state[EXECUTION_METADATA_KEY] = metadata
+        drafts = dict(state.get("__fedotmas_terminal_research") or {})
+        drafts[cfg.name] = draft
+        state["__fedotmas_terminal_research"] = drafts
+        state[ABSTENTION_STATE_KEY] = {
+            "status": "unresolved",
+            "agent": cfg.name,
+            "reason": "Final presentation pending",
+        }
+        try:
+            formatted = await format_answer(
+                model,
+                state.get("user_query", ""),
+                draft,
+                final_answer_contract or "",
+                cfg.max_output_tokens or 2048,
+                usage,
+            )
+        except ValueError as exc:
+            state[cfg.output_key] = f"<abstain>{exc}</abstain>"
+            return
+        finally:
+            state[EXECUTION_METADATA_KEY] = metadata
+        state[cfg.output_key] = formatted
+        state[ABSTENTION_STATE_KEY] = {
+            "status": "unresolved"
+            if is_unresolved_answer(formatted) or is_explicit_abstention(formatted)
+            else "completed",
+            "agent": cfg.name,
+        }
+
     async def after_agent(callback_context: CallbackContext) -> None:
         value = callback_context.state.get(cfg.output_key)
+        if cfg.calculation_result_field:
+            receipts = (callback_context.state.get(CALCULATIONS_KEY) or {}).get(
+                cfg.name
+            ) or []
+            artifact = parse_artifact(value, cfg.output_contract)
+            if (
+                not receipts
+                or not artifact
+                or not result_matches(
+                    artifact.get(cfg.calculation_result_field), receipts[-1]["result"]
+                )
+            ):
+                reject_file_artifact(
+                    callback_context.state,
+                    cfg.output_key,
+                    "Numerical result is missing or does not match executed calculate output",
+                )
+                append_execution_issue(
+                    callback_context.state,
+                    {
+                        "kind": "incomplete_artifact",
+                        "agent": cfg.name,
+                        "output_key": cfg.output_key,
+                        "missing_fields": ["executed_calculation"],
+                    },
+                )
+                return
         if cfg.name == final_answer_agent and is_explicit_abstention(value):
             callback_context.state[ABSTENTION_STATE_KEY] = {
                 "status": "abstained",
@@ -1238,7 +1364,7 @@ def _build_llm_agent(
                 "agent": cfg.name,
             }
         terminal_answer = terminal_boundary
-        if terminal_answer:
+        if terminal_answer and not needs_format:
             if reject_missing_source(callback_context.state, value):
                 return
             # This role may recover an input dependency, but its answer is
@@ -1251,6 +1377,8 @@ def _build_llm_agent(
                 }
             return
         if cfg.output_contract is None:
+            if needs_format:
+                await present_terminal(callback_context)
             return
         if reject_unread_artifact(callback_context.state, value):
             return
@@ -1467,6 +1595,9 @@ def _build_llm_agent(
                             "source_key": requirement.source_key,
                         },
                     )
+
+        if needs_format and not missing:
+            await present_terminal(callback_context)
 
     async def before_tool(tool, args, tool_context) -> dict | None:
         capability = _runtime_tool_capability(tool)
@@ -1844,7 +1975,8 @@ def _build_llm_agent(
             )
         turn_index = used + 1
         task_instruction = task_requirements_instruction(
-            state.get("user_query"), terminal=cfg.name == final_answer_agent
+            state.get("user_query"),
+            terminal=cfg.name == final_answer_agent and not needs_format,
         )
         if task_instruction:
             llm_request.append_instructions([task_instruction])
