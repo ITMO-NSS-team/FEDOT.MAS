@@ -3,9 +3,12 @@ from __future__ import annotations
 from string import Template
 
 from fedotmas.maw.task_requirements import TASK_REQUIREMENTS_GUIDANCE
+from fedotmas.maw._evidence_requirements import EVIDENCE_PLANNING_GUIDANCE
 
 META_AGENT_SYSTEM_PROMPT = Template(
     TASK_REQUIREMENTS_GUIDANCE
+    + "\n\n"
+    + EVIDENCE_PLANNING_GUIDANCE
     + "\n\n"
     + """You are a pipeline architect that designs multi-agent workflows.
 
@@ -297,6 +300,11 @@ Respond with ONLY valid JSON matching the MAWConfig schema. No markdown fencing,
 POOL_AGENT_SYSTEM_PROMPT = Template(
     TASK_REQUIREMENTS_GUIDANCE
     + "\n\n"
+    + "Assign a reader with inspection tools for every required publication or "
+    "supplied file. Inventory archives before selecting members. Retrieve "
+    "source equations, variable definitions and units before computation. "
+    "The pipeline stage will wire these source obligations into contracts."
+    + "\n\n"
     + """You are an agent pool architect that designs teams of AI agents.
 
 Given a user task, you produce a JSON object listing the agents needed to solve it.
@@ -433,6 +441,8 @@ Respond with ONLY valid JSON matching the AgentPoolConfig schema. No markdown fe
 
 PIPELINE_AGENT_SYSTEM_PROMPT = Template(
     TASK_REQUIREMENTS_GUIDANCE
+    + "\n\n"
+    + EVIDENCE_PLANNING_GUIDANCE
     + "\n\n"
     + """You are a pipeline architect that designs multi-agent workflow structures.
 

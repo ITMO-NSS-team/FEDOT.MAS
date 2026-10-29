@@ -399,6 +399,9 @@ class Controller:
             new_config = MAWConfig.model_validate_json(config_raw)
         else:
             new_config = MAWConfig.model_validate(config_raw)
+        from fedotmas.maw._evidence_requirements import preserve_task_evidence
+
+        preserve_task_evidence(current_config, new_config)
         _log.info("Debugger produced new config | agents={}", len(new_config.agents))
         return new_config
 

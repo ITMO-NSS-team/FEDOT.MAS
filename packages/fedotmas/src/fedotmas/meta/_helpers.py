@@ -110,13 +110,21 @@ def validate_allowed_models(raw_output: Any, allowed_models: list[str]) -> None:
             )
 
 
-def validate_pipeline_output(raw_output: Any, *, available_tools: set[str]) -> None:
+def validate_pipeline_output(
+    raw_output: Any, *, available_tools: set[str], task: str | None = None
+) -> None:
     """Reject contradictory handoffs and unavailable tools inside meta retries."""
     from fedotmas.maw.contracts import handoff_contract_errors
     from fedotmas.maw.models import MAWConfig
 
     config = parse_llm_output(raw_output, MAWConfig)
-    errors = handoff_contract_errors(config)
+    from fedotmas.maw._evidence_requirements import evidence_flow_errors
+
+    if task is not None:
+        from fedotmas.maw._evidence_requirements import validate_task_evidence
+
+        validate_task_evidence(config, task)
+    errors = [*handoff_contract_errors(config), *evidence_flow_errors(config)]
     for agent in config.agents:
         unknown = set(agent.tools) - available_tools
         if unknown:

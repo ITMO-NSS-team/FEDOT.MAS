@@ -10,6 +10,7 @@ from fedotmas.maw._validators import (
     collect_agent_refs,
 )
 from fedotmas.maw.models import MAWConfig
+from fedotmas.maw._evidence_requirements import evidence_flow_errors
 
 _log = get_logger("fedotmas.control.fixes.guardrails")
 
@@ -22,7 +23,7 @@ def run_config_guardrails(config: MAWConfig) -> list[str]:
     already run during ``MAWConfig`` construction — this catches the softer
     checks.
     """
-    errors: list[str] = []
+    errors: list[str] = evidence_flow_errors(config)
 
     agent_names = {a.name for a in config.agents}
     referenced: set[str] = set()

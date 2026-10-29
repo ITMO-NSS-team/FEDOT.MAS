@@ -133,6 +133,56 @@ override the current request. This preserves task context, but does not prove
 that a model's answer or chosen evidence is correct. Use task-specific checks
 for those properties.
 
+### Source obligations during generation and recovery
+
+An extraction agent can declare `evidence_requirements` separately from its
+editable instruction. For example:
+
+```python
+from fedotmas import EvidenceRequirement
+
+equation_source = EvidenceRequirement(
+    task_quote="Use the equation from https://example.org/paper",
+    source="https://example.org/paper",
+    source_kind="url",
+    source_field="source_url",
+    required_fields=["formula", "units", "variable_bindings"],
+)
+```
+
+Put this object in the reader's `evidence_requirements`. Its
+`output_contract.required_fields` must include `source_url`, `formula`, `units`
+and `variable_bindings`. Generation checks that the quote occurs in the original
+task, the reader has inspection tools, and downstream consumers explicitly
+require these fields after the reader executes. Explicit `Host file path:` task
+metadata must also have a file evidence requirement. Archive contents should be
+inventoried before choosing their roles or assuming filenames and XML tags.
+
+The runtime checks that the artifact's `source_field` points to an executed,
+nonempty read. A literal URL/file obligation must match that source, including
+recorded download-to-file and archive-to-member links. Navigation, search
+snippets, errors and tool calls written in model prose do not fulfill the
+obligation. Missing source evidence replaces the output with an unresolved
+marker and stops dependent agents. A later successful producer run can resolve
+the dependency. Keep structured extraction separate from final answer formatting.
+
+Instruction repair retains these obligations; replacing the agent/configuration
+cannot remove them or drop the required fields and reading capability. They are
+also appended at model-request time independently of the repaired instruction.
+For `source_kind="reference"`, `source` is the task's named source and
+`source_field` contains its resolved URL/path. The runtime checks that locator
+was read; it does **not** establish the semantic identity of the publication,
+correctness of a formula, units or every extracted value. Arbitrary named source
+requirements must be declared by the planner; they are not inferred reliably
+from all natural-language task descriptions. Existing configurations with no
+`evidence_requirements` remain compatible and do not acquire them automatically.
+
+During generation, a missing `identity_field_mapping` can use one targeted retry
+within the existing retry budget. It may only add the missing mappings; the
+instructions, tools, contracts and pipeline must remain unchanged. The runtime
+does not guess that two identities are equivalent from their leaf names. An
+invalid or broader rewrite fails validation instead of weakening the contract.
+
 ### Checking result values
 
 A check function receives the full pipeline state as a dictionary and returns either an error message (a string describing what went wrong) or `None` if the output is correct. The error message is passed directly to the meta-debugger, so write it as an instruction that explains what needs to be fixed.

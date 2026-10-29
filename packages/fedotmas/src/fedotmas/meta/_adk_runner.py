@@ -22,6 +22,11 @@ from fedotmas._settings import ModelConfig
 from fedotmas.common.llm import make_llm
 from fedotmas.common.logging import get_logger
 from fedotmas.meta._helpers import validate_allowed_models
+from fedotmas.meta._identity_repair import (
+    identity_repair_payload,
+    identity_repair_message,
+    validate_identity_only_repair,
+)
 
 _log = get_logger("fedotmas.meta._adk_runner")
 
@@ -103,6 +108,7 @@ async def run_meta_agent_call(
     failed_elapsed = 0.0
     effective_timeout_s = _resolve_timeout(timeout_s)
     max_output_tokens = _resolve_max_output_tokens()
+    identity_original = None
     for attempt in range(max_retries + 1):
         attempt_usage: dict[str, int | float] = {
             "prompt": 0,
@@ -131,6 +137,8 @@ async def run_meta_agent_call(
                     result = await call
             if output_validator is not None:
                 output_validator(result.raw_output)
+            if identity_original is not None:
+                validate_identity_only_repair(identity_original, result.raw_output)
             return LLMCallResult(
                 raw_output=result.raw_output,
                 prompt_tokens=failed_prompt_tokens + result.prompt_tokens,
@@ -148,6 +156,10 @@ async def run_meta_agent_call(
             error_with_usage.prompt_tokens = failed_prompt_tokens
             error_with_usage.completion_tokens = failed_completion_tokens
             error_with_usage.elapsed = failed_elapsed
+            if identity_original is not None:
+                # One targeted retry uses the existing retry budget. Never fall
+                # back to rewriting the plan when the restricted repair fails.
+                raise
             if isinstance(e, TimeoutError):
                 _log.error(
                     "{} timed out after {:.1f}s; not retrying the same prompt",
@@ -176,6 +188,12 @@ async def run_meta_agent_call(
                     e,
                     output_truncated=bool(attempt_usage.get("truncation_warning")),
                 )
+                if output_schema.__name__ == "MAWConfig":
+                    identity_original = identity_repair_payload(e)
+                    if identity_original is not None:
+                        effective_message = identity_repair_message(
+                            user_message, identity_original, e
+                        )
             else:
                 _log.error(
                     "{} failed after {} attempts: {}",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fedotmas._settings import validate_model_name
 from fedotmas.common.logging import get_logger
@@ -169,6 +169,32 @@ class ArtifactRequirement(BaseModel):
         )
 
 
+class EvidenceRequirement(BaseModel):
+    """A source obligation retained independently of a repairable instruction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_quote: str = Field(min_length=1)
+    source: str = Field(min_length=1)
+    source_kind: Literal["url", "file", "reference"]
+    source_field: str = Field(min_length=1)
+    required_fields: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> EvidenceRequirement:
+        if not self.task_quote.strip() or not self.source.strip():
+            raise ValueError("Evidence source and task_quote must not be blank")
+        if self.source not in self.task_quote:
+            raise ValueError("Evidence source must occur verbatim in task_quote")
+        if self.source_kind == "url" and not self.source.startswith(
+            ("https://", "http://")
+        ):
+            raise ValueError("URL evidence requires an HTTP(S) source")
+        if any(not field.strip() for field in self.required_fields):
+            raise ValueError("Evidence required_fields must not contain blank paths")
+        return self
+
+
 class MAWAgentConfig(BaseModel):
     """Configuration for a single LLM agent."""
 
@@ -181,6 +207,7 @@ class MAWAgentConfig(BaseModel):
     max_llm_turns: int | None = None
     output_contract: ArtifactContract | None = None
     input_requirements: list[ArtifactRequirement] = []
+    evidence_requirements: list[EvidenceRequirement] = []
     research_mode: Literal["discovery_only", "mixed", "inspection_only"] = "mixed"
     research_policy: Literal["independent", "evidence_first", "targeted_recovery"] = (
         "independent"
@@ -197,6 +224,43 @@ class MAWAgentConfig(BaseModel):
         validate_model_name(self.model)
 
         self.instruction = _normalize_curly_state_refs(self.instruction)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_evidence_requirements(self) -> MAWAgentConfig:
+        if not self.evidence_requirements:
+            return self
+        from fedotmas.mcp.capabilities import ToolCapability, tool_capability
+
+        readers = {
+            ToolCapability.URL_INSPECTION,
+            ToolCapability.DOCUMENT_INSPECTION,
+            ToolCapability.MEDIA_INSPECTION,
+            ToolCapability.BROWSER_NAVIGATION,
+        }
+        if self.research_mode == "discovery_only" or not any(
+            (
+                tool_capability(tool) in readers
+                and tool not in {"download", "download_file"}
+            )
+            or tool in {"code-agent", "media"}
+            for tool in self.tools
+        ):
+            raise ValueError(
+                f"Agent '{self.name}' has source obligations but no inspection route; discovery or download alone is insufficient"
+            )
+        fields = (
+            set(self.output_contract.required_fields) if self.output_contract else set()
+        )
+        missing = {
+            field
+            for r in self.evidence_requirements
+            for field in [*r.required_fields, r.source_field]
+        } - fields
+        if missing:
+            raise ValueError(
+                f"Agent '{self.name}' must retain evidence fields in output_contract.required_fields: {sorted(missing)}"
+            )
         return self
 
 

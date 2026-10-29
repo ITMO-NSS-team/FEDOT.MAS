@@ -210,6 +210,13 @@ async def diagnose_and_fix(
         output_key=failing_agent.output_key,
     )
 
+    def validate_source_obligations(raw):
+        proposed = parse_llm_output(raw, MAWAgentConfig).model_dump()
+        proposed["evidence_requirements"] = [
+            r.model_dump() for r in failing_agent.evidence_requirements
+        ]
+        MAWAgentConfig.model_validate(proposed)
+
     result = await run_meta_agent_call(
         agent_name="debugger",
         instruction=instruction,
@@ -223,6 +230,7 @@ async def diagnose_and_fix(
         session_service=session_service,
         max_retries=2,
         allowed_models=[m.model for m in resolved_workers],
+        output_validator=validate_source_obligations,
     )
 
     fixed = parse_llm_output(result.raw_output, MAWAgentConfig)
@@ -242,6 +250,14 @@ async def diagnose_and_fix(
             fixed.output_key,
         )
         fixed = fixed.model_copy(update={"output_key": failing_agent.output_key})
+
+    # Source obligations are not editable prose. Restore and revalidate them
+    # even if a generated replacement omits the optional field.
+    payload = fixed.model_dump()
+    payload["evidence_requirements"] = [
+        r.model_dump() for r in failing_agent.evidence_requirements
+    ]
+    fixed = MAWAgentConfig.model_validate(payload)
 
     _log.info(
         "Agent '{}' fixed | model={} tools={} instruction_len={}",

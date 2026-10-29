@@ -67,7 +67,7 @@ async def generate_pipeline_config(
         allowed_models=[m.model for m in resolved_workers],
         plugins=plugins,
         output_validator=partial(
-            validate_pipeline_output, available_tools=set(descriptions)
+            validate_pipeline_output, available_tools=set(descriptions), task=task
         ),
     )
 

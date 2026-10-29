@@ -4,6 +4,7 @@ from google.adk.tools import ToolContext
 
 from fedotmas.common.logging import get_logger
 from fedotmas.maw.models import MAWConfig
+from fedotmas.maw._evidence_requirements import evidence_flow_errors
 
 _log = get_logger("fedotmas.control.fixes.fix_instruction")
 
@@ -40,6 +41,9 @@ async def fix_instruction(
             item["instruction"] = new_instruction
     try:
         new_config = MAWConfig.model_validate(payload)
+        errors = evidence_flow_errors(new_config)
+        if errors:
+            return "Error applying fix (configuration unchanged): " + "; ".join(errors)
     except (ValueError, TypeError) as e:
         return f"Error applying fix: {e}"
 

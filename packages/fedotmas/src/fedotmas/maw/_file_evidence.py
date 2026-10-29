@@ -9,9 +9,18 @@ import json
 import posixpath
 from typing import Any
 
-from fedotmas.maw.handoffs import describe_requirement, parse_artifact
+from fedotmas.maw.handoffs import (
+    describe_requirement,
+    parse_artifact,
+    field_values,
+    missing_contract_fields,
+)
 from fedotmas.maw.models import MAWAgentConfig
-from fedotmas.mcp.capabilities import normalize_tool_name
+from fedotmas.mcp.capabilities import (
+    normalize_tool_name,
+    tool_capability,
+    ToolCapability,
+)
 
 FILE_EVIDENCE_STATE_KEY = "__fedotmas_file_evidence"
 _PREPARATION = {"list_zip_contents", "extract_zip", "download", "download_file"}
@@ -57,6 +66,7 @@ def _unwrap(value: Any, depth: int = 0) -> Any:
         if (
             any(value.get(k) for k in ("error", "isError", "is_error", "error_code"))
             or value.get("success") is False
+            or value.get("status") in ("failed", "blocked", "error", "incomplete")
         ):
             return None
         for key in ("structuredContent", "structured_content", "result"):
@@ -104,12 +114,58 @@ def record_file_evidence(
     state: Any, agent: str, tool: str, args: dict, response: Any
 ) -> None:
     name = normalize_tool_name(tool)
-    if name not in _PREPARATION | _READERS | _WEB_READERS | {"solve_with_code"}:
+    other_reader = tool_capability(tool) in {
+        ToolCapability.MEDIA_INSPECTION,
+        ToolCapability.BROWSER_NAVIGATION,
+    }
+    if (
+        name
+        not in _PREPARATION
+        | _READERS
+        | _WEB_READERS
+        | {"solve_with_code", "goto", "navigate"}
+        and not other_reader
+    ):
         return
     root = dict(state.get(FILE_EVIDENCE_STATE_KEY) or {})
     agents = dict(root.get("agents") or {})
     entry = dict(agents.get(agent) or {})
     payload = _unwrap(response)
+    aliases = dict(root.get("source_aliases") or {})
+    source = args.get("file_path") or args.get("path") or args.get("url")
+    if name in {"goto", "navigate"}:
+        # A failed navigation must not lend its URL to a later DOM read.
+        entry["current_source"] = (
+            _digest(source) if payload is not None and source else None
+        )
+        agents[agent] = entry
+        root["agents"] = agents
+        state[FILE_EVIDENCE_STATE_KEY] = root
+        return
+    if name in {"download", "download_file"} and isinstance(payload, dict):
+        urls = args.get("urls") or ([args["url"]] if args.get("url") else [])
+        for item in payload.get("results", [payload]):
+            if (
+                not isinstance(item, dict)
+                or item.get("success") is not True
+                or not item.get("file_path")
+            ):
+                continue
+            origin = item.get("url") or (urls[0] if len(urls) == 1 else None)
+            if origin and len(aliases) < 256:
+                aliases[_digest(item["file_path"])] = [_digest(origin)]
+    if name == "extract_zip" and isinstance(payload, dict) and source:
+        directory = payload.get("output_dir")
+        for path in payload.get("files") or []:
+            if (
+                isinstance(directory, str)
+                and isinstance(path, str)
+                and len(aliases) < 256
+            ):
+                aliases[
+                    _digest(posixpath.normpath(posixpath.join(directory, path)))
+                ] = [_digest(source), *aliases.get(_digest(source), [])]
+    root["source_aliases"] = aliases
     if name in _PREPARATION:
         entry["prepared"] = True
         # A file locator may legitimately hand off paths/names returned by a
@@ -132,6 +188,16 @@ def record_file_evidence(
         entry["metadata_values"] = sorted(v for v in values if len(v) == 64)[:2048]
     else:
         text = _content(payload)
+        if name == "complete_browser_task":
+            text = (
+                str(payload.get("findings") or "")
+                if (
+                    isinstance(payload, dict)
+                    and payload.get("status") == "completed"
+                    and payload.get("steps_taken", 0) > 0
+                )
+                else ""
+            )
         if name == "solve_with_code":
             text = (
                 str(payload.get("answer") or "")
@@ -146,7 +212,7 @@ def record_file_evidence(
         if not text:
             return
         reads = list(entry.get("reads") or [])
-        receipt = {
+        receipt: dict[str, Any] = {
             "tool": name,
             "source": _digest(
                 args.get("file_path")
@@ -161,6 +227,21 @@ def record_file_evidence(
                 if k in args
             },
         }
+        source_id = _digest(source) if source else entry.get("current_source")
+        sources = [source_id] if source_id else []
+        if name == "solve_with_code" and text:
+            sources.extend(_digest(path) for path in args["files"])
+        if name == "complete_browser_task" and isinstance(payload, dict):
+            sources.extend(
+                _digest(url)
+                for url in payload.get("relevant_urls", [])
+                if isinstance(url, str)
+            )
+        receipt["sources"] = list(
+            dict.fromkeys(
+                [*sources, *[origin for s in sources for origin in aliases.get(s, [])]]
+            )
+        )
         if receipt not in reads:
             entry["reads"] = [*reads, receipt][-64:]
     agents[agent] = entry
@@ -215,3 +296,34 @@ def reject_file_artifact(state: Any, output_key: str, reason: str) -> str:
 def rejected_file_inputs(state: Any, keys: list[str]) -> list[str]:
     rejected = (state.get(FILE_EVIDENCE_STATE_KEY) or {}).get("rejected") or {}
     return [key for key in keys if rejected.get(key) == _digest(state.get(key))]
+
+
+def missing_source_evidence(state: Any, cfg: MAWAgentConfig, value: Any) -> list[str]:
+    """Bind each declared source locator to an executed read, not model prose.
+
+    Named references still require semantic identification by the reader; this
+    verifies the cited locator was read, not that it is the right publication.
+    """
+    if not cfg.evidence_requirements:
+        return []
+    artifact = parse_artifact(value, cfg.output_contract)
+    root = state.get(FILE_EVIDENCE_STATE_KEY) or {}
+    reads = ((root.get("agents") or {}).get(cfg.name) or {}).get("reads") or []
+    missing = []
+    for requirement in cfg.evidence_requirements:
+        fields = [*requirement.required_fields, requirement.source_field]
+        if missing_contract_fields(artifact, fields)[1]:
+            missing.append(f"evidence_fields:{requirement.source}")
+            continue
+        locators, _ = field_values(artifact, requirement.source_field)
+        cited = {_digest(v) for v in locators if isinstance(v, str) and v.strip()}
+        matched = [r for r in reads if cited.intersection(r.get("sources") or [])]
+        if requirement.source_kind in {"url", "file"}:
+            matched = [
+                r
+                for r in matched
+                if _digest(requirement.source) in (r.get("sources") or [])
+            ]
+        if not matched:
+            missing.append(f"executed_source_read:{requirement.source}")
+    return missing

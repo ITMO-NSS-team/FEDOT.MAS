@@ -40,7 +40,9 @@ from fedotmas.maw._file_evidence import (
     rejected_file_inputs,
     remember_file_artifact,
     unsupported_file_artifact,
+    missing_source_evidence,
 )
+from fedotmas.maw._evidence_requirements import evidence_instruction
 from fedotmas.maw._validators import _find_terminal_node, agent_executes_in_loop
 from fedotmas.maw._research_fallback import allow_fallback, record_retrieval
 from fedotmas.maw.handoffs import (
@@ -1107,8 +1109,7 @@ def _build_llm_agent(
             value = reject_file_artifact(
                 callback_context.state,
                 cfg.output_key,
-                "Upstream file extraction lacks executed source reads: "
-                + ", ".join(rejected),
+                "Upstream source evidence is unresolved: " + ", ".join(rejected),
             )
             for source in rejected:
                 append_execution_issue(
@@ -1238,6 +1239,8 @@ def _build_llm_agent(
             }
         terminal_answer = terminal_boundary
         if terminal_answer:
+            if reject_missing_source(callback_context.state, value):
+                return
             # This role may recover an input dependency, but its answer is
             # formatted for the caller and is never a structured handoff.
             if is_explicit_abstention(value):
@@ -1375,7 +1378,9 @@ def _build_llm_agent(
                     },
                 )
                 missing = repaired_missing or missing
-        if reject_unread_artifact(callback_context.state, value):
+        if reject_unread_artifact(
+            callback_context.state, value
+        ) or reject_missing_source(callback_context.state, value):
             return
         if missing:
             append_execution_issue(
@@ -1760,6 +1765,32 @@ def _build_llm_agent(
             evidence_root[cfg.name] = int(evidence_root.get(cfg.name, 0)) + 1
             tool_context.state[RESEARCH_EVIDENCE_ACTION_STATE_KEY] = evidence_root
 
+    def reject_missing_source(state: Any, value: Any) -> bool:
+        missing = missing_source_evidence(state, cfg, value)
+        if not missing:
+            return False
+        reject_file_artifact(
+            state,
+            cfg.output_key,
+            "Required source evidence is unresolved: " + "; ".join(missing),
+        )
+        append_execution_issue(
+            state,
+            {
+                "kind": "incomplete_artifact",
+                "agent": cfg.name,
+                "output_key": cfg.output_key,
+                "missing_fields": missing,
+            },
+        )
+        if cfg.name == final_answer_agent:
+            state[ABSTENTION_STATE_KEY] = {
+                "status": "unresolved",
+                "agent": cfg.name,
+                "reason": "; ".join(missing),
+            }
+        return True
+
     per_agent_limit = (
         cfg.max_llm_turns or max_agent_llm_turns or get_max_agent_llm_turns()
     )
@@ -1817,6 +1848,8 @@ def _build_llm_agent(
         )
         if task_instruction:
             llm_request.append_instructions([task_instruction])
+        if source_instruction := evidence_instruction(cfg):
+            llm_request.append_instructions([source_instruction])
         if isinstance(turns, dict):
             turns[cfg.name] = turn_index
         progress_root = state.get(RESEARCH_PROGRESS_STATE_KEY)

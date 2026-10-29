@@ -8,6 +8,7 @@ from fedotmas.maw.maw import MAW
 from fedotmas.maw.models import (
     AgentPoolConfig,
     ArtifactContract,
+    EvidenceRequirement,
     ArtifactRequirement,
     IdentityFieldMapping,
     MAWConfig,
@@ -46,6 +47,7 @@ __all__ = [
     "MAW",
     "AgentPoolConfig",
     "ArtifactContract",
+    "EvidenceRequirement",
     "ArtifactRequirement",
     "IdentityFieldMapping",
     "HttpMCPServer",

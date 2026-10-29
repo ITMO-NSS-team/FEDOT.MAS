@@ -76,6 +76,7 @@ class PipelineGenerator:
             plugins=self._plugins,
             output_validator=partial(
                 validate_pipeline_output,
+                task=task,
                 available_tools=set(descriptions)
                 | {tool for a in pool.agents for tool in a.tools},
             ),
