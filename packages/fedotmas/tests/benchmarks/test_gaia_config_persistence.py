@@ -14,6 +14,7 @@ from fedotmas.maw import builder as maw_builder
 from fedotmas.plugins._code_agent_budget import CODE_AGENT_POLICY_STATE_KEY
 from fedotmas.plugins import ResearchTelemetry
 
+from benchmarks.gaia import data
 from benchmarks.gaia.run_gaia import (
     GAIA_BASE_MCP_SERVERS,
     _attempt_diagnostics,
@@ -195,6 +196,32 @@ def test_explicit_sandbox_mcp_selection_is_preserved_exactly(
 
     assert _gaia_mcp_servers() == ["sandbox"]
     assert list(_gaia_mcp_registry(ModelConfig(model="openai/gpt-4o"))) == ["sandbox"]
+
+
+def test_gaia_attachment_keeps_snapshot_filename(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(data, "DATASET_CACHE_DIR", Path("snapshot"))
+    blob = tmp_path / "blobs" / "abcd1234"
+    blob.parent.mkdir()
+    blob.write_bytes(b"cached attachment")
+    attachment = tmp_path / "snapshot" / "report.xlsx"
+    attachment.parent.mkdir()
+    attachment.symlink_to(blob)
+
+    task = data.GaiaBenchmark({})._get_task(
+        {
+            "task_id": "example",
+            "Question": "Read the attachment.",
+            "file_path": attachment.name,
+            "file_name": attachment.name,
+            "Final answer": "",
+            "Level": "1",
+            "Annotator Metadata": {},
+        }
+    )
+
+    assert task.file_path == str(attachment)
+    assert Path(task.file_path).read_bytes() == b"cached attachment"
 
 
 def test_custom_task_file_preserves_raw_text_and_resolved_path(tmp_path: Path):

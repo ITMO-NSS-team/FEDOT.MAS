@@ -73,7 +73,8 @@ class GaiaBenchmark:
     def _get_task(self, item):
         file_path = item["file_path"]
         if file_path:
-            absolute_file_path = (Path(DATASET_CACHE_DIR) / file_path).resolve()
+            # Keep the symlink name so tools can detect the file format from its extension.
+            absolute_file_path = (Path(DATASET_CACHE_DIR) / file_path).absolute()
             file_path = str(absolute_file_path)
 
         return BenchmarkTask(
